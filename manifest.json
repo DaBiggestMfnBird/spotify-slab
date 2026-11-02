@@ -1,0 +1,23 @@
+[
+  {
+    "name": "SLAB",
+    "description": "Third Coast playback moods: real pitch, reverb and delay via a macOS companion, six EQ curves, beat-synced chop pads, and an honest speed readout.",
+    "preview": "preview.png",
+    "main": "dist/slab.js",
+    "readme": "README.md",
+    "authors": [
+      {
+        "name": "DaBiggestMfnBird",
+        "url": "https://github.com/DaBiggestMfnBird"
+      }
+    ],
+    "tags": [
+      "eq",
+      "hip-hop",
+      "playback",
+      "chop",
+      "pitch",
+      "reverb"
+    ]
+  }
+]

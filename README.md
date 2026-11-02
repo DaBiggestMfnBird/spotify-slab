@@ -1,0 +1,226 @@
+# SLAB
+
+**Third Coast playback moods for Spicetify.**
+
+SLAB is a playback deck for the Houston lineage — the sound DJ Screw built with two turntables, a pause button, and a trunk full of bass. It gives you the tonal fingerprints of that lineage, plus a row of pads that cut on the bar.
+
+Named for **Slow, Loud And Bangin'**. No samples, no lean imagery, no costume. Just the mix moves.
+
+![SLAB panel](preview.png)
+
+---
+
+## What it actually does
+
+Spotify does not hand over the audio stream to extensions. There is no Web Audio node to insert, no buffer to stretch, and the player refuses `playbackSpeed` for music with `not_supported_by_content_type`. Any extension claiming real time-stretch inside the page on the current desktop client is either lying or shipping a broken button.
+
+SLAB does the things the client can actually do, and pairs with a small companion app for the rest:
+
+- **Six EQ moods** written against the client's native six-band equalizer.
+- **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
+- **Beat-synced chop pads** that seek to the top of a bar, using Spotify's own audio analysis for the grid.
+- **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
+- **Auto chop** — cuts a bar every N bars, locked to the grid, on a worker clock that survives a backgrounded window.
+- **An honest readout** — the panel says `pitch live` when the helper is linked and `speed locked for music` when it is not, instead of pretending.
+
+Tempo is the one thing SLAB does not change. See [why](#tempo-is-locked-on-purpose).
+
+### The moods
+
+| Mood | What it is |
+|---|---|
+| **Slowed + Reverb** | The shape a record takes when it's dragged: low-mids swell, presence drops, the top turns to air. |
+| **Houston Screwed** | Screw's tonal signature — sub and low-mid forward, everything above 2k pulled back. Slowed, not chopped. |
+| **Houston Chopped** | Dry and forward, presence up. The cut has to land, so the top stays alive. |
+| **Memphis Tape** | 400–1k pushed until it honks, top rolled off, bottom loose. Cassette dub. |
+| **Sped Up** | The other direction: lean low end, bright presence and air. |
+| **Flat** | Restores the curve your equalizer had when SLAB first loaded. |
+
+These are EQ curves, not presets with names slapped on. The sparkline on each card is the actual curve.
+
+### The pads
+
+| Pad | Move |
+|---|---|
+| **CHOP** | Jump to the top of the current bar. Press late and you replay the bar; press right after the downbeat and it sends you one bar further. |
+| **SCREW** | Jump back two bars, on the downbeat. |
+| **SPIN** | Jump back four bars. |
+| **LOOP** | Repeat the current bar four times, then let the record run. |
+| **STOP** | Tape stop — fade, pause, restore the fader. |
+
+Keyboard `1`–`5` triggers the pads while the panel is open. `Esc` closes it.
+
+Auto chop counts bars played, not absolute bar numbers, so replaying a bar can't retrigger it in a loop. It has a 900 ms cooldown.
+
+---
+
+## SLAB DSP (macOS)
+
+The companion app is what makes the moods real. It taps Spotify's audio with `AudioHardwareCreateProcessTap`, runs it through an `AVAudioEngine` chain — pitch, low-pass, reverb, delay — and plays the result back. Spotify's own output is muted while it is attached, so what you hear is the processed copy.
+
+| Control | Range |
+|---|---|
+| Pitch | ±2400 cents (two octaves), in cents |
+| Reverb | 0–100 wet, with room/hall/plate/chamber characters |
+| Delay | 10 ms–2 s, feedback 0–95, wet 0–100 |
+| Low-pass | 200 Hz–20 kHz |
+| Tape stop | Real rate ramp: 380 ms down, 70 ms hold, 240 ms back up |
+
+**Requirements:** macOS 14.2 or newer. Apple Silicon or Intel. Spotify desktop.
+
+### Install
+
+```bash
+bun run dsp:install
+```
+
+That builds `SLAB DSP.app`, copies it to `~/Applications`, and launches it. On first run macOS asks for **Audio Recording** permission — that is the process tap. Nothing is recorded, stored, or sent anywhere; the app has no network client beyond a loopback control port.
+
+If the permission prompt was dismissed, re-enable it in **System Settings → Privacy & Security → Screen & System Audio Recording** (macOS 15) or **Audio Recording** (macOS 14), then relaunch the app.
+
+The helper must be launched as an app (LaunchServices), not from a shell. TCC attributes the audio-capture grant to the responsible process, so a binary started from Terminal inherits Terminal's identity and taps silence.
+
+### Linking
+
+The helper listens on `http://127.0.0.1:47832`:
+
+| Route | Purpose |
+|---|---|
+| `GET /status` | version, sample rate, level, latency, current params |
+| `POST /params` | `{"pitch": -320, "reverb": 34, "lowpass": 11000}` |
+| `POST /tapstop` | `{"downMs": 380, "holdMs": 70, "upMs": 240}` |
+| `POST /reset` | back to neutral |
+| `POST /quit` | shut the helper down |
+
+The panel probes `/status` every few seconds. Green row means linked; grey means the helper is not running and SLAB is EQ-only. Moods push their DSP parameters on selection, so picking **Houston Screwed** sets pitch, reverb and low-pass in one move.
+
+The extension degrades cleanly: no helper, no errors, no dead buttons.
+
+### Dev flags
+
+```bash
+./dsp/.build/release/SLABDSP --help
+./dsp/.build/release/SLABDSP --set pitch=-560,reverb=16 --seconds 10
+./dsp/.build/release/SLABDSP --record out.wav --seconds 6 --set pitch=-1200
+```
+
+`--record` writes the processed chain to a WAV and exits — that is how the pitch shift was verified (spectral centroid 2992 Hz → 1400 Hz at −1200 cents on the same passage).
+
+---
+
+## Tempo is locked on purpose
+
+Slowed-and-reverbed records are slower. SLAB's pitch shift is not a tempo change, and this is deliberate:
+
+- The player refuses `playbackSpeed` for music (`not_supported_by_content_type`), so there is no native slow-down to hook.
+- A live tap cannot be slowed without unbounded drift. Spotify renders at 1×, so a ring buffer that consumes slower than it fills grows forever. You can drop samples to catch up — that is a stutter, not a screw tape.
+- Offline time-stretch would need the whole decoded track, which DRM does not provide.
+
+So SLAB shifts pitch, which is the audible half of a screw record, and leaves tempo honest. If a future client build exposes a real rate control, SLAB will use it.
+
+---
+
+## What it does not do
+
+- **It does not change playback tempo.** See above.
+- **It does not modify the Spotify binary.** No patching, no injected native code, no DRM circumvention. The helper taps the system audio device, the same API every screen recorder uses.
+- **It does not record.** `--record` exists for verification and writes a local file only when you ask for it.
+
+---
+
+## Install
+
+### Marketplace
+
+Once published, search for **SLAB** in the Spicetify Marketplace and install it there.
+
+### Manual
+
+```bash
+git clone https://github.com/DaBiggestMfnBird/spotify-slab.git
+cd spotify-slab
+bun install
+bun run build
+mkdir -p ~/.config/spicetify/Extensions
+cp dist/slab.js ~/.config/spicetify/Extensions/slab.js
+```
+
+Add `slab.js` to the `extensions` line in `~/.config/spicetify/config-xpui.ini`:
+
+```ini
+extensions            = slab.js
+```
+
+Then:
+
+```bash
+spicetify apply
+```
+
+Restart Spotify if the chip does not appear. The chip sits in the playbar next to the lyrics button.
+
+---
+
+## Conflicts
+
+- **Other equalizer extensions.** SLAB writes the same six native filters as ModernEQ, cat-jam, and anything else built on `EqualizerAPI`. Run one at a time. If you switch, press **Flat** in SLAB before enabling the other one.
+- **The baseline curve.** SLAB snapshots your equalizer the first time it loads and stores it in `localStorage`. **Flat** restores that snapshot, not whatever you changed the EQ to afterward. Clear `slab:baseline:v1` from local storage if you want a fresh snapshot.
+- **Speed extensions.** Dial and similar tools will report their own speed state. On builds where speed is locked, they cannot work either.
+
+---
+
+## How it works
+
+```
+src/
+  main.ts          boot, songchange wiring, window.SLAB debug handle
+  core/
+    dsp.ts         loopback bridge to SLAB DSP (probe / params / tapstop)
+    eq.ts          EqualizerAPI bridge, baseline snapshot/restore
+    moods.ts       six curves + sparkline geometry + DSP params
+    grid.ts        audio-analysis cache, bar/beat lookup
+    chops.ts       chop / screw / spin / loop / tape stop / auto
+    clock.ts       worker ticker (main-thread timers get clamped when hidden)
+    state.ts       localStorage persistence
+  ui/
+    deck.ts        chip, panel, pads, readout
+    styles.ts      candy-paint / chrome / cassette CSS
+dsp/
+  Sources/SLABDSP/
+    TapCapture.swift   Core Audio process tap → ring buffer
+    DSPGraph.swift     pitch / low-pass / reverb / delay / tape stop
+    ControlServer.swift loopback HTTP control surface
+    main.swift         CLI, lifecycle, recording mode
+```
+
+- **The grid** comes from `Spicetify.getAudioData(uri)` — Spotify's own beats and bars, in seconds. Cached per track.
+- **A chop is a seek** to a bar start. No audio processing, no glitch: the cut lands where a DJ would drop it.
+- **The worker clock** exists because Chrome clamps main-thread timers to roughly one second when the Spotify window is occluded. A 40 ms worker tick keeps auto chop and loop on time even when the app is behind another window.
+- **The EQ bridge** matches filters by frequency, so a client with a different six-band layout still gets a sane mapping. One dead filter doesn't stop the curve.
+- **The tap** uses a private aggregate device with a tap list of dictionaries (`kAudioSubTapUIDKey`). A list of plain UID strings is accepted by the API and silently attaches nothing — that cost an afternoon.
+
+### Dev
+
+```bash
+bun install
+bun run build        # dist/slab.js
+bun run typecheck
+bun run inject       # hot-load into a running Spotify over CDP :9222
+bun run deploy       # copy into Spicetify's Extensions folder + register
+bun run dsp          # build SLAB DSP.app (release)
+bun run dsp:install  # build, install to ~/Applications, launch
+```
+
+`bun run inject` expects Spotify started with `--remote-debugging-port=9222`.
+
+`window.SLAB` exposes `open()`, `close()`, `toggle()`, `state`, and `destroy()` for poking at it from the console.
+
+---
+
+## Lineage
+
+Chopped and screwed is Houston's. DJ Screw, the Screwed Up Click, and the slabs that carried those tapes. The aesthetic here — candy paint, chrome, cassette shells — is a nod, not a claim.
+
+SLAB is not affiliated with Spotify, Spicetify, or any artist. It ships no recordings.
+
+MIT licensed.

@@ -1,0 +1,20 @@
+{
+  "name": "slab",
+  "version": "0.2.0",
+  "private": true,
+  "description": "SLAB — Third Coast playback moods for Spicetify",
+  "type": "module",
+  "scripts": {
+    "build": "bun run build.mjs",
+    "watch": "bun run build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "inject": "bun run build.mjs && bun scripts/dev-inject.mjs",
+    "deploy": "bun run build.mjs && bun scripts/deploy.mjs",
+    "dsp": "./scripts/build-dsp.sh release",
+    "dsp:install": "./scripts/build-dsp.sh release && ./scripts/install-dsp.sh"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.2"
+  }
+}
