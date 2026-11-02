@@ -15,7 +15,7 @@ final class StereoRing {
     /// start or clock drift can never turn into permanent latency.
     private let maxFrames: Int
 
-    init(capacity: Int, maxFrames: Int = 8_192) {
+    init(capacity: Int, maxFrames: Int = 3_072) {
         self.capacity = capacity
         self.maxFrames = min(maxFrames, capacity)
         self.left = [Float](repeating: 0, count: capacity)
