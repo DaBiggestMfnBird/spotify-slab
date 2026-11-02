@@ -1004,6 +1004,7 @@ self.onmessage = (event) => {
       this.activityTimer = null;
       this.lastGridUri = null;
       this.lastGridAttempt = 0;
+      this.lastDspSync = 0;
       this.onDocumentClick = (event) => this.handleOutside(event);
       this.onKey = (event) => this.handleKey(event);
       this.onResize = () => this.position();
@@ -1318,6 +1319,23 @@ self.onmessage = (event) => {
         this.activityEl.textContent = "";
       }, 1800);
     }
+    /**
+     * The helper can restart with neutral parameters, and a linked/unlinked
+     * transition is not guaranteed to be observed. Compare what it reports
+     * against the selected mood and correct it, throttled.
+     */
+    syncDspParams() {
+      const status2 = dspStatus();
+      if (!status2.linked) return;
+      const now = Date.now();
+      if (now - this.lastDspSync < 3e3) return;
+      const want = moodById(this.state.moodId).dsp;
+      const have = status2.params ?? {};
+      const drifted = Math.abs((have.pitch ?? 0) - want.pitch) > 1 || Math.abs((have.reverb ?? 0) - want.reverb) > 1 || Math.abs((have.lowpass ?? 2e4) - want.lowpass) > 50;
+      if (!drifted) return;
+      this.lastDspSync = now;
+      void sendDsp(want);
+    }
     async syncGrid(force = false) {
       const uri = Spicetify.Player.data?.item?.uri;
       if (!uri) return;
@@ -1332,6 +1350,7 @@ self.onmessage = (event) => {
       if (!gridFor() && Date.now() - this.lastGridAttempt > 5e3) {
         void this.syncGrid(true);
       }
+      this.syncDspParams();
       if (this.panel.hidden) return;
       const playing = isPlaying();
       this.panel.dataset.playing = playing ? "true" : "false";
