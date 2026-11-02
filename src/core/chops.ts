@@ -73,7 +73,7 @@ export async function chopBars(bars: number): Promise<boolean> {
         if (now - target < 250) return false;
 
         seek(target);
-        emit(span >= 4 ? "spin" : "chop", `−${span} bar${span === 1 ? "" : "s"}`);
+        emit(span >= 4 ? "spin" : "chop", `Back ${span} bar${span === 1 ? "" : "s"}`);
         return true;
     } finally {
         busy = false;
@@ -113,11 +113,11 @@ export async function loopBars(times = 4): Promise<boolean> {
         due += length;
         if (remaining <= 0) {
             cancelLoop();
-            emit("loop", `${total} bars`);
+            emit("loop", "Loop done");
         }
     });
 
-    emit("loop", `${total} bars`);
+    emit("loop", `Looping this bar ${total} times`);
     return true;
 }
 
@@ -131,7 +131,7 @@ export async function tapeStop(
     options: { fade?: boolean; pauseDelayMs?: number } = {},
 ): Promise<boolean> {
     if (!Spicetify.Player.isPlaying()) {
-        emit("stop", "already stopped");
+        emit("stop", "Already stopped");
         return false;
     }
 
@@ -171,7 +171,7 @@ export async function tapeStop(
         /* ignore */
     }
 
-    emit("stop", "tape stopped");
+    emit("stop", "Tape stopped");
     return true;
 }
 
@@ -214,7 +214,7 @@ function startAuto(): void {
         autoCounter = 0;
         autoCooldownUntil = Date.now() + 900;
         void chopBars(1).then((did) => {
-            if (did) emit("auto", `auto · ${autoEvery} bars`);
+            if (did) emit("auto", `Auto chop, every ${autoEvery} bar${autoEvery === 1 ? "" : "s"}`);
         });
     });
 }

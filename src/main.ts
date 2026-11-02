@@ -4,7 +4,7 @@ import { eqAvailable, initEq } from "./core/eq";
 import { loadState } from "./core/state";
 import { Deck } from "./ui/deck";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const LOG = "[SLAB]";
 
 interface BootClaim {
@@ -49,7 +49,7 @@ async function boot(claim: BootClaim): Promise<void> {
 
     const eqApi = await waitFor(() => Spicetify.Platform.EqualizerAPI ?? null, 10000);
     const eqReady = eqApi ? await initEq() : false;
-    if (!eqReady) console.warn(LOG, "equalizer unavailable — moods will be inert");
+    if (!eqReady) console.warn(LOG, "equalizer unavailable, moods will be inert");
 
     // Another copy loaded while this one was waiting on the player.
     if (window.__slabClaim !== claim) return;
@@ -84,7 +84,7 @@ async function boot(claim: BootClaim): Promise<void> {
         destroy,
     };
 
-    console.info(LOG, `v${VERSION} ready · eq=${eqReady ? "on" : "off"}`);
+    console.info(LOG, `v${VERSION} ready, eq=${eqReady ? "on" : "off"}`);
 }
 
 // The same extension can load twice: once from the local Extensions folder and
@@ -95,7 +95,7 @@ const claimed = window.__slabClaim as BootClaim | undefined;
 const rival = running?.version ?? claimed?.version;
 
 if (rival && isNewer(rival, VERSION)) {
-    console.info(LOG, `v${VERSION} standing down — v${rival} is already loaded`);
+    console.info(LOG, `v${VERSION} standing down, v${rival} is already loaded`);
 } else {
     const claim: BootClaim = { version: VERSION };
     window.__slabClaim = claim;
