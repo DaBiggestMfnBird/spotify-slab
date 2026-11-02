@@ -294,8 +294,11 @@ export class Deck {
                 label: "Stop",
                 sub: "fader",
                 run: () => {
-                    void dspTapeStop();
-                    void tapeStop();
+                    const linked = dspStatus().linked;
+                    if (linked) void dspTapeStop();
+                    // 380 ms down + 70 ms hold in the helper; pause right after
+                    // the ramp bottoms out so the effect is not clipped.
+                    void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : undefined);
                 },
             },
         ];

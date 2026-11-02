@@ -211,20 +211,23 @@ self.onmessage = (event) => {
     emit("loop", `${total} bars`);
     return true;
   }
-  async function tapeStop() {
+  async function tapeStop(options = {}) {
     if (!Spicetify.Player.isPlaying()) {
       emit("stop", "already stopped");
       return false;
     }
+    const fade = options.fade !== false;
     const startVolume = Spicetify.Player.getVolume();
-    const duration = 420;
+    const duration = fade ? 420 : Math.max(0, options.pauseDelayMs ?? 0);
     const origin = Date.now();
     await new Promise((resolve) => {
       const unsub = subscribe(() => {
-        const progress = Math.min(1, (Date.now() - origin) / duration);
-        try {
-          Spicetify.Player.setVolume(startVolume * Math.pow(1 - progress, 1.8));
-        } catch {
+        const progress = duration === 0 ? 1 : Math.min(1, (Date.now() - origin) / duration);
+        if (fade) {
+          try {
+            Spicetify.Player.setVolume(startVolume * Math.pow(1 - progress, 1.8));
+          } catch {
+          }
         }
         if (progress >= 1) {
           unsub();
@@ -1165,8 +1168,9 @@ self.onmessage = (event) => {
           label: "Stop",
           sub: "fader",
           run: () => {
-            void dspTapeStop();
-            void tapeStop();
+            const linked = dspStatus().linked;
+            if (linked) void dspTapeStop();
+            void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : void 0);
           }
         }
       ];

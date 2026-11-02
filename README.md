@@ -132,7 +132,9 @@ So SLAB shifts pitch, which is the audible half of a screw record, and leaves te
 
 ### Marketplace
 
-Once published, search for **SLAB** in the Spicetify Marketplace and install it there.
+Search for **SLAB** in the Spicetify Marketplace and install it there.
+
+The extension itself is cross-platform. **SLAB DSP** — the part that adds real pitch, reverb and delay — is macOS 14.2+ only, because it depends on Core Audio process taps. On Windows and Linux the extension runs EQ-only and says so in the panel.
 
 ### Manual
 

@@ -127,23 +127,31 @@ export async function loopBars(times = 4): Promise<boolean> {
  * behind another window, and the fader comes back up at the pause so the next
  * play isn't silent.
  */
-export async function tapeStop(): Promise<boolean> {
+export async function tapeStop(
+    options: { fade?: boolean; pauseDelayMs?: number } = {},
+): Promise<boolean> {
     if (!Spicetify.Player.isPlaying()) {
         emit("stop", "already stopped");
         return false;
     }
 
+    // With the DSP helper linked the spin-down is real audio, so fading the
+    // player on top of it would hide the effect. In that case hold the volume
+    // and just wait for the ramp before pausing.
+    const fade = options.fade !== false;
     const startVolume = Spicetify.Player.getVolume();
-    const duration = 420;
+    const duration = fade ? 420 : Math.max(0, options.pauseDelayMs ?? 0);
     const origin = Date.now();
 
     await new Promise<void>((resolve) => {
         const unsub = subscribe(() => {
-            const progress = Math.min(1, (Date.now() - origin) / duration);
-            try {
-                Spicetify.Player.setVolume(startVolume * Math.pow(1 - progress, 1.8));
-            } catch {
-                /* ignore */
+            const progress = duration === 0 ? 1 : Math.min(1, (Date.now() - origin) / duration);
+            if (fade) {
+                try {
+                    Spicetify.Player.setVolume(startVolume * Math.pow(1 - progress, 1.8));
+                } catch {
+                    /* ignore */
+                }
             }
             if (progress >= 1) {
                 unsub();
