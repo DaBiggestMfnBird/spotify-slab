@@ -1,4 +1,5 @@
 import type { SlabState } from "../types";
+import { moodById } from "./moods";
 
 const KEY = "slab:state:v1";
 
@@ -7,7 +8,13 @@ const DEFAULTS: SlabState = {
     auto: false,
     open: false,
     every: 4,
+    pitch: 0,
+    eqOwner: "auto",
 };
+
+function clampPitch(value: number): number {
+    return Math.max(-1200, Math.min(1200, Math.round(value / 10) * 10));
+}
 
 export function loadState(): SlabState {
     try {
@@ -22,6 +29,15 @@ export function loadState(): SlabState {
                 typeof parsed.every === "number" && parsed.every >= 1 && parsed.every <= 16
                     ? parsed.every
                     : DEFAULTS.every,
+            // State saved before the slider existed has no pitch; the mood's is the truth.
+            pitch:
+                typeof parsed.pitch === "number"
+                    ? clampPitch(parsed.pitch)
+                    : moodById(parsed.moodId ?? DEFAULTS.moodId).dsp.pitch,
+            eqOwner:
+                parsed.eqOwner === "slab" || parsed.eqOwner === "modern"
+                    ? parsed.eqOwner
+                    : DEFAULTS.eqOwner,
         };
     } catch {
         return { ...DEFAULTS };

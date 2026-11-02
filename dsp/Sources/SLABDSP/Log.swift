@@ -16,3 +16,9 @@ func slabLog(_ message: String) {
         try? Data(line.utf8).write(to: slabLogURL)
     }
 }
+
+/// Called once at launch. The helper can run for weeks as a login item.
+func slabTrimLog(keepingLast keep: Int = 256 * 1024) {
+    guard let data = try? Data(contentsOf: slabLogURL), data.count > keep * 4 else { return }
+    try? data.suffix(keep).write(to: slabLogURL)
+}

@@ -27,7 +27,12 @@ export interface DspParams {
 }
 
 export interface DspStatus {
+    /** The helper answered. It may still have nothing to process. */
     linked: boolean;
+    /** Attached to Spotify's audio process. */
+    tapping?: boolean;
+    /** Audio is actually arriving through the tap. */
+    audio?: boolean;
     version?: string;
     sampleRate?: number;
     latencyMs?: number;
@@ -49,7 +54,11 @@ export function dspStatus(): DspStatus {
 }
 
 function publish(next: DspStatus): void {
-    const changed = next.linked !== status.linked || next.version !== status.version;
+    const changed =
+        next.linked !== status.linked ||
+        next.version !== status.version ||
+        next.tapping !== status.tapping ||
+        next.audio !== status.audio;
     status = next;
     if (changed) for (const listener of listeners) listener(status);
 }
@@ -79,12 +88,23 @@ export async function probeDsp(force = false): Promise<DspStatus> {
     lastProbe = now;
 
     const payload = (await request("/status")) as
-        | { ok?: boolean; version?: string; sampleRate?: number; latencyMs?: number; params?: Partial<DspParams> }
+        | {
+              ok?: boolean;
+              version?: string;
+              tapping?: boolean;
+              audio?: boolean;
+              sampleRate?: number;
+              latencyMs?: number;
+              params?: Partial<DspParams>;
+          }
         | null;
 
     if (payload?.ok) {
         publish({
             linked: true,
+            // Helpers before 0.3.0 don't report these and only ran while tapping.
+            tapping: payload.tapping !== false,
+            audio: payload.audio !== false,
             version: payload.version,
             sampleRate: payload.sampleRate,
             latencyMs: payload.latencyMs,

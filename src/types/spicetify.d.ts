@@ -60,6 +60,9 @@ interface SlabSpicetify {
         removeEventListener(event: string, callback: (payload?: unknown) => void): void;
     };
     Platform: {
+        ConnectAPI?: {
+            state?: { activeDevice?: { name?: string; isLocal?: boolean } };
+        };
         PlayerAPI: {
             getState(): SlabPlayerState;
             getCapabilities?(): SlabPlayerCapabilities | undefined;
@@ -80,5 +83,6 @@ declare const Spicetify: SlabSpicetify;
 
 declare interface Window {
     SLAB?: unknown;
+    __slabClaim?: unknown;
     ModernEQ?: unknown;
 }

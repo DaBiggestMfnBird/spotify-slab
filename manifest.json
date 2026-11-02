@@ -1,7 +1,7 @@
 [
   {
     "name": "SLAB",
-    "description": "Third Coast playback moods: real pitch, reverb and delay via a macOS companion, six EQ curves, beat-synced chop pads, and an honest speed readout.",
+    "description": "Third Coast playback moods: six EQ curves, beat-synced chop pads, a real tape stop and an honest speed readout. On macOS, the free SLAB DSP companion adds true pitch, reverb and delay.",
     "preview": "preview.png",
     "main": "dist/slab.js",
     "readme": "README.md",

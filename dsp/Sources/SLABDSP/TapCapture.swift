@@ -68,21 +68,19 @@ final class TapCapture {
         return objectID
     }
 
+    /// Exact-name match, so "Spotify" never picks up "Spotify Helper". Polled every
+    /// couple of seconds for the life of the app, hence no pgrep subprocess here.
     static func pids(named name: String) -> [pid_t] {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-x", name]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let text = String(decoding: data, as: UTF8.self)
-            return text.split(whereSeparator: \.isNewline).compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
-        } catch {
-            return []
+        let capacity = Int(proc_listallpids(nil, 0)) + 64
+        guard capacity > 64 else { return [] }
+        var all = [pid_t](repeating: 0, count: capacity)
+        let count = all.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
+        guard count > 0 else { return [] }
+
+        var buffer = [CChar](repeating: 0, count: 256)
+        return all.prefix(Int(count)).filter { pid in
+            guard pid > 0, proc_name(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+            return String(cString: buffer) == name
         }
     }
 

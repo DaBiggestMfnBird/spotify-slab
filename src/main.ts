@@ -4,8 +4,12 @@ import { eqAvailable, initEq } from "./core/eq";
 import { loadState } from "./core/state";
 import { Deck } from "./ui/deck";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const LOG = "[SLAB]";
+
+interface BootClaim {
+    version: string;
+}
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -23,7 +27,18 @@ async function waitFor<T>(predicate: () => T | null | undefined, timeout = 20000
     return null;
 }
 
-async function boot(): Promise<void> {
+/** True when dotted version `a` is strictly newer than `b`. */
+function isNewer(a: string, b: string): boolean {
+    const left = a.split(".").map(Number);
+    const right = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        const difference = (left[i] ?? 0) - (right[i] ?? 0);
+        if (difference !== 0) return difference > 0;
+    }
+    return false;
+}
+
+async function boot(claim: BootClaim): Promise<void> {
     const player = await waitFor(() =>
         typeof Spicetify !== "undefined" && Spicetify.Player ? Spicetify.Player : null,
     );
@@ -35,6 +50,9 @@ async function boot(): Promise<void> {
     const eqApi = await waitFor(() => Spicetify.Platform.EqualizerAPI ?? null, 10000);
     const eqReady = eqApi ? await initEq() : false;
     if (!eqReady) console.warn(LOG, "equalizer unavailable — moods will be inert");
+
+    // Another copy loaded while this one was waiting on the player.
+    if (window.__slabClaim !== claim) return;
 
     const state = loadState();
     const deck = new Deck(state);
@@ -69,11 +87,22 @@ async function boot(): Promise<void> {
     console.info(LOG, `v${VERSION} ready · eq=${eqReady ? "on" : "off"}`);
 }
 
-try {
-    const previous = window.SLAB as { destroy?: () => void } | undefined;
-    if (previous?.destroy) previous.destroy();
-} catch {
-    /* ignore */
-}
+// The same extension can load twice: once from the local Extensions folder and
+// once from the Marketplace's CDN copy. The last one in replaces the first, so
+// an out-of-date install must not be allowed to take over from a newer build.
+const running = window.SLAB as { version?: string; destroy?: () => void } | undefined;
+const claimed = window.__slabClaim as BootClaim | undefined;
+const rival = running?.version ?? claimed?.version;
 
-void boot().catch((error) => console.error(LOG, "boot failed", error));
+if (rival && isNewer(rival, VERSION)) {
+    console.info(LOG, `v${VERSION} standing down — v${rival} is already loaded`);
+} else {
+    const claim: BootClaim = { version: VERSION };
+    window.__slabClaim = claim;
+    try {
+        running?.destroy?.();
+    } catch {
+        /* ignore */
+    }
+    void boot(claim).catch((error) => console.error(LOG, "boot failed", error));
+}

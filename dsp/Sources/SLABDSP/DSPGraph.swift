@@ -126,22 +126,35 @@ final class DSPGraph {
         applyOnMain(new)
     }
 
+    /// For a graph nothing else can see yet: set params on the calling thread so
+    /// the first sample out is already pitched. Use `apply` once it is running.
+    func prepare(_ new: DSPParams) {
+        paramsLock.lock()
+        params = new
+        paramsLock.unlock()
+        push(new)
+    }
+
     private func applyOnMain(_ p: DSPParams) {
-        let run = { [weak self] in
-            guard let self else { return }
-            self.timePitch.pitch = max(-2400, min(2400, p.pitch))
-            self.reverb.loadFactoryPreset(Self.preset(named: p.reverbPreset))
-            self.reverb.wetDryMix = max(0, min(100, p.reverb))
-            self.delay.delayTime = max(0.01, min(2.0, p.delayTime))
-            self.delay.feedback = max(0, min(95, p.delayFeedback))
-            self.delay.wetDryMix = max(0, min(100, p.delayMix))
-            let band = self.eq.bands[0]
-            let cutoff = max(200, min(20_000, p.lowpass))
-            band.bypass = cutoff >= 19_900
-            band.frequency = cutoff
-            self.engine.mainMixerNode.outputVolume = pow(10, max(-24, min(12, p.gain)) / 20)
+        if Thread.isMainThread {
+            push(p)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.push(p) }
         }
-        if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
+    }
+
+    private func push(_ p: DSPParams) {
+        timePitch.pitch = max(-2400, min(2400, p.pitch))
+        reverb.loadFactoryPreset(Self.preset(named: p.reverbPreset))
+        reverb.wetDryMix = max(0, min(100, p.reverb))
+        delay.delayTime = max(0.01, min(2.0, p.delayTime))
+        delay.feedback = max(0, min(95, p.delayFeedback))
+        delay.wetDryMix = max(0, min(100, p.delayMix))
+        let band = eq.bands[0]
+        let cutoff = max(200, min(20_000, p.lowpass))
+        band.bypass = cutoff >= 19_900
+        band.frequency = cutoff
+        engine.mainMixerNode.outputVolume = pow(10, max(-24, min(12, p.gain)) / 20)
     }
 
     static func preset(named name: String) -> AVAudioUnitReverbPreset {

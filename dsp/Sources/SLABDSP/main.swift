@@ -1,8 +1,8 @@
+import AppKit
 import Foundation
-import AVFoundation
-import CoreAudio
+import ServiceManagement
 
-let version = "0.2.0"
+let slabVersion = "0.3.0"
 let defaultPort: UInt16 = 47_832
 
 struct Options {
@@ -11,7 +11,7 @@ struct Options {
     var recordPath: String?
     var seconds: Double?
     var initial: DSPParams = .neutral
-    var quiet = false
+    var loginItem: String?
 }
 
 func parseArgs() -> Options {
@@ -44,18 +44,18 @@ func parseArgs() -> Options {
                     }
                 }
             }
-        case "--quiet":
-            options.quiet = true
+        case "--login-item":
+            options.loginItem = iterator.next()
         case "--help", "-h":
             print("""
-            SLABDSP \(version) — real pitch / reverb / delay for Spotify on macOS
+            SLABDSP \(slabVersion) — real pitch / reverb / delay for Spotify on macOS
 
               --port <n>        control port (default \(defaultPort))
               --process <name>  process to tap (default Spotify)
               --set k=v,...     initial params (pitch, reverb, delayMix, ...)
               --record <file>   record processed output to a WAV, then exit
-              --seconds <n>     how long to run
-              --quiet           no status logging
+              --seconds <n>     how long to run (no menu bar item)
+              --login-item <on|off|status>  manage Start at Login, then exit
             """)
             exit(0)
         default:
@@ -67,119 +67,107 @@ func parseArgs() -> Options {
 
 let options = parseArgs()
 
-// 1. Locate the process to tap.
-let pids = TapCapture.pids(named: options.processName)
-guard let pid = pids.first else {
-    slabLog("error: \(options.processName) is not running.")
-    exit(2)
-}
-
-guard let processObject = TapCapture.processObject(forPID: pid) else {
-    slabLog("error: \(options.processName) (pid \(pid)) is not an audio process yet — start playback and retry.")
-    exit(3)
-}
-
-// 2. Build capture + DSP.
-let ring = StereoRing(capacity: 48_000 * 2)
-let capture = TapCapture(ring: ring)
-
-do {
-    try capture.start(processObjectID: processObject, label: options.processName)
-} catch {
-    slabLog("error: \(error)")
-    exit(4)
-}
-
-guard let tapFormat = capture.format else {
-    slabLog("error: tap reported no format")
-    capture.stop()
-    exit(5)
-}
-
-let graph = DSPGraph(ring: ring, sampleRate: tapFormat.sampleRate)
-graph.apply(options.initial)
-
-do {
-    try graph.start()
-} catch {
-    slabLog("error: audio engine failed to start: \(error)")
-    capture.stop()
-    exit(6)
-}
-
-if !options.quiet {
-    slabLog("tapping \(options.processName) (pid \(pid)) @ \(Int(tapFormat.sampleRate)) Hz · control on http://127.0.0.1:\(options.port)")
-}
-
-// 3. Optional recording mode for verification.
-var recorder: Recorder?
-if let path = options.recordPath {
-    let rec = Recorder(path: path, graph: graph)
+if let wanted = options.loginItem {
     do {
-        try rec.start()
-        recorder = rec
+        if wanted != "status" { try StatusMenu.setLoginItem(wanted == "on") }
+        print("login item: \(SMAppService.mainApp.status.rawValue) (0 not registered, 1 enabled, 2 needs approval, 3 not found)")
+        exit(0)
     } catch {
-        slabLog("error: could not record: \(error)")
+        print("login item failed: \(error)")
+        exit(8)
     }
 }
 
+// Two helpers would tap Spotify twice and fight over the control port.
+if let id = Bundle.main.bundleIdentifier {
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+        .filter { $0.processIdentifier != getpid() }
+    if !others.isEmpty {
+        slabLog("already running as pid \(others[0].processIdentifier) — exiting")
+        exit(0)
+    }
+}
+
+slabTrimLog()
+
+let supervisor = Supervisor(processName: options.processName, initial: options.initial)
+
+// The port opens before anything is tapped, so the panel can tell "helper is
+// waiting for Spotify" apart from "helper is not running".
 var server: ControlServer?
 if options.recordPath == nil {
     do {
-        let s = try ControlServer(port: options.port) { [weak capture, weak graph] in
-            [
-                "ok": true,
-                "service": "slab-dsp",
-                "version": version,
-                "process": options.processName,
-                "pid": pid,
-                "sampleRate": tapFormat.sampleRate,
-                "engine": graph?.isRunning ?? false,
-                "level": DSPGraph.renderPeak,
-            ] as [String: Any]
-        }
-        s.attach(graph: graph)
+        let s = try ControlServer(port: options.port, supervisor: supervisor)
         s.start()
         server = s
     } catch {
         slabLog("error: control server failed: \(error)")
-        capture.stop()
         exit(7)
     }
 }
 
-// 4. Shut down cleanly.
+// Shut down cleanly. Releasing the tap hands the audio back to Spotify; the
+// fallback covers a Core Audio call that never returns.
+let shutdown: () -> Void = {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { exit(0) }
+    supervisor.shutdown { exit(0) }
+}
 signal(SIGINT, SIG_IGN)
 signal(SIGTERM, SIG_IGN)
 let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
 let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-let shutdown: () -> Void = {
-    recorder?.stop()
-    graph.stop()
-    capture.stop()
-    exit(0)
-}
 sigint.setEventHandler(handler: shutdown)
 sigterm.setEventHandler(handler: shutdown)
 sigint.resume()
 sigterm.resume()
+server?.onQuit = shutdown
 
-var statusTimer: DispatchSourceTimer?
-if !options.quiet {
-    let timer = DispatchSource.makeTimerSource(queue: .main)
-    timer.schedule(deadline: .now() + 2, repeating: 5.0)
-    timer.setEventHandler {
-        slabLog("alive · callbacks=\(capture.ioCallbacks) buffered=\(graph.bufferFrames)")
-        DSPGraph.renderPeak = 0
+slabLog("SLAB DSP \(slabVersion) · control on http://127.0.0.1:\(options.port)")
+
+if options.recordPath == nil && options.seconds == nil {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let menu = StatusMenu(supervisor: supervisor, server: server, onQuit: shutdown)
+    app.delegate = menu
+    supervisor.start()
+    withExtendedLifetime(menu) { app.run() }
+} else {
+    // Dev flags: no menu bar, and a missing target is an error rather than a wait.
+    var recorder: Recorder?
+    var armed = false
+    supervisor.onChange = {
+        DispatchQueue.main.async {
+            switch supervisor.link {
+            case .waitingForProcess:
+                slabLog("error: \(options.processName) is not running.")
+                exit(2)
+            case .waitingForAudio(let pid):
+                slabLog("error: \(options.processName) (pid \(pid)) is not an audio process yet — start playback and retry.")
+                exit(3)
+            case .failed(let reason):
+                slabLog("error: \(reason)")
+                exit(4)
+            case .tapping:
+                guard !armed, let graph = supervisor.graph else { return }
+                armed = true
+                if let path = options.recordPath {
+                    let rec = Recorder(path: path, graph: graph)
+                    do {
+                        try rec.start()
+                        recorder = rec
+                    } catch {
+                        slabLog("error: could not record: \(error)")
+                    }
+                }
+                if let seconds = options.seconds {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+                        recorder?.stop()
+                        shutdown()
+                    }
+                }
+            }
+        }
     }
-    timer.resume()
-    statusTimer = timer
-}
-
-if let seconds = options.seconds {
-    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { shutdown() }
-}
-
-withExtendedLifetime((server, statusTimer)) {
-    RunLoop.main.run()
+    supervisor.start()
+    withExtendedLifetime(server) { RunLoop.main.run() }
 }

@@ -17,6 +17,7 @@ Spotify does not hand over the audio stream to extensions. There is no Web Audio
 SLAB does the things the client can actually do, and pairs with a small companion app for the rest:
 
 - **Six EQ moods** written against the client's native six-band equalizer.
+- **A real pitch slider** — ±1200 cents, live, with the mood cards acting as presets that move it.
 - **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
 - **Beat-synced chop pads** that seek to the top of a bar, using Spotify's own audio analysis for the grid.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
@@ -74,9 +75,11 @@ The companion app is what makes the moods real. It taps Spotify's audio with `Au
 bun run dsp:install
 ```
 
-That builds `SLAB DSP.app`, copies it to `~/Applications`, and launches it. On first run macOS asks for **Audio Recording** permission — that is the process tap. Nothing is recorded, stored, or sent anywhere; the app has no network client beyond a loopback control port.
+That builds `SLAB DSP.app`, copies it to `~/Applications`, and launches it. It lives in the menu bar as a small waveform: the menu shows what it is doing right now, and has **Reconnect to Spotify**, **Start at Login**, **Open Log** and **Quit**. The icon is dimmed whenever no audio is coming through. On first run macOS asks for **Audio Recording** permission — that is the process tap. Nothing is recorded, stored, or sent anywhere; the app has no network client beyond a loopback control port.
 
 If the permission prompt was dismissed, re-enable it in **System Settings → Privacy & Security → Screen & System Audio Recording** (macOS 15) or **Audio Recording** (macOS 14), then relaunch the app.
+
+Quit Spotify, reopen it, and the helper picks it up on its own with the same settings. It can be started before Spotify and will wait. A rebuilt copy is a new binary as far as macOS is concerned, so a build from source asks for the permission again.
 
 The helper must be launched as an app (LaunchServices), not from a shell. TCC attributes the audio-capture grant to the responsible process, so a binary started from Terminal inherits Terminal's identity and taps silence.
 
@@ -86,15 +89,18 @@ The helper listens on `http://127.0.0.1:47832`:
 
 | Route | Purpose |
 |---|---|
-| `GET /status` | version, sample rate, level, latency, current params |
+| `GET /status` | version, link state (`tapping`, `audio`), sample rate, level, latency, current params |
 | `POST /params` | `{"pitch": -320, "reverb": 34, "lowpass": 11000}` |
 | `POST /tapstop` | `{"downMs": 380, "holdMs": 70, "upMs": 240}` |
 | `POST /reset` | back to neutral |
+| `POST /reconnect` | drop the tap and attach again |
 | `POST /quit` | shut the helper down |
 
-The panel probes `/status` every few seconds. Green row means linked; grey means the helper is not running and SLAB is EQ-only. Moods push their DSP parameters on selection, so picking **Houston Screwed** sets pitch, reverb and low-pass in one move.
+The panel probes `/status` every few seconds. Green row means linked; grey means the helper is not running and SLAB is EQ-only. Moods push their DSP parameters on selection, so picking **Houston Screwed** sets pitch, reverb and low-pass in one move. The pitch slider then moves from that point, and the helper is told to keep the rest of the mood intact.
 
-The extension degrades cleanly: no helper, no errors, no dead buttons.
+The control port only answers to Spotify. Requests carrying an `Origin` other than `https://xpui.app.spotify.com` or `https://open.spotify.com` get `403` and never reach the audio graph, so a page you happen to have open cannot repitch your music or shut the helper down. The `Access-Control-Allow-Private-Network` grant is only sent back to those origins, on request. Requests with no `Origin` at all — `curl`, native clients — are still allowed, as long as their `Host` is loopback, which is what stops DNS rebinding from turning a page into a same-origin caller.
+
+The extension degrades cleanly: no helper, no errors, no dead buttons. And it says when it can't be heard: the EQ and the tap only reach audio on this computer, so while Spotify Connect is playing on a console or a speaker the row reads *Playing on XBOX — SLAB only reaches this computer*.
 
 ### Dev flags
 
@@ -165,7 +171,9 @@ Restart Spotify if the chip does not appear. The chip sits in the playbar next t
 
 ## Conflicts
 
-- **Other equalizer extensions.** SLAB writes the same six native filters as ModernEQ, cat-jam, and anything else built on `EqualizerAPI`. Run one at a time. If you switch, press **Flat** in SLAB before enabling the other one.
+- **ModernEQ.** Both extensions write the same six native filters, so only one can own them. SLAB detects ModernEQ and steps back: the panel says *ModernEQ is driving the EQ* and the moods move pitch, reverb and low-pass instead. One button in that row hands the bands back to SLAB (and writes ModernEQ's saved curve when you hand them back the other way). No uninstalling required.
+- **Local and Marketplace copies.** Spicetify loads both if both are installed. The newer one wins from 0.3.0 on, but anything older than that always takes over, so remove the old one or update it.
+- **Other equalizer extensions.** cat-jam and anything else built on `EqualizerAPI` have no handshake with SLAB. Run one at a time.
 - **The baseline curve.** SLAB snapshots your equalizer the first time it loads and stores it in `localStorage`. **Flat** restores that snapshot, not whatever you changed the EQ to afterward. Clear `slab:baseline:v1` from local storage if you want a fresh snapshot.
 - **Speed extensions.** Dial and similar tools will report their own speed state. On builds where speed is locked, they cannot work either.
 
@@ -179,6 +187,7 @@ src/
   core/
     dsp.ts         loopback bridge to SLAB DSP (probe / params / tapstop)
     eq.ts          EqualizerAPI bridge, baseline snapshot/restore
+    moderneq.ts    ModernEQ detection + its saved curve, for handing the bands back
     moods.ts       six curves + sparkline geometry + DSP params
     grid.ts        audio-analysis cache, bar/beat lookup
     chops.ts       chop / screw / spin / loop / tape stop / auto

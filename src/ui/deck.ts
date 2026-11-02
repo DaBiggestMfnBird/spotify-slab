@@ -1,6 +1,6 @@
 import { chopBars, loopBars, onChop, resetForTrack, setAuto, tapeStop } from "../core/chops";
 import { dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
-import { applyCurve, restoreBaseline } from "../core/eq";
+import { applyCurve, applyCurveAtFrequencies, restoreBaseline } from "../core/eq";
 import {
     barCount,
     barIndexAt,
@@ -8,12 +8,31 @@ import {
     gridFor,
     loadGrid,
 } from "../core/grid";
+import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MOODS, curvePath, moodById } from "../core/moods";
 import { saveState } from "../core/state";
 import type { SlabState } from "../types";
 import { CSS, STYLE_ID } from "./styles";
 
 type Props = Record<string, unknown>;
+
+const PITCH_LIMIT = 1200;
+
+/** The Connect device playing right now, when it isn't this computer. */
+function remoteDeviceName(): string | null {
+    try {
+        const device = Spicetify.Platform.ConnectAPI?.state?.activeDevice;
+        return device && device.isLocal === false ? (device.name ?? "another device") : null;
+    } catch {
+        return null;
+    }
+}
+
+/** −320 → "−320¢", 0 → "0¢", 400 → "+400¢". */
+function formatCents(cents: number): string {
+    if (cents === 0) return "0¢";
+    return `${cents > 0 ? "+" : "\u2212"}${Math.abs(cents)}¢`;
+}
 
 /**
  * Spicetify's Player wrapper throws while the app is still hydrating
@@ -102,6 +121,12 @@ export class Deck {
     private dspEl: HTMLDivElement;
     private dspDot: HTMLSpanElement;
     private dspText: HTMLSpanElement;
+    private pitchRow: HTMLDivElement;
+    private pitchInput: HTMLInputElement;
+    private pitchValue: HTMLSpanElement;
+    private eqNote: HTMLDivElement;
+    private eqNoteText: HTMLSpanElement;
+    private eqNoteButton: HTMLButtonElement;
     private disposeDsp: (() => void) | null = null;
     private pads: HTMLButtonElement[] = [];
     private refreshTimer: number | null = null;
@@ -110,6 +135,11 @@ export class Deck {
     private lastGridUri: string | null = null;
     private lastGridAttempt = 0;
     private lastDspSync = 0;
+    private pitchTimer: number | null = null;
+    private pendingPitch: number | null = null;
+    private modernEq = false;
+    private lastEqCheck = 0;
+    private lastRemote: string | null = null;
     private onDocumentClick = (event: MouseEvent) => this.handleOutside(event);
     private onKey = (event: KeyboardEvent) => this.handleKey(event);
     private onResize = () => this.position();
@@ -133,6 +163,39 @@ export class Deck {
         this.dspDot = h("span", { class: "slab-dsp-dot" });
         this.dspText = h("span", { class: "slab-dsp-text" }, "checking DSP helper…");
         this.dspEl = h("div", { class: "slab-dsp", "data-linked": "false" }, this.dspDot, this.dspText);
+
+        this.pitchInput = h("input", {
+            class: "slab-pitch-range",
+            type: "range",
+            min: String(-PITCH_LIMIT),
+            max: String(PITCH_LIMIT),
+            step: "10",
+            "aria-label": "Pitch in cents",
+            oninput: () => this.onPitchInput(false),
+            onchange: () => this.onPitchInput(true),
+        });
+        this.pitchValue = h("span", { class: "slab-pitch-value" }, "0¢");
+        this.pitchRow = h(
+            "div",
+            { class: "slab-pitch", "data-enabled": "false" },
+            h("span", { class: "slab-pitch-title" }, "Pitch"),
+            this.pitchInput,
+            this.pitchValue,
+        );
+
+        this.eqNoteText = h("span", { class: "slab-eq-text" });
+        this.eqNoteButton = h("button", {
+            class: "slab-eq-btn",
+            type: "button",
+            onclick: (event: Event) => {
+                event.stopPropagation();
+                this.toggleEqOwner();
+            },
+        }, "Use SLAB EQ");
+        this.eqNote = h("div", { class: "slab-eq" }, this.eqNoteText, this.eqNoteButton);
+        this.eqNote.hidden = true;
+        this.modernEq = modernEqPresent();
+
         this.panel = this.buildPanel();
 
         onChop((event) => this.flashActivity(event.label));
@@ -151,13 +214,21 @@ export class Deck {
 
         this.renderMoodState();
         this.renderAutoState();
+        this.renderPitch();
+        this.renderEqNote();
+        // Yielding is not the same as doing nothing: ModernEQ only writes its
+        // curve when its own UI is used, so SLAB puts that curve back on boot
+        // instead of leaving whatever the previous session left behind.
+        if (this.modernEq && !this.slabOwnsEq()) void this.restoreModernEqCurve();
         let wasLinked = false;
         this.disposeDsp = onDspChange((status) => {
-            this.renderDsp(status.linked, status.latencyMs);
+            this.renderDsp();
             // The helper can start (or restart) after the extension does. When
             // it comes back, re-push the current mood so the panel and the audio
             // agree without the user having to reselect anything.
-            if (status.linked && !wasLinked) void sendDsp(moodById(this.state.moodId).dsp);
+            if (status.linked && !wasLinked) {
+                void sendDsp({ ...moodById(this.state.moodId).dsp, pitch: this.state.pitch });
+            }
             wasLinked = status.linked;
         });
         void probeDsp(true);
@@ -340,11 +411,13 @@ export class Deck {
             head,
             h("div", { class: "slab-label" }, "Moods"),
             moodGrid,
+            this.pitchRow,
             h("div", { class: "slab-label" }, "Tape"),
             tape,
             h("div", { class: "slab-label" }, "Pads"),
             padRow,
             auto,
+            this.eqNote,
             this.dspEl,
             foot,
         );
@@ -413,34 +486,164 @@ export class Deck {
 
     private async applyMood(id: string, announce: boolean): Promise<void> {
         this.state.moodId = id;
+        const mood = moodById(id);
+        // Moods are presets for the pitch slider, not a separate concept: pick
+        // a mood and the slider lands on that mood's cents.
+        this.state.pitch = mood.dsp.pitch;
         saveState(this.state);
         this.renderMoodState();
+        this.renderPitch();
         this.chip.dataset.on = id !== "flat" ? "true" : "false";
 
-        if (id === "flat") await restoreBaseline();
-        else await applyCurve(moodById(id).gains);
+        // The six native filters have exactly one owner. If ModernEQ is
+        // installed and the user hasn't claimed them back, SLAB leaves them be.
+        if (this.slabOwnsEq()) {
+            if (id === "flat") await restoreBaseline();
+            else await applyCurve(mood.gains);
+        }
 
         // The helper applies real pitch / reverb / delay. If it is not running
         // this resolves false and the mood stays EQ-only.
-        void sendDsp(moodById(id).dsp);
+        void sendDsp({ ...mood.dsp, pitch: this.state.pitch });
 
         if (announce) {
-            const mood = moodById(id);
             this.flashActivity(`${mood.name} — ${mood.sub}`);
         }
     }
 
-    private renderDsp(linked: boolean, latencyMs?: number): void {
-        this.dspEl.dataset.linked = linked ? "true" : "false";
-        if (linked) {
-            const latency = typeof latencyMs === "number" ? ` · ${Math.round(latencyMs)} ms` : "";
-            this.dspText.textContent = `DSP linked — pitch, reverb, delay live${latency}`;
-            this.dspEl.title = "SLAB DSP is running and processing Spotify's audio.";
+    /**
+     * Pitch is the one control people actually want, so it gets a real slider.
+     * Dragging fires every frame; the helper is throttled to ~90 ms of updates
+     * and the last value always wins on release.
+     */
+    private onPitchInput(commit: boolean): void {
+        const cents = Number.parseInt(this.pitchInput.value, 10);
+        if (!Number.isFinite(cents)) return;
+        this.state.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, Math.round(cents / 10) * 10));
+        this.pitchValue.textContent = formatCents(this.state.pitch);
+        this.pendingPitch = this.state.pitch;
+
+        if (commit) {
+            this.flushPitch(true);
+            return;
+        }
+        if (this.pitchTimer !== null) return;
+        this.pitchTimer = window.setTimeout(() => this.flushPitch(false), 90);
+    }
+
+    private flushPitch(persist: boolean): void {
+        if (this.pitchTimer !== null) {
+            window.clearTimeout(this.pitchTimer);
+            this.pitchTimer = null;
+        }
+        const value = this.pendingPitch;
+        this.pendingPitch = null;
+        if (value === null) return;
+        void sendDsp({ pitch: value });
+        if (persist) saveState(this.state);
+    }
+
+    private renderPitch(): void {
+        const cents = this.state.pitch;
+        this.pitchInput.value = String(cents);
+        this.pitchValue.textContent = formatCents(cents);
+        const linked = dspStatus().linked;
+        this.pitchRow.dataset.enabled = linked ? "true" : "false";
+        this.pitchInput.disabled = !linked;
+        this.pitchRow.title = linked
+            ? "Pitch shift applied to Spotify's audio by SLAB DSP."
+            : "Pitch needs SLAB DSP running. The browser cannot repitch a DRM-protected stream.";
+    }
+
+    /** True when SLAB is allowed to write the six native EQ bands. */
+    private slabOwnsEq(): boolean {
+        if (this.state.eqOwner === "slab") return true;
+        if (this.state.eqOwner === "modern") return false;
+        return !this.modernEq;
+    }
+
+    private toggleEqOwner(): void {
+        this.state.eqOwner = this.slabOwnsEq() ? "modern" : "slab";
+        saveState(this.state);
+        this.renderEqNote();
+        if (this.slabOwnsEq()) void applyCurve(moodById(this.state.moodId).gains);
+        else void this.restoreModernEqCurve();
+        this.flashActivity(this.slabOwnsEq() ? "SLAB owns the EQ" : "ModernEQ owns the EQ");
+    }
+
+    private renderEqNote(): void {
+        if (!this.modernEq) {
+            this.eqNote.hidden = true;
+            return;
+        }
+        this.eqNote.hidden = false;
+        if (this.slabOwnsEq()) {
+            this.eqNoteText.textContent = "SLAB owns the EQ · ModernEQ is idle";
+            this.eqNoteButton.textContent = "Use ModernEQ";
         } else {
+            this.eqNoteText.textContent = "ModernEQ owns the EQ · SLAB does pitch and room";
+            this.eqNoteButton.textContent = "Use SLAB EQ";
+        }
+    }
+
+    /** Hand the bands back with the curve ModernEQ last saved. */
+    private async restoreModernEqCurve(): Promise<void> {
+        const bands = modernEqBands();
+        if (!bands) return;
+        await applyCurveAtFrequencies(bands);
+    }
+
+    /** ModernEQ can appear after SLAB does; re-check slowly, not every tick. */
+    private refreshEqOwner(): void {
+        const now = Date.now();
+        if (now - this.lastEqCheck < 2_000) return;
+        this.lastEqCheck = now;
+
+        const present = modernEqPresent();
+        if (present === this.modernEq) return;
+        this.modernEq = present;
+        this.renderEqNote();
+        if (this.slabOwnsEq()) void applyCurve(moodById(this.state.moodId).gains);
+        else void this.restoreModernEqCurve();
+    }
+
+    /**
+     * The row states what is true now, including the cases where SLAB is doing
+     * nothing audible: the EQ and the tap both only reach audio on this Mac.
+     */
+    private renderDsp(): void {
+        const status = dspStatus();
+        const remote = remoteDeviceName();
+        const live = status.linked && status.tapping && status.audio && !remote;
+        this.dspEl.dataset.linked = live ? "true" : "false";
+
+        if (remote) {
+            this.dspText.textContent = `Playing on ${remote} — SLAB only reaches this computer`;
+            this.dspEl.title = "Moods, pitch and effects apply when Spotify plays here. Switch the device to hear them.";
+        } else if (!status.linked) {
             this.dspText.textContent = "DSP helper offline — EQ only";
             this.dspEl.title =
                 "Run SLAB DSP to get real pitch, reverb and delay. Without it SLAB only shapes the native EQ.";
+        } else if (!status.tapping) {
+            this.dspText.textContent = "DSP helper waiting for Spotify audio";
+            this.dspEl.title = "SLAB DSP is running and will attach as soon as Spotify opens an audio stream.";
+        } else if (!status.audio) {
+            this.dspText.textContent = "DSP attached — nothing playing here yet";
+            this.dspEl.title = "SLAB DSP is attached to Spotify and hearing silence.";
+        } else {
+            const latency = typeof status.latencyMs === "number" ? ` · ${Math.round(status.latencyMs)} ms` : "";
+            this.dspText.textContent = `DSP linked — pitch, reverb, delay live${latency}`;
+            this.dspEl.title = "SLAB DSP is running and processing Spotify's audio.";
         }
+        this.renderPitch();
+    }
+
+    /** Playback can move to another device at any moment. */
+    private refreshConnect(): void {
+        const remote = remoteDeviceName();
+        if (remote === this.lastRemote) return;
+        this.lastRemote = remote;
+        this.renderDsp();
     }
 
     private renderMoodState(): void {
@@ -481,7 +684,8 @@ export class Deck {
         const now = Date.now();
         if (now - this.lastDspSync < 3_000) return;
 
-        const want = moodById(this.state.moodId).dsp;
+        // The slider is authoritative; the mood only supplies the other params.
+        const want = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
         const have = status.params ?? {};
         const drifted =
             Math.abs((have.pitch ?? 0) - want.pitch) > 1 ||
@@ -517,6 +721,8 @@ export class Deck {
         }
 
         this.syncDspParams();
+        this.refreshEqOwner();
+        this.refreshConnect();
 
         if (this.panel.hidden) return;
 
@@ -556,7 +762,8 @@ export class Deck {
     }
 
     private speedInfo(): SpeedInfo {
-        if (dspStatus().linked) {
+        const dsp = dspStatus();
+        if (dsp.linked && dsp.tapping && dsp.audio && !remoteDeviceName()) {
             return {
                 ok: true,
                 text: "pitch live",

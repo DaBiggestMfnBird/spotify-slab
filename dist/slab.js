@@ -69,8 +69,8 @@ self.onmessage = (event) => {
     if (!target.startsWith("spotify:track:")) return null;
     const cached = cache.get(target);
     if (cached) return cached;
-    const running = inflight.get(target);
-    if (running) return running;
+    const running2 = inflight.get(target);
+    if (running2) return running2;
     const request2 = (async () => {
       try {
         const analysis = await Spicetify.getAudioData(target);
@@ -451,6 +451,31 @@ self.onmessage = (event) => {
     }
     return best;
   }
+  function applyCurveAtFrequencies(points) {
+    const api = Spicetify.Platform.EqualizerAPI;
+    if (!api || !filters.length || !points.length) return Promise.resolve();
+    chain = chain.then(async () => {
+      api.setEnabledState(true);
+      for (const filter of filters) {
+        let best = points[0];
+        let bestDistance = Infinity;
+        for (const point of points) {
+          const distance = Math.abs(
+            Math.log(filter.frequency) - Math.log(point.frequency)
+          );
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = point;
+          }
+        }
+        try {
+          await api.setFilterGain(filter.key, clamp(best.gain));
+        } catch {
+        }
+      }
+    }).catch(() => void 0);
+    return chain;
+  }
   function restoreBaseline() {
     const api = Spicetify.Platform.EqualizerAPI;
     if (!api || !baseline || !filters.length) return Promise.resolve();
@@ -473,8 +498,13 @@ self.onmessage = (event) => {
     moodId: "flat",
     auto: false,
     open: false,
-    every: 4
+    every: 4,
+    pitch: 0,
+    eqOwner: "auto"
   };
+  function clampPitch(value) {
+    return Math.max(-1200, Math.min(1200, Math.round(value / 10) * 10));
+  }
   function loadState() {
     try {
       const raw = localStorage.getItem(KEY);
@@ -484,7 +514,10 @@ self.onmessage = (event) => {
         moodId: typeof parsed.moodId === "string" ? parsed.moodId : DEFAULTS.moodId,
         auto: parsed.auto === true,
         open: parsed.open === true,
-        every: typeof parsed.every === "number" && parsed.every >= 1 && parsed.every <= 16 ? parsed.every : DEFAULTS.every
+        every: typeof parsed.every === "number" && parsed.every >= 1 && parsed.every <= 16 ? parsed.every : DEFAULTS.every,
+        // State saved before the slider existed has no pitch; the mood's is the truth.
+        pitch: typeof parsed.pitch === "number" ? clampPitch(parsed.pitch) : moodById(parsed.moodId ?? DEFAULTS.moodId).dsp.pitch,
+        eqOwner: parsed.eqOwner === "slab" || parsed.eqOwner === "modern" ? parsed.eqOwner : DEFAULTS.eqOwner
       };
     } catch {
       return { ...DEFAULTS };
@@ -511,7 +544,7 @@ self.onmessage = (event) => {
     return status;
   }
   function publish(next) {
-    const changed = next.linked !== status.linked || next.version !== status.version;
+    const changed = next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio;
     status = next;
     if (changed) for (const listener2 of listeners) listener2(status);
   }
@@ -540,6 +573,9 @@ self.onmessage = (event) => {
     if (payload?.ok) {
       publish({
         linked: true,
+        // Helpers before 0.3.0 don't report these and only ran while tapping.
+        tapping: payload.tapping !== false,
+        audio: payload.audio !== false,
         version: payload.version,
         sampleRate: payload.sampleRate,
         latencyMs: payload.latencyMs,
@@ -570,6 +606,29 @@ self.onmessage = (event) => {
       body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 })
     });
     return Boolean(payload);
+  }
+
+  // src/core/moderneq.ts
+  var STATE_KEY = "moderneq:state";
+  var BANDS2 = [32, 64, 125, 250, 500, 1e3, 2e3, 4e3, 8e3, 16e3, 24e3];
+  function modernEqPresent() {
+    try {
+      if (localStorage.getItem(STATE_KEY) !== null) return true;
+    } catch {
+    }
+    return Boolean(document.querySelector(".meq-menu-item, .meq-overlay"));
+  }
+  function modernEqBands() {
+    try {
+      const raw = localStorage.getItem(STATE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed.bands) || parsed.bands.length !== BANDS2.length) return null;
+      const gains = parsed.bands.map((value) => typeof value === "number" ? value : 0);
+      return BANDS2.map((frequency, index) => ({ frequency, gain: gains[index] }));
+    } catch {
+      return null;
+    }
   }
 
   // src/ui/styles.ts
@@ -872,6 +931,90 @@ self.onmessage = (event) => {
 }
 .slab-switch[aria-checked="true"]::after { transform: translateX(17px); background: #fff; }
 
+.slab-pitch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 13px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: linear-gradient(180deg, rgba(255, 47, 109, 0.10), rgba(255, 138, 61, 0.04));
+  transition: opacity 140ms ease;
+}
+.slab-pitch[data-enabled="false"] { opacity: 0.42; }
+.slab-pitch-title {
+  flex: none;
+  font-size: 8.5px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--slab-dim);
+}
+.slab-pitch-range {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.slab-pitch-range:disabled { cursor: not-allowed; }
+.slab-pitch-range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.30), rgba(255, 255, 255, 0.12));
+}
+.slab-pitch-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -5px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: linear-gradient(180deg, var(--slab-candy), var(--slab-orange));
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+}
+.slab-pitch-range:focus-visible { outline: 2px solid var(--slab-orange); outline-offset: 3px; border-radius: 3px; }
+.slab-pitch-value {
+  flex: none;
+  width: 46px;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--slab-gold);
+}
+
+.slab-eq {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 8.5px;
+  letter-spacing: 0.05em;
+  color: var(--slab-dim);
+}
+.slab-eq[hidden] { display: none; }
+.slab-eq-text { flex: 1; line-height: 1.35; }
+.slab-eq-btn {
+  flex: none;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.slab-eq-btn:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+
 .slab-dsp {
   display: flex;
   align-items: center;
@@ -884,8 +1027,7 @@ self.onmessage = (event) => {
   font-size: 8.5px;
   letter-spacing: 0.05em;
   color: var(--slab-dim);
-}
-.slab-dsp[data-linked="true"] {
+}.slab-dsp[data-linked="true"] {
   border-color: rgba(110, 231, 168, 0.28);
   background: rgba(110, 231, 168, 0.07);
   color: #b8f0d0;
@@ -942,6 +1084,19 @@ self.onmessage = (event) => {
 `;
 
   // src/ui/deck.ts
+  var PITCH_LIMIT = 1200;
+  function remoteDeviceName() {
+    try {
+      const device = Spicetify.Platform.ConnectAPI?.state?.activeDevice;
+      return device && device.isLocal === false ? device.name ?? "another device" : null;
+    } catch {
+      return null;
+    }
+  }
+  function formatCents(cents) {
+    if (cents === 0) return "0\xA2";
+    return `${cents > 0 ? "+" : "\u2212"}${Math.abs(cents)}\xA2`;
+  }
   function isPlaying() {
     try {
       return Spicetify.Player?.isPlaying?.() === true;
@@ -1005,6 +1160,11 @@ self.onmessage = (event) => {
       this.lastGridUri = null;
       this.lastGridAttempt = 0;
       this.lastDspSync = 0;
+      this.pitchTimer = null;
+      this.pendingPitch = null;
+      this.modernEq = false;
+      this.lastEqCheck = 0;
+      this.lastRemote = null;
       this.onDocumentClick = (event) => this.handleOutside(event);
       this.onKey = (event) => this.handleKey(event);
       this.onResize = () => this.position();
@@ -1026,6 +1186,36 @@ self.onmessage = (event) => {
       this.dspDot = h("span", { class: "slab-dsp-dot" });
       this.dspText = h("span", { class: "slab-dsp-text" }, "checking DSP helper\u2026");
       this.dspEl = h("div", { class: "slab-dsp", "data-linked": "false" }, this.dspDot, this.dspText);
+      this.pitchInput = h("input", {
+        class: "slab-pitch-range",
+        type: "range",
+        min: String(-PITCH_LIMIT),
+        max: String(PITCH_LIMIT),
+        step: "10",
+        "aria-label": "Pitch in cents",
+        oninput: () => this.onPitchInput(false),
+        onchange: () => this.onPitchInput(true)
+      });
+      this.pitchValue = h("span", { class: "slab-pitch-value" }, "0\xA2");
+      this.pitchRow = h(
+        "div",
+        { class: "slab-pitch", "data-enabled": "false" },
+        h("span", { class: "slab-pitch-title" }, "Pitch"),
+        this.pitchInput,
+        this.pitchValue
+      );
+      this.eqNoteText = h("span", { class: "slab-eq-text" });
+      this.eqNoteButton = h("button", {
+        class: "slab-eq-btn",
+        type: "button",
+        onclick: (event) => {
+          event.stopPropagation();
+          this.toggleEqOwner();
+        }
+      }, "Use SLAB EQ");
+      this.eqNote = h("div", { class: "slab-eq" }, this.eqNoteText, this.eqNoteButton);
+      this.eqNote.hidden = true;
+      this.modernEq = modernEqPresent();
       this.panel = this.buildPanel();
       onChop((event) => this.flashActivity(event.label));
     }
@@ -1040,10 +1230,15 @@ self.onmessage = (event) => {
       else this.panel.hidden = true;
       this.renderMoodState();
       this.renderAutoState();
+      this.renderPitch();
+      this.renderEqNote();
+      if (this.modernEq && !this.slabOwnsEq()) void this.restoreModernEqCurve();
       let wasLinked = false;
       this.disposeDsp = onDspChange((status2) => {
-        this.renderDsp(status2.linked, status2.latencyMs);
-        if (status2.linked && !wasLinked) void sendDsp(moodById(this.state.moodId).dsp);
+        this.renderDsp();
+        if (status2.linked && !wasLinked) {
+          void sendDsp({ ...moodById(this.state.moodId).dsp, pitch: this.state.pitch });
+        }
         wasLinked = status2.linked;
       });
       void probeDsp(true);
@@ -1209,11 +1404,13 @@ self.onmessage = (event) => {
         head,
         h("div", { class: "slab-label" }, "Moods"),
         moodGrid,
+        this.pitchRow,
         h("div", { class: "slab-label" }, "Tape"),
         tape,
         h("div", { class: "slab-label" }, "Pads"),
         padRow,
         auto,
+        this.eqNote,
         this.dspEl,
         foot
       );
@@ -1274,27 +1471,139 @@ self.onmessage = (event) => {
     }
     async applyMood(id, announce) {
       this.state.moodId = id;
+      const mood = moodById(id);
+      this.state.pitch = mood.dsp.pitch;
       saveState(this.state);
       this.renderMoodState();
+      this.renderPitch();
       this.chip.dataset.on = id !== "flat" ? "true" : "false";
-      if (id === "flat") await restoreBaseline();
-      else await applyCurve(moodById(id).gains);
-      void sendDsp(moodById(id).dsp);
+      if (this.slabOwnsEq()) {
+        if (id === "flat") await restoreBaseline();
+        else await applyCurve(mood.gains);
+      }
+      void sendDsp({ ...mood.dsp, pitch: this.state.pitch });
       if (announce) {
-        const mood = moodById(id);
         this.flashActivity(`${mood.name} \u2014 ${mood.sub}`);
       }
     }
-    renderDsp(linked, latencyMs) {
-      this.dspEl.dataset.linked = linked ? "true" : "false";
-      if (linked) {
-        const latency = typeof latencyMs === "number" ? ` \xB7 ${Math.round(latencyMs)} ms` : "";
-        this.dspText.textContent = `DSP linked \u2014 pitch, reverb, delay live${latency}`;
-        this.dspEl.title = "SLAB DSP is running and processing Spotify's audio.";
+    /**
+     * Pitch is the one control people actually want, so it gets a real slider.
+     * Dragging fires every frame; the helper is throttled to ~90 ms of updates
+     * and the last value always wins on release.
+     */
+    onPitchInput(commit) {
+      const cents = Number.parseInt(this.pitchInput.value, 10);
+      if (!Number.isFinite(cents)) return;
+      this.state.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, Math.round(cents / 10) * 10));
+      this.pitchValue.textContent = formatCents(this.state.pitch);
+      this.pendingPitch = this.state.pitch;
+      if (commit) {
+        this.flushPitch(true);
+        return;
+      }
+      if (this.pitchTimer !== null) return;
+      this.pitchTimer = window.setTimeout(() => this.flushPitch(false), 90);
+    }
+    flushPitch(persist) {
+      if (this.pitchTimer !== null) {
+        window.clearTimeout(this.pitchTimer);
+        this.pitchTimer = null;
+      }
+      const value = this.pendingPitch;
+      this.pendingPitch = null;
+      if (value === null) return;
+      void sendDsp({ pitch: value });
+      if (persist) saveState(this.state);
+    }
+    renderPitch() {
+      const cents = this.state.pitch;
+      this.pitchInput.value = String(cents);
+      this.pitchValue.textContent = formatCents(cents);
+      const linked = dspStatus().linked;
+      this.pitchRow.dataset.enabled = linked ? "true" : "false";
+      this.pitchInput.disabled = !linked;
+      this.pitchRow.title = linked ? "Pitch shift applied to Spotify's audio by SLAB DSP." : "Pitch needs SLAB DSP running. The browser cannot repitch a DRM-protected stream.";
+    }
+    /** True when SLAB is allowed to write the six native EQ bands. */
+    slabOwnsEq() {
+      if (this.state.eqOwner === "slab") return true;
+      if (this.state.eqOwner === "modern") return false;
+      return !this.modernEq;
+    }
+    toggleEqOwner() {
+      this.state.eqOwner = this.slabOwnsEq() ? "modern" : "slab";
+      saveState(this.state);
+      this.renderEqNote();
+      if (this.slabOwnsEq()) void applyCurve(moodById(this.state.moodId).gains);
+      else void this.restoreModernEqCurve();
+      this.flashActivity(this.slabOwnsEq() ? "SLAB owns the EQ" : "ModernEQ owns the EQ");
+    }
+    renderEqNote() {
+      if (!this.modernEq) {
+        this.eqNote.hidden = true;
+        return;
+      }
+      this.eqNote.hidden = false;
+      if (this.slabOwnsEq()) {
+        this.eqNoteText.textContent = "SLAB owns the EQ \xB7 ModernEQ is idle";
+        this.eqNoteButton.textContent = "Use ModernEQ";
       } else {
+        this.eqNoteText.textContent = "ModernEQ owns the EQ \xB7 SLAB does pitch and room";
+        this.eqNoteButton.textContent = "Use SLAB EQ";
+      }
+    }
+    /** Hand the bands back with the curve ModernEQ last saved. */
+    async restoreModernEqCurve() {
+      const bands = modernEqBands();
+      if (!bands) return;
+      await applyCurveAtFrequencies(bands);
+    }
+    /** ModernEQ can appear after SLAB does; re-check slowly, not every tick. */
+    refreshEqOwner() {
+      const now = Date.now();
+      if (now - this.lastEqCheck < 2e3) return;
+      this.lastEqCheck = now;
+      const present = modernEqPresent();
+      if (present === this.modernEq) return;
+      this.modernEq = present;
+      this.renderEqNote();
+      if (this.slabOwnsEq()) void applyCurve(moodById(this.state.moodId).gains);
+      else void this.restoreModernEqCurve();
+    }
+    /**
+     * The row states what is true now, including the cases where SLAB is doing
+     * nothing audible: the EQ and the tap both only reach audio on this Mac.
+     */
+    renderDsp() {
+      const status2 = dspStatus();
+      const remote = remoteDeviceName();
+      const live = status2.linked && status2.tapping && status2.audio && !remote;
+      this.dspEl.dataset.linked = live ? "true" : "false";
+      if (remote) {
+        this.dspText.textContent = `Playing on ${remote} \u2014 SLAB only reaches this computer`;
+        this.dspEl.title = "Moods, pitch and effects apply when Spotify plays here. Switch the device to hear them.";
+      } else if (!status2.linked) {
         this.dspText.textContent = "DSP helper offline \u2014 EQ only";
         this.dspEl.title = "Run SLAB DSP to get real pitch, reverb and delay. Without it SLAB only shapes the native EQ.";
+      } else if (!status2.tapping) {
+        this.dspText.textContent = "DSP helper waiting for Spotify audio";
+        this.dspEl.title = "SLAB DSP is running and will attach as soon as Spotify opens an audio stream.";
+      } else if (!status2.audio) {
+        this.dspText.textContent = "DSP attached \u2014 nothing playing here yet";
+        this.dspEl.title = "SLAB DSP is attached to Spotify and hearing silence.";
+      } else {
+        const latency = typeof status2.latencyMs === "number" ? ` \xB7 ${Math.round(status2.latencyMs)} ms` : "";
+        this.dspText.textContent = `DSP linked \u2014 pitch, reverb, delay live${latency}`;
+        this.dspEl.title = "SLAB DSP is running and processing Spotify's audio.";
       }
+      this.renderPitch();
+    }
+    /** Playback can move to another device at any moment. */
+    refreshConnect() {
+      const remote = remoteDeviceName();
+      if (remote === this.lastRemote) return;
+      this.lastRemote = remote;
+      this.renderDsp();
     }
     renderMoodState() {
       for (const [id, button] of this.moodButtons) {
@@ -1329,7 +1638,7 @@ self.onmessage = (event) => {
       if (!status2.linked) return;
       const now = Date.now();
       if (now - this.lastDspSync < 3e3) return;
-      const want = moodById(this.state.moodId).dsp;
+      const want = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
       const have = status2.params ?? {};
       const drifted = Math.abs((have.pitch ?? 0) - want.pitch) > 1 || Math.abs((have.reverb ?? 0) - want.reverb) > 1 || Math.abs((have.lowpass ?? 2e4) - want.lowpass) > 50;
       if (!drifted) return;
@@ -1351,6 +1660,8 @@ self.onmessage = (event) => {
         void this.syncGrid(true);
       }
       this.syncDspParams();
+      this.refreshEqOwner();
+      this.refreshConnect();
       if (this.panel.hidden) return;
       const playing = isPlaying();
       this.panel.dataset.playing = playing ? "true" : "false";
@@ -1383,7 +1694,8 @@ self.onmessage = (event) => {
       }
     }
     speedInfo() {
-      if (dspStatus().linked) {
+      const dsp = dspStatus();
+      if (dsp.linked && dsp.tapping && dsp.audio && !remoteDeviceName()) {
         return {
           ok: true,
           text: "pitch live",
@@ -1418,7 +1730,7 @@ self.onmessage = (event) => {
   };
 
   // src/main.ts
-  var VERSION = "0.2.0";
+  var VERSION = "0.3.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {
@@ -1433,7 +1745,16 @@ self.onmessage = (event) => {
     }
     return null;
   }
-  async function boot2() {
+  function isNewer(a, b) {
+    const left = a.split(".").map(Number);
+    const right = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(left.length, right.length); i++) {
+      const difference = (left[i] ?? 0) - (right[i] ?? 0);
+      if (difference !== 0) return difference > 0;
+    }
+    return false;
+  }
+  async function boot2(claim) {
     const player = await waitFor(
       () => typeof Spicetify !== "undefined" && Spicetify.Player ? Spicetify.Player : null
     );
@@ -1444,6 +1765,7 @@ self.onmessage = (event) => {
     const eqApi = await waitFor(() => Spicetify.Platform.EqualizerAPI ?? null, 1e4);
     const eqReady = eqApi ? await initEq() : false;
     if (!eqReady) console.warn(LOG, "equalizer unavailable \u2014 moods will be inert");
+    if (window.__slabClaim !== claim) return;
     const state = loadState();
     const deck = new Deck(state);
     deck.mount();
@@ -1471,10 +1793,18 @@ self.onmessage = (event) => {
     };
     console.info(LOG, `v${VERSION} ready \xB7 eq=${eqReady ? "on" : "off"}`);
   }
-  try {
-    const previous = window.SLAB;
-    if (previous?.destroy) previous.destroy();
-  } catch {
+  var running = window.SLAB;
+  var claimed = window.__slabClaim;
+  var rival = running?.version ?? claimed?.version;
+  if (rival && isNewer(rival, VERSION)) {
+    console.info(LOG, `v${VERSION} standing down \u2014 v${rival} is already loaded`);
+  } else {
+    const claim = { version: VERSION };
+    window.__slabClaim = claim;
+    try {
+      running?.destroy?.();
+    } catch {
+    }
+    void boot2(claim).catch((error) => console.error(LOG, "boot failed", error));
   }
-  void boot2().catch((error) => console.error(LOG, "boot failed", error));
 })();

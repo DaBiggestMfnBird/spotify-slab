@@ -108,6 +108,45 @@ function nearestBand(frequency: number): number {
     return best;
 }
 
+/**
+ * Write a curve that is given at explicit frequencies instead of SLAB's six
+ * bands. ModernEQ stores its eleven bands this way, so handing the filters back
+ * means mapping each native filter to the nearest of those points — in log
+ * frequency, so the low end isn't over-weighted.
+ */
+export function applyCurveAtFrequencies(
+    points: { frequency: number; gain: number }[],
+): Promise<void> {
+    const api = Spicetify.Platform.EqualizerAPI;
+    if (!api || !filters.length || !points.length) return Promise.resolve();
+
+    chain = chain
+        .then(async () => {
+            api.setEnabledState(true);
+            for (const filter of filters) {
+                let best = points[0];
+                let bestDistance = Infinity;
+                for (const point of points) {
+                    const distance = Math.abs(
+                        Math.log(filter.frequency) - Math.log(point.frequency),
+                    );
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        best = point;
+                    }
+                }
+                try {
+                    await api.setFilterGain(filter.key, clamp(best.gain));
+                } catch {
+                    /* one dead filter shouldn't stop the curve */
+                }
+            }
+        })
+        .catch(() => undefined);
+
+    return chain;
+}
+
 export function restoreBaseline(): Promise<void> {
     const api = Spicetify.Platform.EqualizerAPI;
     if (!api || !baseline || !filters.length) return Promise.resolve();
