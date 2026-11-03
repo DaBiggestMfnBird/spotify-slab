@@ -1,19 +1,37 @@
 /**
- * The neon tube as DOM: glass, paint-out, electrodes and gas, laid out by
- * neon.ts. Owned by the lettering; the panel only places it and sets layouts.
+ * The neon tube as DOM: glass, paint-out, electrodes, gas and the supports that
+ * hold it off the board, laid out by neon.ts. The panel only places it and sets
+ * layouts.
  */
 
 import type { TubeLayout } from "./neon";
 
+type Layer =
+    | "shadow"
+    | "shadowWide"
+    | "dark"
+    | "boots"
+    | "bootsHi"
+    | "frost"
+    | "frostHi"
+    | "bloom"
+    | "halo"
+    | "glass"
+    | "core"
+    | "clipShadow"
+    | "clip"
+    | "clipHi";
+
 /**
  * One length of neon. Glass, paint-out and electrodes sit in one svg; the gas
  * sits in its own, so a strike only changes the opacity of a composited layer
- * and never repaints the glow.
+ * and never repaints the glow; the supports sit in a third over both, so they
+ * stay put when the gas goes out.
  */
 export class Tube {
     readonly node: HTMLDivElement;
     readonly gas: SVGSVGElement;
-    private layers: Record<"shadow" | "shadowWide" | "dark" | "boots" | "bootsHi" | "frost" | "frostHi" | "bloom" | "halo" | "glass" | "core", SVGPathElement>;
+    private layers: Record<Layer, SVGPathElement>;
     private current = "";
 
     constructor(className: string, width: number, height: number) {
@@ -28,28 +46,21 @@ export class Tube {
 </svg>
 <svg class="slab-tube-gas" ${box}>
   <path data-l="bloom"/><path data-l="halo"/><path data-l="glass"/><path data-l="core"/>
+</svg>
+<svg class="slab-tube-clips" ${box}>
+  <path data-l="clipShadow"/><path data-l="clip"/><path data-l="clipHi"/>
 </svg>`;
-        const find = (name: string) => this.node.querySelector(`[data-l="${name}"]`) as SVGPathElement;
-        this.layers = {
-            shadow: find("shadow"),
-            shadowWide: find("shadowWide"),
-            dark: find("dark"),
-            boots: find("boots"),
-            bootsHi: find("bootsHi"),
-            frost: find("frost"),
-            frostHi: find("frostHi"),
-            bloom: find("bloom"),
-            halo: find("halo"),
-            glass: find("glass"),
-            core: find("core"),
-        };
+        const find = (name: Layer) => this.node.querySelector(`[data-l="${name}"]`) as SVGPathElement;
+        const names: Layer[] = ["shadow", "shadowWide", "dark", "boots", "bootsHi", "frost", "frostHi", "bloom", "halo", "glass", "core", "clipShadow", "clip", "clipHi"];
+        this.layers = Object.fromEntries(names.map((name) => [name, find(name)])) as Record<Layer, SVGPathElement>;
         this.gas = this.node.querySelector(".slab-tube-gas") as SVGSVGElement;
     }
 
     set(layout: TubeLayout): void {
-        if (layout.lit === this.current) return;
-        this.current = layout.lit;
-        const { shadow, shadowWide, dark, boots, bootsHi, frost, frostHi, bloom, halo, glass, core } = this.layers;
+        const key = layout.lit + layout.supports;
+        if (key === this.current) return;
+        this.current = key;
+        const { shadow, shadowWide, dark, boots, bootsHi, frost, frostHi, bloom, halo, glass, core, clipShadow, clip, clipHi } = this.layers;
         const all = layout.lit + layout.dark;
         shadow.setAttribute("d", all);
         shadowWide.setAttribute("d", all);
@@ -57,6 +68,6 @@ export class Tube {
         boots.setAttribute("d", layout.boots);
         bootsHi.setAttribute("d", layout.boots);
         for (const path of [frost, frostHi, bloom, halo, glass, core]) path.setAttribute("d", layout.lit);
+        for (const path of [clipShadow, clip, clipHi]) path.setAttribute("d", layout.supports);
     }
 }
-

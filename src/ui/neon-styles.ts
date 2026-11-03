@@ -5,10 +5,10 @@
  */
 
 export const NEON_CSS = `
-/* Neon. Every layer is a plain stroke, so there is no filter to repaint. */
 .slab-tube { position: relative; }
 .slab-tube svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .slab-tube path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* Standoffs hold the glass off the board, so it throws a soft shadow down and right. */
 .slab-tube-cast { transform: translate(2.5px, 4.5px); }
 .slab-tube [data-l="shadowWide"] { stroke: #000; stroke-width: 6; opacity: 0.16; }
 .slab-tube [data-l="shadow"] { stroke: #000; stroke-width: 3.2; opacity: 0.46; }
@@ -22,15 +22,20 @@ export const NEON_CSS = `
 .slab-tube [data-l="glass"] { stroke: var(--gas-glass); stroke-width: 3.1; }
 .slab-tube [data-l="core"] { stroke: var(--gas-core); stroke-width: 1.2; }
 .slab-tube-gas { will-change: opacity; }
+/* Tube supports: small chrome clips across straight glass, seated on the board by their own shadow. */
+.slab-tube [data-l="clipShadow"] { stroke: #000; stroke-width: 2.6; stroke-linecap: butt; opacity: 0.55; transform: translate(0.8px, 1.4px); }
+.slab-tube [data-l="clip"] { stroke: #B9C0C5; stroke-width: 2.2; stroke-linecap: butt; }
+.slab-tube [data-l="clipHi"] { stroke: #F4F6F7; stroke-width: 0.7; stroke-linecap: butt; transform: translateY(-0.6px); }
 
 .slab-panel[data-gas="off"] .slab-sign-tube .slab-tube-gas { visibility: hidden; }
 .slab-panel[data-tube="off"] .slab-number-tube .slab-tube-gas { visibility: hidden; }
 /* The helper is running with nothing to shift: warm glass, not lit. */
 .slab-panel[data-tube="idle"] .slab-number-tube .slab-tube-gas { opacity: 0.24; }
 
+/* The number is small glass close to the board: thinner tube, a lighter, shorter shadow. */
+.slab-number-tube .slab-tube-cast { transform: translate(1px, 2px); opacity: 0.6; }
 .slab-number-tube [data-l="frost"], .slab-number-tube [data-l="glass"] { stroke-width: 2.5; }
 .slab-number-tube [data-l="dark"] { stroke-width: 2; }
 .slab-number-tube [data-l="core"] { stroke-width: 1; }
 .slab-number-tube [data-l="bloom"] { stroke-width: 9; }
-.slab-number-tube [data-l="boots"] { stroke-width: 4.4; }
 `;

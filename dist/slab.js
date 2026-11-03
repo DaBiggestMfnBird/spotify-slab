@@ -797,44 +797,42 @@ self.onmessage = (event) => {
 
   // src/ui/neon-glyphs.ts
   var NEON_GLYPHS = {
-    "0": { a: 48, l: "M17 0L8.5 0Q0 0 0.6 -8.5L5.4 -77Q6.3 -90 19.3 -90L31.3 -90Q44.3 -90 43.4 -77L38.5 -6.5Q38 0 31.5 0L25 0", d: "", i: [17, 0], o: [25, 0] },
-    "1": { a: 34, l: "M7 -72L24.1 -88Q26.3 -90 26.1 -87L20 0", d: "M20 0L26.1 -87Q26.3 -90 24.1 -88L7 -72", i: [20, 0], o: [20, 0] },
-    "2": { a: 48, l: "M5 -72L5.7 -81Q6.3 -90 15.3 -90L31.3 -90Q44.3 -90 43.4 -77L42.4 -63Q41.5 -50 29.9 -44.1L13.7 -35.9Q2.1 -30 1.2 -17L0.9 -13Q0 0 13 0L38 0", d: "M0 0L1.2 -17Q2.1 -30 13.7 -35.9L29.9 -44.1Q41.5 -50 42.4 -63L43.4 -77Q44.3 -90 31.3 -90L15.3 -90Q6.3 -90 5.7 -81L5 -72", i: [0, 0], o: [38, 0] },
-    "3": { a: 48, l: "M5 -72L5.7 -81Q6.3 -90 15.3 -90L31.3 -90Q44.3 -90 43.4 -77L42.4 -62.5Q41.5 -50 29 -50L16.5 -50M41.5 -50L38.9 -13Q38 0 25 0L9 0Q0 0 0.6 -9L1.3 -18", d: "M0 0L25 0Q38 0 38.9 -13L43.4 -77Q44.3 -90 31.3 -90L15.3 -90Q6.3 -90 5.7 -81L5 -72M16.5 -50L41.5 -50M1.3 -18L0 0", i: [0, 0], o: [0, 0] },
-    "4": { a: 50, l: "M29 0L30.4 -20M31.8 -40L35.1 -87Q35.3 -90 33.8 -87.4L3.6 -32.6Q2.1 -30 5.1 -30L44.1 -30", d: "M30.4 -20L31.8 -40M44.1 -30L34.1 -30Q31.1 -30 30.9 -27L29 0", i: [29, 0], o: [29, 0] },
-    "5": { a: 48, l: "M42.3 -90L19.3 -90Q6.3 -90 5.4 -77L4.5 -65Q3.6 -52 16.6 -52L28.6 -52Q41.6 -52 40.7 -39L38.9 -13Q38 0 25 0L9 0Q0 0 0.6 -9L1.3 -18", d: "M0 0L25 0Q38 0 38.9 -13L40.7 -39Q41.6 -52 28.6 -52L16.6 -52Q3.6 -52 4.5 -65L5.4 -77Q6.3 -90 19.3 -90L42.3 -90M1.3 -18L0 0", i: [0, 0], o: [0, 0] },
-    "6": { a: 48, l: "M43.2 -74L43.7 -82Q44.3 -90 36.3 -90L19.3 -90Q6.3 -90 5.4 -77L0.9 -13Q0 0 13 0L25 0Q38 0 38.9 -13L40.6 -37Q41.5 -50 28.5 -50L15.5 -50", d: "M0 0L5.4 -77Q6.3 -90 19.3 -90L36.3 -90Q44.3 -90 43.7 -82L43.2 -74M15.5 -50L28.5 -50Q41.5 -50 40.6 -37L38 0", i: [0, 0], o: [38, 0] },
-    "7": { a: 44, l: "M6.3 -90L41.3 -90Q44.3 -90 43.3 -87.2L14 0", d: "M14 0L43.3 -87.2Q44.3 -90 41.3 -90L6.3 -90", i: [14, 0], o: [14, 0] },
-    "8": { a: 48, l: "M26 0L32 0Q38 0 38.4 -6L40.3 -33.2Q40.7 -38 37.4 -41.5L37.4 -41.5Q34.1 -45 37.6 -48.3L37.9 -48.5Q41.6 -52 42 -57.1L43.4 -77Q44.3 -90 31.3 -90L19.3 -90Q6.3 -90 5.4 -77L4 -56.8Q3.6 -52 6.9 -48.5L6.9 -48.5Q10.1 -45 6.7 -41.7L6.4 -41.5Q2.7 -38 2.3 -32.9L0.5 -7Q0 0 7 0L14 0M16.1 -45L28.1 -45", d: "M14 0L7 0Q0 0 0.5 -7L2.3 -32.9Q2.7 -38 6.4 -41.5L8 -43Q10.1 -45 13.1 -45L16.1 -45M28.1 -45L31.1 -45Q34.1 -45 36.2 -42.8L37.4 -41.5Q40.7 -38 40.3 -33.2L38.4 -6Q38 0 32 0L26 0", i: [26, 0], o: [26, 0] },
-    "9": { a: 48, l: "M1.3 -18L0.6 -9Q0 0 9 0L25 0Q38 0 38.9 -13L43.4 -77Q44.3 -90 31.3 -90L19.3 -90Q6.3 -90 5.4 -77L3.7 -53Q2.8 -40 15.8 -40L28.8 -40", d: "M0 0L1.3 -18M28.8 -40L15.8 -40Q2.8 -40 3.7 -53L5.4 -77Q6.3 -90 19.3 -90L31.3 -90Q44.3 -90 43.4 -77L38 0", i: [0, 0], o: [38, 0] },
-    "a": { a: 50, l: "M3.9 -56L4.4 -63Q4.9 -70 11.9 -70L25.9 -70Q38.9 -70 38 -57L34.3 -5Q34 0 39 0L44 0M25.7 -38L14.2 -38Q2.7 -38 1.9 -26.5L0.8 -11.5Q0 0 11.5 0L23 0", d: "M0 0L3.9 -56M44 0L39 0Q34 0 34.3 -5L36.3 -32.5Q36.7 -38 31.2 -38L25.7 -38", i: [0, 0], o: [23, 0] },
-    "b": { a: 42, l: "M7 -100L0.9 -13Q0 0 13 0L21 0Q34 0 34.9 -13L38.1 -58.5Q38.9 -70 27.4 -70L15.9 -70", d: "M0 0L7 -100M15.9 -70L27.4 -70Q38.9 -70 38.1 -58.5L34 0", i: [0, 0], o: [34, 0] },
-    "c": { a: 38, l: "M35.9 -56L36.4 -63Q36.9 -70 29.9 -70L17.9 -70Q4.9 -70 4 -57L0.9 -13Q0 0 13 0L25 0Q32 0 32.5 -7L33 -14", d: "M0 0L4 -57Q4.9 -70 17.9 -70L29.9 -70Q36.9 -70 36.4 -63L35.9 -56M33 -14L32 0", i: [0, 0], o: [32, 0] },
-    "d": { a: 42, l: "M41 -100L34.9 -13Q34 0 21 0L13 0Q0 0 0.9 -13L4.1 -58.5Q4.9 -70 16.4 -70L27.9 -70", d: "M0 0L4.1 -58.5Q4.9 -70 16.4 -70L22.4 -70Q27.9 -70 33.4 -70L33.4 -70Q38.9 -70 39.3 -75.5L41 -100M27.9 -70L16.4 -70Q4.9 -70 4.1 -58.5L0.9 -13Q0 0 13 0L34 0", i: [0, 0], o: [34, 0] },
-    "e": { a: 42, l: "M13.6 -37L25.1 -37Q36.6 -37 37.4 -48.5L38 -57Q38.9 -70 25.9 -70L17.9 -70Q4.9 -70 4 -57L0.9 -13Q0 0 13 0L28 0Q34 0 34.4 -6L34.8 -12", d: "M0 0L2.2 -31.5Q2.6 -37 8.1 -37L13.6 -37M34.8 -12L34 0", i: [0, 0], o: [34, 0] },
-    "h": { a: 50, l: "M7 -100L0 0M15.9 -70L27.4 -70Q38.9 -70 38.1 -58.5L34.3 -5Q34 0 39 0L44 0", d: "M0 0L7 -100M0 0L4.5 -64.5Q4.9 -70 10.4 -70L15.9 -70", i: [0, 0], o: [44, 0] },
-    "i": { a: 22, l: "M5.9 -84L6.7 -96M4.9 -70L0.4 -5.5Q0 0 5.5 0L11 0", d: "M0 0L5.9 -84M6.7 -96L4.9 -70", i: [0, 0], o: [11, 0] },
-    "l": { a: 22, l: "M7 -100L0.4 -5.5Q0 0 5.5 0L11 0", d: "M0 0L7 -100", i: [0, 0], o: [11, 0] },
-    "m": { a: 76, l: "M4.9 -70L0 0M14.9 -70L24.4 -70Q33.9 -70 33.2 -60.5L29 0M43.9 -70L53.9 -70Q63.9 -70 63.2 -60L59.3 -5Q59 0 64 0L69 0", d: "M0 0L4.9 -70M0 0L4.5 -65Q4.9 -70 9.9 -70L14.9 -70M29 0L33.5 -65Q33.9 -70 38.9 -70L43.9 -70", i: [0, 0], o: [69, 0] },
-    "n": { a: 50, l: "M4.9 -70L0 0M15.9 -70L27.4 -70Q38.9 -70 38.1 -58.5L34.3 -5Q34 0 39 0L44 0", d: "M0 0L4.9 -70M0 0L4.5 -64.5Q4.9 -70 10.4 -70L15.9 -70", i: [0, 0], o: [44, 0] },
-    "o": { a: 42, l: "M18 0L9 0Q0 0 0.6 -9L4 -57Q4.9 -70 17.9 -70L25.9 -70Q38.9 -70 38 -57L34.3 -4Q34 0 30 0L26 0", d: "", i: [18, 0], o: [26, 0] },
-    "p": { a: 42, l: "M-1.8 26L4 -57Q4.9 -70 17.9 -70L25.9 -70Q38.9 -70 38 -57L34.8 -11.5Q34 0 22.5 0L11 0", d: "M0 0L4.9 -70M4.9 -70L-1.8 26M11 0L34 0", i: [0, 0], o: [34, 0] },
-    "r": { a: 36, l: "M4.9 -70L0 0M15.9 -70L27.9 -70Q34.9 -70 34.4 -63L33.9 -56", d: "M0 0L4.9 -70M0 0L4.5 -64.5Q4.9 -70 10.4 -70L15.9 -70M33.9 -56L34.4 -63Q34.9 -70 27.9 -70L17.9 -70Q4.9 -70 4 -57L0 0", i: [0, 0], o: [0, 0] },
-    "s": { a: 38, l: "M0.9 -13L0.5 -6.5Q0 0 6.5 0L18 0Q31 0 31.9 -13L32.2 -17Q33.1 -30 21 -34.8L15 -37.2Q2.9 -42 3.8 -55L4 -57Q4.9 -70 17.9 -70L29.4 -70Q35.9 -70 35.4 -63.5L35 -57", d: "M0 0L0.9 -13M35 -57L35.4 -63.5Q35.9 -70 29.4 -70L17.9 -70Q4.9 -70 4 -57L3.8 -55Q2.9 -42 15 -37.2L21 -34.8Q33.1 -30 32.2 -17L31 0", i: [0, 0], o: [31, 0] },
-    "t": { a: 36, l: "M4.9 -70L10.9 -70M26.9 -70L33.9 -70M20.4 -92L14.5 -7.5Q14 0 21.5 0L29 0", d: "M14 0L18.4 -63Q18.9 -70 11.9 -70L4.9 -70M10.9 -70L26.9 -70M33.9 -70L26.4 -70Q18.9 -70 19.4 -77.5L20.4 -92", i: [14, 0], o: [29, 0] },
-    "u": { a: 50, l: "M4.9 -70L0.8 -11.5Q0 0 11.5 0L23 0M38.9 -70L34.3 -5Q34 0 39 0L44 0", d: "M0 0L4.9 -70M23 0L28.5 0Q34 0 34.4 -5.5L38.9 -70", i: [0, 0], o: [44, 0] },
-    "v": { a: 42, l: "M4.9 -70L16.5 -3Q17 0 17.9 -2.9L38.9 -70", d: "M17 0L4.9 -70M38.9 -70L17 0", i: [17, 0], o: [17, 0] },
-    "w": { a: 62, l: "M4.9 -70L12.7 -3Q13 0 13.9 -2.9L30.2 -55.1Q31.1 -58 31.6 -55L40.5 -3Q41 0 41.7 -2.9L58.9 -70", d: "M13 0L4.9 -70M58.9 -70L41 0", i: [13, 0], o: [41, 0] },
-    "C": { a: 50, l: "M47.6 -80L48.3 -90Q49 -100 39 -100L20 -100Q7 -100 6.1 -87L0.9 -13Q0 0 13 0L32 0Q42 0 42.7 -10L43.4 -20", d: "M0 0L6.1 -87Q7 -100 20 -100L39 -100Q49 -100 48.3 -90L47.6 -80M43.4 -20L42 0", i: [0, 0], o: [42, 0] },
-    "F": { a: 48, l: "M0 0L6.1 -87Q7 -100 20 -100L47 -100M14.8 -54L36.8 -54", d: "M47 -100L20 -100Q7 -100 6.1 -87L4.2 -59.5Q3.8 -54 9.3 -54L14.8 -54M36.8 -54L16.8 -54Q3.8 -54 2.9 -41L0 0", i: [0, 0], o: [0, 0] },
-    "H": { a: 56, l: "M7 -100L0 0M14.6 -52L38.6 -52M53 -100L46 0", d: "M0 0L7 -100M0 0L3.3 -46.5Q3.6 -52 9.1 -52L14.6 -52M38.6 -52L44.1 -52Q49.6 -52 50 -57.5L53 -100", i: [0, 0], o: [46, 0] },
-    "M": { a: 68, l: "M0 0L6.8 -97Q7 -100 8 -97.2L30.3 -36.8Q31.4 -34 32.7 -36.7L63.6 -97.3Q65 -100 64.8 -97L58 0", d: "", i: [0, 0], o: [58, 0] },
-    "R": { a: 52, l: "M7 -100L0 0M18 -100L36 -100Q49 -100 48.1 -87L46.4 -63Q45.5 -50 32.5 -50L16.5 -50M28.7 -39L43 0", d: "M0 0L7 -100M0 0L6.6 -94.5Q7 -100 12.5 -100L18 -100M16.5 -50L24 -50Q29.5 -50 29.1 -44.5L28.7 -39", i: [0, 0], o: [43, 0] },
-    "S": { a: 50, l: "M1.4 -20L0.7 -10Q0 0 10 0L28 0Q41 0 41.9 -13L43 -29Q43.9 -42 32.1 -47.4L16 -54.6Q4.2 -60 5.1 -73L6.1 -87Q7 -100 20 -100L38 -100Q48 -100 47.3 -90L46.6 -80", d: "M0 0L1.4 -20M46.6 -80L47.3 -90Q48 -100 38 -100L20 -100Q7 -100 6.1 -87L5.1 -73Q4.2 -60 16 -54.6L32.1 -47.4Q43.9 -42 43 -29L41 0", i: [0, 0], o: [41, 0] },
-    "T": { a: 50, l: "M21 0L27.2 -88M7 -100L49 -100", d: "M27.2 -88L27.6 -94Q28 -100 22 -100L7 -100M49 -100L38.5 -100Q28 -100 27.3 -89.5L21 0", i: [21, 0], o: [21, 0] },
-    "U": { a: 54, l: "M7 -100L0.9 -13Q0 0 13 0L31 0Q44 0 44.9 -13L51 -100", d: "M0 0L7 -100M51 -100L44 0", i: [0, 0], o: [44, 0] },
-    "+": { a: 46, l: "M20 -14L21 -28M2.7 -39L40.7 -39M22.5 -50L23.5 -64", d: "M19 0L20 -14M21 -28L21.3 -33.5Q21.7 -39 16.2 -39L2.7 -39M40.7 -39L27.2 -39Q21.7 -39 22.1 -44.5L22.5 -50M23.5 -64L19 0", i: [19, 0], o: [19, 0] },
-    "\u2212": { a: 44, l: "M3.1 -45L37.1 -45", d: "", i: [3.1, -45], o: [37.1, -45] }
+    "0": { a: 48, l: "M0 -36L0 -19C0 -8.5 8.5 0 19 0L19 0C29.5 0 38 -8.5 38 -19L38 -71C38 -81.5 29.5 -90 19 -90L19 -90C8.5 -90 0 -81.5 0 -71L0 -44", d: "", i: [0, -36], o: [0, -44] },
+    "1": { a: 32, l: "M4 -80L9.2 -86.9C12.7 -91.4 20 -89 20 -83.2L20 0", d: "", i: [4, -80], o: [20, 0] },
+    "2": { a: 48, l: "M0 -70L0 -74C0 -82.8 7.2 -90 16 -90L22 -90C30.8 -90 38 -82.8 38 -74L38 -61.8C38 -58.1 36.3 -54.7 33.4 -52.4L3.8 -29C1.4 -27.1 0 -24.2 0 -21.2L0 -8C0 -3.6 3.6 0 8 0L38 0", d: "", i: [0, -70], o: [38, 0] },
+    "3": { a: 48, l: "M0 -72L0 -74C0 -82.8 7.2 -90 16 -90L22 -90C30.8 -90 38 -82.8 38 -74L38 -16C38 -7.2 30.8 0 22 0L16 0C7.2 0 0 -7.2 0 -16L0 -18M32 -47L14 -47", d: "M0 -18L0 -16C0 -7.2 7.2 0 16 0L22 0C30.8 0 38 -7.2 38 -16L38 -47L32 -47", i: [0, -72], o: [14, -47] },
+    "4": { a: 50, l: "M25 -90L4.6 -41.1C2.4 -35.8 6.3 -30 12 -30L29 -30M40 -30L44 -30M32 0L32 -90", d: "M29 -30L40 -30M44 -30L32 -30L32 0", i: [25, -90], o: [32, -90] },
+    "5": { a: 48, l: "M36 -90L8 -90C3.6 -90 0 -86.4 0 -82L0 -58C0 -54.7 2.7 -52 6 -52L22 -52C30.8 -52 38 -44.8 38 -36L38 -16C38 -7.2 30.8 0 22 0L14 0C6.3 0 0 -6.3 0 -14L0 -18", d: "", i: [36, -90], o: [0, -18] },
+    "6": { a: 48, l: "M38 -72L38 -74C38 -82.8 30.8 -90 22 -90L19 -90C8.5 -90 0 -81.5 0 -71L0 -19C0 -8.5 8.5 0 19 0L19 0C29.5 0 38 -8.5 38 -19L38 -34C38 -42.8 30.8 -50 22 -50L8 -50", d: "", i: [38, -72], o: [8, -50] },
+    "7": { a: 46, l: "M0 -90L30.2 -90C34.1 -90 37 -86.3 36 -82.5L14 0", d: "", i: [0, -90], o: [14, 0] },
+    "8": { a: 48, l: "M38 -27L38 -29C38 -39.5 29.5 -48 19 -48L19 -48C8.5 -48 0 -39.5 0 -29L0 -19C0 -8.5 8.5 0 19 0L19 0C29.5 0 38 -8.5 38 -19L38 -21M3 -72L3 -74C3 -82.8 10.2 -90 19 -90L19 -90C27.8 -90 35 -82.8 35 -74L35 -66C35 -57.2 27.8 -50 19 -50L19 -50C10.2 -50 3 -57.2 3 -66L3 -66", d: "", i: [38, -27], o: [3, -66] },
+    "9": { a: 48, l: "M0 -18L0 -16C0 -7.2 7.2 0 16 0L19 0C29.5 0 38 -8.5 38 -19L38 -71C38 -81.5 29.5 -90 19 -90L19 -90C8.5 -90 0 -81.5 0 -71L0 -56C0 -47.2 7.2 -40 16 -40L30 -40", d: "", i: [0, -18], o: [30, -40] },
+    "a": { a: 46, l: "M34 0L34 -57C34 -64.2 28.2 -70 21 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L28 0", d: "", i: [34, 0], o: [28, 0], s: [[34, -35]] },
+    "b": { a: 46, l: "M0 -100L0 -17C0 -7.6 7.6 0 17 0L17 0C26.4 0 34 -7.6 34 -17L34 -53C34 -62.4 26.4 -70 17 -70L6 -70", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -100M6 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 -17C34 -7.6 26.4 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[0, -55]] },
+    "c": { a: 42, l: "M30 0L17 0C7.6 0 0 -7.6 0 -17L0 -53C0 -62.4 7.6 -70 17 -70L30 -70", d: "M17 0L30 0M30 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[0, -35]] },
+    "d": { a: 46, l: "M34 -100L34 -17C34 -7.6 26.4 0 17 0L17 0C7.6 0 0 -7.6 0 -17L0 -53C0 -62.4 7.6 -70 17 -70L28 -70", d: "M17 0L17 0C26.4 0 34 -7.6 34 -17L34 -100M28 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[34, -55]] },
+    "e": { a: 44, l: "M6 -36L24 -36C29.5 -36 34 -40.5 34 -46L34 -53C34 -62.4 26.4 -70 17 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L30 0", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -36L6 -36", i: [17, 0], o: [30, 0], s: [[0, -50]] },
+    "h": { a: 46, l: "M0 -100L0 0M6 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 0", d: "M0 0L0 -100M0 0L0 -70L6 -70", i: [0, 0], o: [34, 0], s: [[0, -40]] },
+    "i": { a: 22, l: "M0 -84L0 -96M0 -70L0 0", d: "M0 0L0 -84M0 -96L0 -70", i: [0, 0], o: [0, 0], s: [[0, -35]] },
+    "l": { a: 22, l: "M0 -100L0 0", d: "M0 0L0 -100", i: [0, 0], o: [0, 0], s: [[0, -50]] },
+    "m": { a: 70, l: "M0 0L0 -56C0 -63.7 6.3 -70 14 -70L15 -70C22.7 -70 29 -63.7 29 -56L29 0M35 -70L44 -70C51.7 -70 58 -63.7 58 -56L58 0", d: "M29 0L29 -70L35 -70", i: [0, 0], o: [58, 0], s: [[0, -35], [58, -35]] },
+    "n": { a: 46, l: "M0 0L0 -53C0 -62.4 7.6 -70 17 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 0", d: "", i: [0, 0], o: [34, 0], s: [[0, -35]] },
+    "o": { a: 46, l: "M0 -36L0 -17C0 -7.6 7.6 0 17 0L17 0C26.4 0 34 -7.6 34 -17L34 -53C34 -62.4 26.4 -70 17 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -44", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -36M0 -44L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[34, -35]] },
+    "p": { a: 46, l: "M0 26L0 -53C0 -62.4 7.6 -70 17 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 -17C34 -7.6 26.4 0 17 0L6 0", d: "", i: [0, 26], o: [6, 0], s: [[0, -20]] },
+    "r": { a: 38, l: "M0 0L0 -57C0 -64.2 5.8 -70 13 -70L18 -70C23.5 -70 28 -65.5 28 -60L28 -58", d: "M28 -58L28 -60C28 -65.5 23.5 -70 18 -70L13 -70C5.8 -70 0 -64.2 0 -57L0 0", i: [0, 0], o: [0, 0], s: [[0, -35]] },
+    "s": { a: 42, l: "M0 -12L0 -12C0 -5.4 5.4 0 12 0L16 0C23.7 0 30 -6.3 30 -14L30 -21C30 -28.7 23.7 -35 16 -35L14 -35C6.3 -35 0 -41.3 0 -49L0 -56C0 -63.7 6.3 -70 14 -70L18 -70C24.6 -70 30 -64.6 30 -58L30 -58", d: "M14 0L12 0C5.4 0 0 -5.4 0 -12L0 -12M30 -58L30 -58C30 -64.6 24.6 -70 18 -70L14 -70C6.3 -70 0 -63.7 0 -56L0 -49C0 -41.3 6.3 -35 14 -35L16 -35C23.7 -35 30 -28.7 30 -21L30 -14C30 -6.3 23.7 0 16 0L14 0", i: [14, 0], o: [14, 0] },
+    "t": { a: 38, l: "M0 -70L11 -70M23 -70L30 -70M14 -92L14 -10C14 -4.5 18.5 0 24 0L26 0", d: "M26 0L24 0C18.5 0 14 -4.5 14 -10L14 -70L0 -70M11 -70L23 -70M30 -70L14 -70L14 -92", i: [26, 0], o: [26, 0], s: [[14, -40]] },
+    "v": { a: 44, l: "M0 -70L10.2 -5.1C10.7 -2.2 13.2 0 16.1 0L17.9 0C20.8 0 23.3 -2.2 23.8 -5.1L34 -70", d: "M17 0L16.1 0C13.2 0 10.7 -2.2 10.2 -5.1L0 -70M34 -70L23.8 -5.1C23.3 -2.2 20.8 0 17.9 0L17 0", i: [17, 0], o: [17, 0] },
+    "w": { a: 70, l: "M0 -70L5.5 -5.5C5.8 -2.4 8.4 0 11.5 0L13.3 0C16.1 0 18.5 -1.9 19.1 -4.5L24.2 -24.7C25.7 -30.8 34.3 -30.8 35.8 -24.7L40.9 -4.5C41.5 -1.9 43.9 0 46.7 0L48.5 0C51.6 0 54.2 -2.4 54.5 -5.5L60 -70", d: "M12 0L11.5 0C8.4 0 5.8 -2.4 5.5 -5.5L0 -70M60 -70L54.5 -5.5C54.2 -2.4 51.6 0 48.5 0L48 0", i: [12, 0], o: [48, 0] },
+    "C": { a: 52, l: "M40 0L21 0C9.4 0 0 -9.4 0 -21L0 -79C0 -90.6 9.4 -100 21 -100L40 -100", d: "M24 0L40 0M40 -100L21 -100C9.4 -100 0 -90.6 0 -79L0 -21C0 -9.4 9.4 0 21 0L24 0", i: [24, 0], o: [24, 0], s: [[0, -50]] },
+    "F": { a: 46, l: "M0 0L0 -88C0 -94.6 5.4 -100 12 -100L38 -100M6 -54L30 -54", d: "M38 -100L12 -100C5.4 -100 0 -94.6 0 -88L0 -54L6 -54M30 -54L0 -54L0 0", i: [0, 0], o: [0, 0], s: [[0, -30]] },
+    "M": { a: 70, l: "M0 0L0 -94C0 -97.3 2.7 -100 6 -100L7.5 -100C10.1 -100 12.5 -98.2 13.2 -95.6L23.2 -60.4C24.9 -54.6 33.1 -54.6 34.8 -60.4L44.8 -95.6C45.5 -98.2 47.9 -100 50.5 -100L52 -100C55.3 -100 58 -97.3 58 -94L58 0", d: "", i: [0, 0], o: [58, 0], s: [[0, -45], [58, -45]] },
+    "R": { a: 54, l: "M0 0L0 -87C0 -94.2 5.8 -100 13 -100L20 -100C31 -100 40 -91 40 -80L40 -72C40 -61 31 -52 20 -52L6 -52M25.2 -46.4L44 0", d: "M6 -52L23 -52L25.2 -46.4", i: [0, 0], o: [44, 0], s: [[0, -30]] },
+    "S": { a: 52, l: "M0 -16L0 -14C0 -6.3 6.3 0 14 0L22 0C31.9 0 40 -8.1 40 -18L40 -32C40 -41.9 31.9 -50 22 -50L18 -50C8.1 -50 0 -58.1 0 -68L0 -82C0 -91.9 8.1 -100 18 -100L26 -100C33.7 -100 40 -93.7 40 -86L40 -84", d: "M18 0L14 0C6.3 0 0 -6.3 0 -14L0 -16M40 -84L40 -86C40 -93.7 33.7 -100 26 -100L18 -100C8.1 -100 0 -91.9 0 -82L0 -68C0 -58.1 8.1 -50 18 -50L22 -50C31.9 -50 40 -41.9 40 -32L40 -18C40 -8.1 31.9 0 22 0L18 0", i: [18, 0], o: [18, 0] },
+    "T": { a: 50, l: "M22 0L22 -94M0 -100L44 -100", d: "M22 -94L22 -100L0 -100M44 -100L22 -100L22 0", i: [22, 0], o: [22, 0], s: [[22, -45]] },
+    "U": { a: 56, l: "M0 -100L0 -22C0 -9.8 9.8 0 22 0L22 0C34.2 0 44 -9.8 44 -22L44 -100", d: "M22 0L22 0C9.8 0 0 -9.8 0 -22L0 -100M44 -100L44 -22C44 -9.8 34.2 0 22 0L22 0", i: [22, 0], o: [22, 0], s: [[0, -60], [44, -60]] },
+    "+": { a: 48, l: "M19 -20L19 -70M0 -45L16 -45M27 -45L38 -45", d: "M19 -70L19 -45L0 -45M16 -45L27 -45", i: [19, -20], o: [38, -45], f: true },
+    "\u2212": { a: 42, l: "M0 -45L30 -45", d: "", i: [0, -45], o: [30, -45] }
   };
 
   // src/ui/neon.ts
@@ -842,44 +840,51 @@ self.onmessage = (event) => {
   var SPACE_ADVANCE = 34;
   var SHARED_BOOT = 8;
   var BOOT_LENGTH = 3.5;
+  var CLIP = 3;
   function fmt2(value) {
     return String(Math.round(value * 10) / 10);
   }
-  function place(d, sx, sy, dx, dy) {
+  function place(d, scale, dx, dy) {
     let isX = true;
     return d.replace(NUMBER, (token) => {
-      const value = Number(token) * (isX ? sx : sy) + (isX ? dx : dy);
+      const value = Number(token) * scale + (isX ? dx : dy);
       isX = !isX;
       return fmt2(value);
     });
   }
-  function placeText(text, sx, sy, tracking, x, y) {
-    const units = [[]];
+  function placeText(text, scale, tracking, x, y, eachGlyphFloats = false) {
+    const units = [{ glyphs: [], floating: false }];
+    const fresh = (floating) => {
+      if (units[units.length - 1].glyphs.length) units.push({ glyphs: [], floating });
+      else units[units.length - 1].floating = floating;
+    };
     let pen = x;
-    const chars = [...text];
-    chars.forEach((char, index) => {
+    for (const char of [...text]) {
       if (char === " ") {
-        if (chars[index + 1] !== "+" && units[units.length - 1].length) units.push([]);
-        pen += SPACE_ADVANCE * sx + tracking;
-        return;
+        fresh(false);
+        pen += SPACE_ADVANCE * scale + tracking;
+        continue;
       }
       const glyph = NEON_GLYPHS[char];
-      if (!glyph) return;
-      units[units.length - 1].push({
-        lit: place(glyph.l, sx, sy, pen, y),
-        dark: place(glyph.d, sx, sy, pen, y),
-        entry: [glyph.i[0] * sx + pen, glyph.i[1] * sy + y],
-        exit: [glyph.o[0] * sx + pen, glyph.o[1] * sy + y]
+      if (!glyph) continue;
+      const floats = eachGlyphFloats || glyph.f === true;
+      if (floats || units[units.length - 1].floating) fresh(floats);
+      units[units.length - 1].glyphs.push({
+        lit: place(glyph.l, scale, pen, y),
+        dark: place(glyph.d, scale, pen, y),
+        entry: [glyph.i[0] * scale + pen, glyph.i[1] * scale + y],
+        exit: [glyph.o[0] * scale + pen, glyph.o[1] * scale + y],
+        supports: (glyph.s ?? []).map(([sx, sy]) => [sx * scale + pen, sy * scale + y])
       });
-      pen += glyph.a * sx + tracking;
-    });
-    return units.filter((unit) => unit.length > 0);
+      pen += glyph.a * scale + tracking;
+    }
+    return units.filter((unit) => unit.glyphs.length > 0);
   }
   function inkBounds(units) {
     let left = Infinity;
     let right = -Infinity;
     for (const unit of units) {
-      for (const glyph of unit) {
+      for (const glyph of unit.glyphs) {
         glyph.lit.match(NUMBER)?.forEach((token, index) => {
           if (index % 2) return;
           const value = Number(token);
@@ -890,14 +895,29 @@ self.onmessage = (event) => {
     }
     return [left, right];
   }
+  function chooseSupports(unit) {
+    const holders = unit.glyphs.filter((glyph) => glyph.supports.length > 0);
+    if (holders.length === 0) return [];
+    const picked = /* @__PURE__ */ new Set([holders[0], holders[holders.length - 1]]);
+    if (unit.glyphs.length >= 6 && holders.length >= 3) picked.add(holders[Math.floor(holders.length / 2)]);
+    return [...picked].map((glyph) => glyph.supports[0]);
+  }
   function thread(units, baseline2, drop) {
     let lit = "";
     let dark = "";
     let boots = "";
+    let supports = "";
     const rail = baseline2 + drop;
     for (const unit of units) {
+      if (unit.floating) {
+        for (const glyph of unit.glyphs) {
+          lit += glyph.lit;
+          dark += glyph.dark;
+        }
+        continue;
+      }
       let previous = null;
-      for (const glyph of unit) {
+      for (const glyph of unit.glyphs) {
         if (previous) {
           dark += `M${fmt2(previous[0])} ${fmt2(previous[1])}V${fmt2(rail)}H${fmt2(glyph.entry[0])}V${fmt2(glyph.entry[1])}`;
         }
@@ -905,65 +925,71 @@ self.onmessage = (event) => {
         dark += glyph.dark;
         previous = glyph.exit;
       }
-      const start = unit[0].entry;
+      const start = unit.glyphs[0].entry;
       const end = previous;
       const shared = Math.abs(end[0] - start[0]) < SHARED_BOOT;
       const bootAt = shared ? [(start[0] + end[0]) / 2] : [start[0], end[0]];
       dark += `M${fmt2(start[0])} ${fmt2(start[1])}V${fmt2(rail)}M${fmt2(end[0])} ${fmt2(end[1])}V${fmt2(rail)}`;
       if (shared) dark += `M${fmt2(start[0])} ${fmt2(rail)}H${fmt2(end[0])}`;
       for (const x of bootAt) boots += `M${fmt2(x)} ${fmt2(rail)}v${BOOT_LENGTH}`;
+      for (const [x, y] of chooseSupports(unit)) supports += `M${fmt2(x - CLIP)} ${fmt2(y)}H${fmt2(x + CLIP)}`;
     }
-    return { lit, dark, boots };
+    return { lit, dark, boots, supports };
   }
   var SIGN_WIDTH = 360;
   var SIGN_HEIGHT = 70;
   var SIGN_FIT = {
-    sped: { tracking: 7, margin: 30, wide: 1 },
-    flat: { tracking: 7, margin: 10, wide: 1, level: true },
-    chopped: { tracking: 2.5, margin: 2, wide: 1 },
-    slowed: { tracking: 2.5, margin: 2, wide: 1 },
-    memphis: { tracking: 3, margin: 6, wide: 1 },
-    screwed: { tracking: 2.5, margin: 2, wide: 1 }
+    sped: { tracking: 5, margin: 40 },
+    flat: { tracking: 6, margin: 20, level: true },
+    chopped: { tracking: 4, margin: 22 },
+    slowed: { tracking: 3, margin: 20 },
+    memphis: { tracking: 3, margin: 20 },
+    screwed: { tracking: 4, margin: 22 }
   };
   var CAP_HEIGHT = 100;
   var DESCENDER = 26;
   var LEVEL_GAP = 14;
   var UNDER = 9;
+  var MIN_MARGIN = 19;
   function signLayout(id, name, height = SIGN_HEIGHT) {
-    const fit = SIGN_FIT[id] ?? { tracking: 2, margin: 6, wide: 1 };
+    const fit = SIGN_FIT[id] ?? { tracking: 4, margin: 22 };
+    const margin = Math.max(MIN_MARGIN, fit.margin);
     const gaps = [...name].length - 1;
     const descends = /[pq]/.test(name);
-    const room = height - 3;
-    const sy = (descends ? Math.min(room - UNDER, room * CAP_HEIGHT / (CAP_HEIGHT + DESCENDER)) : room - UNDER) / CAP_HEIGHT;
-    const [unitLeft, unitRight] = inkBounds(placeText(name, 1, sy, 0, 0, 0));
-    const byWidth = (SIGN_WIDTH - fit.margin * 2 - fit.tracking * gaps) / (unitRight - unitLeft);
-    const sx = Math.min(byWidth, sy * fit.wide);
-    const baseline2 = 3 + CAP_HEIGHT * sy;
-    const [left, right] = inkBounds(placeText(name, sx, sy, fit.tracking, 0, baseline2));
+    const room = height - 3 - UNDER;
+    const byHeight = (descends ? room * CAP_HEIGHT / (CAP_HEIGHT + DESCENDER) : room) / CAP_HEIGHT;
+    const [unitLeft, unitRight] = inkBounds(placeText(name, 1, 0, 0, 0));
+    const byWidth = (SIGN_WIDTH - margin * 2 - fit.tracking * gaps) / (unitRight - unitLeft);
+    const scale = Math.min(byHeight, byWidth);
+    const block = CAP_HEIGHT * scale + (descends ? DESCENDER * scale : 0) + UNDER;
+    const top = 3 + Math.max(0, (height - 3 - block) / 2);
+    const baseline2 = top + CAP_HEIGHT * scale;
+    const [left, right] = inkBounds(placeText(name, scale, fit.tracking, 0, baseline2));
     const dx = (SIGN_WIDTH - (right - left)) / 2 - left;
-    const units = placeText(name, sx, sy, fit.tracking, dx, baseline2);
+    const units = placeText(name, scale, fit.tracking, dx, baseline2);
     const layout = thread(units, baseline2, 3);
     if (fit.level) {
-      const y = fmt2(baseline2 - 50 * sy);
+      const y = fmt2(baseline2 - 50 * scale);
       const start = fmt2(left + dx - LEVEL_GAP);
       const end = fmt2(right + dx + LEVEL_GAP);
-      layout.lit += `M${fit.margin} ${y}H${start}M${end} ${y}H${SIGN_WIDTH - fit.margin}`;
+      layout.lit += `M${margin} ${y}H${start}M${end} ${y}H${SIGN_WIDTH - margin}`;
       const rail = fmt2(baseline2 + 3);
-      layout.dark += `M${fit.margin} ${y}V${rail}M${start} ${y}V${rail}M${end} ${y}V${rail}M${SIGN_WIDTH - fit.margin} ${y}V${rail}`;
-      layout.boots += `M${fit.margin} ${rail}v${BOOT_LENGTH}M${start} ${rail}v${BOOT_LENGTH}M${end} ${rail}v${BOOT_LENGTH}M${SIGN_WIDTH - fit.margin} ${rail}v${BOOT_LENGTH}`;
+      layout.dark += `M${margin} ${y}V${rail}M${start} ${y}V${rail}M${end} ${y}V${rail}M${SIGN_WIDTH - margin} ${y}V${rail}`;
+      layout.boots += `M${margin} ${rail}v${BOOT_LENGTH}M${start} ${rail}v${BOOT_LENGTH}M${end} ${rail}v${BOOT_LENGTH}M${SIGN_WIDTH - margin} ${rail}v${BOOT_LENGTH}`;
+      const mid = (a, b) => fmt2((a + b) / 2);
+      layout.supports += `M${Number(mid(margin, Number(start))) - CLIP} ${y}h${CLIP * 2}M${Number(mid(Number(end), SIGN_WIDTH - margin)) - CLIP} ${y}h${CLIP * 2}`;
     }
     return layout;
   }
   var NUMBER_WIDTH = 118;
   var NUMBER_HEIGHT = 42;
-  var NUMBER_SX = 0.4;
-  var NUMBER_SY = 0.33;
-  var NUMBER_TRACKING = 0.5;
-  var NUMBER_BASELINE = 33;
+  var NUMBER_SCALE = 0.36;
+  var NUMBER_TRACKING = 2;
+  var NUMBER_BASELINE = 36;
   function numberLayout(cents) {
     const text = cents === 0 ? "0" : `${cents < 0 ? "\u2212" : "+"}${Math.abs(cents)}`;
-    const [, right] = inkBounds(placeText(text, NUMBER_SX, NUMBER_SY, NUMBER_TRACKING, 0, NUMBER_BASELINE));
-    const units = placeText(text, NUMBER_SX, NUMBER_SY, NUMBER_TRACKING, NUMBER_WIDTH - right - 4, NUMBER_BASELINE);
+    const [, right] = inkBounds(placeText(text, NUMBER_SCALE, NUMBER_TRACKING, 0, NUMBER_BASELINE, true));
+    const units = placeText(text, NUMBER_SCALE, NUMBER_TRACKING, NUMBER_WIDTH - right - 4, NUMBER_BASELINE, true);
     return thread(units, NUMBER_BASELINE, 2.5);
   }
 
@@ -972,10 +998,10 @@ self.onmessage = (event) => {
 
   // src/ui/neon-styles.ts
   var NEON_CSS = `
-/* Neon. Every layer is a plain stroke, so there is no filter to repaint. */
 .slab-tube { position: relative; }
 .slab-tube svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .slab-tube path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* Standoffs hold the glass off the board, so it throws a soft shadow down and right. */
 .slab-tube-cast { transform: translate(2.5px, 4.5px); }
 .slab-tube [data-l="shadowWide"] { stroke: #000; stroke-width: 6; opacity: 0.16; }
 .slab-tube [data-l="shadow"] { stroke: #000; stroke-width: 3.2; opacity: 0.46; }
@@ -989,17 +1015,22 @@ self.onmessage = (event) => {
 .slab-tube [data-l="glass"] { stroke: var(--gas-glass); stroke-width: 3.1; }
 .slab-tube [data-l="core"] { stroke: var(--gas-core); stroke-width: 1.2; }
 .slab-tube-gas { will-change: opacity; }
+/* Tube supports: small chrome clips across straight glass, seated on the board by their own shadow. */
+.slab-tube [data-l="clipShadow"] { stroke: #000; stroke-width: 2.6; stroke-linecap: butt; opacity: 0.55; transform: translate(0.8px, 1.4px); }
+.slab-tube [data-l="clip"] { stroke: #B9C0C5; stroke-width: 2.2; stroke-linecap: butt; }
+.slab-tube [data-l="clipHi"] { stroke: #F4F6F7; stroke-width: 0.7; stroke-linecap: butt; transform: translateY(-0.6px); }
 
 .slab-panel[data-gas="off"] .slab-sign-tube .slab-tube-gas { visibility: hidden; }
 .slab-panel[data-tube="off"] .slab-number-tube .slab-tube-gas { visibility: hidden; }
 /* The helper is running with nothing to shift: warm glass, not lit. */
 .slab-panel[data-tube="idle"] .slab-number-tube .slab-tube-gas { opacity: 0.24; }
 
+/* The number is small glass close to the board: thinner tube, a lighter, shorter shadow. */
+.slab-number-tube .slab-tube-cast { transform: translate(1px, 2px); opacity: 0.6; }
 .slab-number-tube [data-l="frost"], .slab-number-tube [data-l="glass"] { stroke-width: 2.5; }
 .slab-number-tube [data-l="dark"] { stroke-width: 2; }
 .slab-number-tube [data-l="core"] { stroke-width: 1; }
 .slab-number-tube [data-l="bloom"] { stroke-width: 9; }
-.slab-number-tube [data-l="boots"] { stroke-width: 4.4; }
 `;
 
   // src/ui/styles.ts
@@ -1853,27 +1884,20 @@ ${NEON_CSS}
 </svg>
 <svg class="slab-tube-gas" ${box}>
   <path data-l="bloom"/><path data-l="halo"/><path data-l="glass"/><path data-l="core"/>
+</svg>
+<svg class="slab-tube-clips" ${box}>
+  <path data-l="clipShadow"/><path data-l="clip"/><path data-l="clipHi"/>
 </svg>`;
       const find = (name) => this.node.querySelector(`[data-l="${name}"]`);
-      this.layers = {
-        shadow: find("shadow"),
-        shadowWide: find("shadowWide"),
-        dark: find("dark"),
-        boots: find("boots"),
-        bootsHi: find("bootsHi"),
-        frost: find("frost"),
-        frostHi: find("frostHi"),
-        bloom: find("bloom"),
-        halo: find("halo"),
-        glass: find("glass"),
-        core: find("core")
-      };
+      const names = ["shadow", "shadowWide", "dark", "boots", "bootsHi", "frost", "frostHi", "bloom", "halo", "glass", "core", "clipShadow", "clip", "clipHi"];
+      this.layers = Object.fromEntries(names.map((name) => [name, find(name)]));
       this.gas = this.node.querySelector(".slab-tube-gas");
     }
     set(layout) {
-      if (layout.lit === this.current) return;
-      this.current = layout.lit;
-      const { shadow, shadowWide, dark, boots, bootsHi, frost, frostHi, bloom, halo, glass, core } = this.layers;
+      const key = layout.lit + layout.supports;
+      if (key === this.current) return;
+      this.current = key;
+      const { shadow, shadowWide, dark, boots, bootsHi, frost, frostHi, bloom, halo, glass, core, clipShadow, clip, clipHi } = this.layers;
       const all = layout.lit + layout.dark;
       shadow.setAttribute("d", all);
       shadowWide.setAttribute("d", all);
@@ -1881,31 +1905,33 @@ ${NEON_CSS}
       boots.setAttribute("d", layout.boots);
       bootsHi.setAttribute("d", layout.boots);
       for (const path of [frost, frostHi, bloom, halo, glass, core]) path.setAttribute("d", layout.lit);
+      for (const path of [clipShadow, clip, clipHi]) path.setAttribute("d", layout.supports);
     }
   };
 
   // src/ui/badge.ts
-  var CHROME2 = (id) => `
-  <linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0" stop-color="#F7F9F9"/><stop offset=".42" stop-color="#D7DCDF"/>
-    <stop offset=".56" stop-color="#8F979C"/><stop offset=".78" stop-color="#C9CFD3"/>
-    <stop offset="1" stop-color="#EEF1F2"/>
-  </linearGradient>`;
-  var LETTERS = [
+  var SCRIPT = [
     // S
-    "M2.5 0H14V4H4V8H11.5L14 10.5V17.5L11.5 20H0V16H10V12H2.5L0 9.5V2.5Z",
-    // L
-    "M16.5 0H20.5V16H28.5V20H18.5L16.5 18Z",
-    // A
-    "M33.5 0H42.5L45.5 3V20H41.5V14H34.5V20H30.5V3ZM34.5 4V10H41.5V4Z",
-    // B
-    "M48 0H60L63 3V7.5L60.8 10L63 12.5V17L60 20H48ZM52 4V8H59V4ZM52 12V16H59V12Z"
+    "M13.4 4.6C12.4 2.3 7.6 1.5 5.2 3.2C2.6 5 3.5 7.7 7.3 9.3C11.1 10.9 12.6 12.9 11.3 15.5C10 18.1 5.6 18.7 2.4 16.6",
+    // l, a, b in one run of the pen
+    "M13.8 15.6C16.6 13.6 19.4 8.6 19.9 4.8C20.2 2.4 18.4 1.9 17.8 4.1C17 7.6 16.4 12.6 17 16C17.4 18.3 19.8 18.1 22 16.2C23.4 14.9 24.6 11.6 27.4 10.7C25.2 10.1 22.6 11.9 23 14.9C23.4 18.1 27.4 17.6 28.8 14.2L29.6 10.6L28.9 15.6C28.6 17.8 30.6 18.1 32.8 16.4C35 14.3 37 8.6 37.4 4.8C37.7 2.4 35.9 1.9 35.3 4.1C34.5 7.6 33.9 12.6 34.4 16C34.8 18.5 38.6 18.6 40.2 15.7C41.3 13.6 40.4 10.8 38.1 10.8C36.7 10.8 35.7 11.7 35.3 12.6",
+    // the swash, off the b and back under "lab"
+    "M40.2 15.7C44.6 16.6 47 19.6 42.6 21.2C35.2 23.8 23.2 22.8 15.6 20.6"
   ].join("");
   var EMBLEM = `
-<svg class="slab-emblem" viewBox="0 0 64 22" width="64" height="22" role="img" aria-label="SLAB" focusable="false">
-  <defs>${CHROME2("slab-chrome-badge")}</defs>
-  <path d="${LETTERS}" transform="translate(.4 1.3)" fill="#1E0208" fill-rule="evenodd" opacity=".8"/>
-  <path d="${LETTERS}" fill="url(#slab-chrome-badge)" fill-rule="evenodd"/>
+<svg class="slab-emblem" viewBox="0 0 50 24" width="58" height="28" role="img" aria-label="SLAB" focusable="false">
+  <defs>
+    <linearGradient id="slab-plate-chrome" gradientUnits="userSpaceOnUse" x1="0" y1="1.5" x2="0" y2="22">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset=".38" stop-color="#DDE2E5"/>
+      <stop offset=".55" stop-color="#8A9297"/><stop offset=".75" stop-color="#C9CFD3"/>
+      <stop offset="1" stop-color="#EEF1F2"/>
+    </linearGradient>
+  </defs>
+  <g transform="skewX(-12) translate(4.4 0)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="${SCRIPT}" stroke="#1E0208" stroke-width="2.9" opacity=".85" transform="translate(.6 .9)"/>
+    <path d="${SCRIPT}" stroke="url(#slab-plate-chrome)" stroke-width="2.5"/>
+    <path d="${SCRIPT}" stroke="#FFFFFF" stroke-width=".55" opacity=".75" transform="translate(-.25 -.45)"/>
+  </g>
 </svg>`;
 
   // src/ui/deck.ts

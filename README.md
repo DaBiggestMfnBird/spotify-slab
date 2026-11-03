@@ -249,4 +249,4 @@ MIT licensed.
 
 The panel embeds subsetted cuts of [Barlow Semi Condensed](https://github.com/jpt/barlow) (500, 600, 700) and Barlow Condensed (700) by Jeremy Tribby, under the SIL Open Font License 1.1. `scripts/gen-fonts.ts` builds them into `src/ui/fonts.generated.ts` from the `@fontsource` packages.
 
-The neon lettering is not a font. `scripts/gen-neon.ts` holds hand-drawn single-stroke tube centrelines, written for SLAB and covered by this repository's MIT licence, and writes `src/ui/neon-glyphs.ts`.
+The neon lettering is not a font. `scripts/gen-neon.ts` holds hand-drawn single-stroke tube centrelines, written for SLAB and covered by this repository's MIT licence, and writes `src/ui/neon-glyphs.ts`. They follow how glass is actually bent: upright condensed gothic, true circular bends no tighter than the glass allows, strokes that stop a glass width short of a stem instead of floating off it, one break where strokes cross, tube supports on straight glass, and figures built as separate pieces so the pitch number reads clean. The deck-lid nameplate in `src/ui/badge.ts` is drawn the same way, as a chrome script.
