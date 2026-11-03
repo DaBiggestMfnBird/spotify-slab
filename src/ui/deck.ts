@@ -22,10 +22,11 @@ import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MOODS, curvePath, moodById } from "../core/moods";
 import { clampPitch, saveState } from "../core/state";
 import type { Grid, SlabState } from "../types";
-import { CHIP_ICON, CLOSE_ICON, EMBLEM, SILL_SCREWS, TYRE_RADIUS, WHEEL_SIZE, WHEEL_SPIN, WHEEL_STATIC } from "./art";
+import { CHIP_ICON, CLOSE_ICON, SILL_SCREWS, TYRE_RADIUS, WHEEL_SIZE, WHEEL_SPIN, WHEEL_STATIC } from "./art";
 import { NUMBER_HEIGHT, NUMBER_WIDTH, SIGN_HEIGHT, SIGN_WIDTH, numberLayout, signLayout } from "./neon";
-import type { TubeLayout } from "./neon";
 import { CSS, STYLE_ID } from "./styles";
+import { Tube } from "./tube";
+import { EMBLEM } from "./badge";
 
 type Props = Record<string, unknown>;
 
@@ -192,62 +193,6 @@ function isOff(button: HTMLButtonElement): boolean {
 const MOODS_BY_PITCH = [...MOODS].sort(
     (a, b) => b.dsp.pitch - a.dsp.pitch || Number(b.id === "flat") - Number(a.id === "flat"),
 );
-
-/**
- * One length of neon. Glass, paint-out and electrodes sit in one svg; the gas
- * sits in its own, so a strike only changes the opacity of a composited layer
- * and never repaints the glow.
- */
-class Tube {
-    readonly node: HTMLDivElement;
-    readonly gas: SVGSVGElement;
-    private layers: Record<"shadow" | "shadowWide" | "dark" | "boots" | "bootsHi" | "frost" | "frostHi" | "bloom" | "halo" | "glass" | "core", SVGPathElement>;
-    private current = "";
-
-    constructor(className: string, width: number, height: number) {
-        const box = `viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" aria-hidden="true" focusable="false"`;
-        this.node = h("div", {
-            class: `slab-tube ${className}`,
-            html: `
-<svg class="slab-tube-glass" ${box}>
-  <g class="slab-tube-cast"><path data-l="shadowWide"/><path data-l="shadow"/></g>
-  <path data-l="dark"/><path data-l="boots"/><path data-l="bootsHi"/>
-  <g class="slab-tube-frosted"><path data-l="frost"/><path data-l="frostHi"/></g>
-</svg>
-<svg class="slab-tube-gas" ${box}>
-  <path data-l="bloom"/><path data-l="halo"/><path data-l="glass"/><path data-l="core"/>
-</svg>`,
-        });
-        const find = (name: string) => this.node.querySelector(`[data-l="${name}"]`) as SVGPathElement;
-        this.layers = {
-            shadow: find("shadow"),
-            shadowWide: find("shadowWide"),
-            dark: find("dark"),
-            boots: find("boots"),
-            bootsHi: find("bootsHi"),
-            frost: find("frost"),
-            frostHi: find("frostHi"),
-            bloom: find("bloom"),
-            halo: find("halo"),
-            glass: find("glass"),
-            core: find("core"),
-        };
-        this.gas = this.node.querySelector(".slab-tube-gas") as SVGSVGElement;
-    }
-
-    set(layout: TubeLayout): void {
-        if (layout.lit === this.current) return;
-        this.current = layout.lit;
-        const { shadow, shadowWide, dark, boots, bootsHi, frost, frostHi, bloom, halo, glass, core } = this.layers;
-        const all = layout.lit + layout.dark;
-        shadow.setAttribute("d", all);
-        shadowWide.setAttribute("d", all);
-        dark.setAttribute("d", layout.dark);
-        boots.setAttribute("d", layout.boots);
-        bootsHi.setAttribute("d", layout.boots);
-        for (const path of [frost, frostHi, bloom, halo, glass, core]) path.setAttribute("d", layout.lit);
-    }
-}
 
 interface SpeedInfo {
     text: string;

@@ -49,15 +49,15 @@ export const MOODS: Mood[] = [
     },
     {
         id: "screwed",
-        name: "Houston Screwed",
-        sub: "slowed, not chopped",
+        name: "Screwed",
+        sub: "gray-tape low end, top rolled off",
         gains: [5.0, 3.2, 0.4, -1.2, -3.0, -6.0],
         dsp: { ...dry, pitch: -560, reverb: 16, reverbPreset: "largeRoom", lowpass: 8_000 },
         note: "Screw mixed for a trunk. Sub and low-mid pushed hard, everything above 2k pulled back so the 808 owns the room.",
     },
     {
         id: "chopped",
-        name: "Houston Chopped",
+        name: "Chopped",
         sub: "dry, bright, cuts",
         gains: [2.2, 1.0, -0.2, 1.4, 3.0, 1.2],
         dsp: { ...dry, reverbPreset: "smallRoom" },
@@ -74,7 +74,7 @@ export const MOODS: Mood[] = [
     {
         id: "sped",
         name: "Sped Up",
-        sub: "nightcore bright, lean low end",
+        sub: "nightcore bright, thin low end",
         gains: [-1.2, -0.2, -0.6, 1.0, 2.4, 3.6],
         dsp: { ...dry, pitch: 400 },
         note: "The other direction. Low end leans out, presence and air come up, the whole thing gets lighter.",
