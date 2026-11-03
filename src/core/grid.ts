@@ -9,6 +9,18 @@ import type { Grid } from "../types";
 
 const cache = new Map<string, Grid>();
 const inflight = new Map<string, Promise<Grid | null>>();
+/** Spotify runs all day; keep the grids of the last few tracks, not every track ever played. */
+const CACHE_LIMIT = 24;
+
+function remember(uri: string, grid: Grid): void {
+    cache.delete(uri);
+    cache.set(uri, grid);
+    while (cache.size > CACHE_LIMIT) {
+        const oldest = cache.keys().next().value;
+        if (oldest === undefined) break;
+        cache.delete(oldest);
+    }
+}
 
 function currentUri(): string | null {
     return Spicetify.Player.data?.item?.uri ?? null;
@@ -45,7 +57,7 @@ export async function loadGrid(uri?: string): Promise<Grid | null> {
                 bars,
                 durationMs,
             };
-            cache.set(target, grid);
+            remember(target, grid);
             return grid;
         } catch {
             return null;

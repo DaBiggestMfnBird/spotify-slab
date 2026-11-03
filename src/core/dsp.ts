@@ -27,6 +27,8 @@ export interface DspParams {
 }
 
 export interface DspStatus {
+    /** At least one probe has come back, so `linked` is an answer, not a guess. */
+    checked: boolean;
     /** The helper answered. It may still have nothing to process. */
     linked: boolean;
     /** Attached to Spotify's audio process. */
@@ -39,9 +41,15 @@ export interface DspStatus {
     params?: Partial<DspParams>;
 }
 
-let status: DspStatus = { linked: false };
+let status: DspStatus = { checked: false, linked: false };
 let lastProbe = 0;
+let misses = 0;
 const listeners = new Set<(status: DspStatus) => void>();
+
+/** Linked: every 4 s. Absent: the same for the first few tries, then every 30 s. */
+const PROBE_LINKED_MS = 4_000;
+const PROBE_ABSENT_MS = 30_000;
+const PROBE_FAST_TRIES = 3;
 
 export function onDspChange(listener: (status: DspStatus) => void): () => void {
     listeners.add(listener);
@@ -55,6 +63,7 @@ export function dspStatus(): DspStatus {
 
 function publish(next: DspStatus): void {
     const changed =
+        next.checked !== status.checked ||
         next.linked !== status.linked ||
         next.version !== status.version ||
         next.tapping !== status.tapping ||
@@ -81,10 +90,15 @@ async function request(path: string, init?: RequestInit, timeout = 700): Promise
     }
 }
 
-/** Cheap liveness check. Cached for a few seconds so the panel can poll freely. */
+/**
+ * Cheap liveness check, cached so the panel can poll freely. With no helper
+ * installed (every Windows and Linux client) it backs off, so the console isn't
+ * filled with refused connections; opening the panel forces a fresh look.
+ */
 export async function probeDsp(force = false): Promise<DspStatus> {
     const now = Date.now();
-    if (!force && now - lastProbe < 4000) return status;
+    const every = status.linked || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
+    if (!force && now - lastProbe < every) return status;
     lastProbe = now;
 
     const payload = (await request("/status")) as
@@ -100,7 +114,9 @@ export async function probeDsp(force = false): Promise<DspStatus> {
         | null;
 
     if (payload?.ok) {
+        misses = 0;
         publish({
+            checked: true,
             linked: true,
             // Helpers before 0.3.0 don't report these and only ran while tapping.
             tapping: payload.tapping !== false,
@@ -111,23 +127,52 @@ export async function probeDsp(force = false): Promise<DspStatus> {
             params: payload.params,
         });
     } else {
-        publish({ linked: false });
+        misses += 1;
+        publish({ checked: true, linked: false });
     }
     return status;
 }
 
-export async function sendDsp(params: Partial<DspParams>): Promise<boolean> {
-    const payload = await request("/params", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(params),
-    });
-    if (!payload) {
-        publish({ linked: false });
-        return false;
+let pending: Partial<DspParams> | null = null;
+let waiting: ((sent: boolean) => void)[] = [];
+let draining = false;
+
+/**
+ * One request in flight at a time, and only the newest values wait behind it.
+ * A drag fires dozens of changes; sent side by side they could land out of
+ * order and leave the helper on an older pitch than the panel shows.
+ */
+export function sendDsp(params: Partial<DspParams>): Promise<boolean> {
+    pending = { ...pending, ...params };
+    const result = new Promise<boolean>((resolve) => waiting.push(resolve));
+    if (!draining) void drain();
+    return result;
+}
+
+async function drain(): Promise<void> {
+    draining = true;
+    try {
+        while (pending) {
+            const body = pending;
+            const settle = waiting;
+            pending = null;
+            waiting = [];
+            const payload = await request("/params", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            if (payload) {
+                misses = 0;
+                publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body } });
+            } else {
+                publish({ checked: true, linked: false });
+            }
+            for (const resolve of settle) resolve(Boolean(payload));
+        }
+    } finally {
+        draining = false;
     }
-    publish({ ...status, linked: true, params: { ...status.params, ...params } });
-    return true;
 }
 
 /** Real tape-stop: the helper ramps its time-stretcher down and back up. */

@@ -24,7 +24,7 @@ const FACES = [
 ];
 
 // The tall cut only sets the BPM figure, so it gets digits and nothing else.
-const TEXT = Array.from({ length: 95 }, (_, index) => String.fromCharCode(32 + index)).join("") + "−–’";
+const TEXT = Array.from({ length: 95 }, (_, index) => String.fromCharCode(32 + index)).join("") + "−–’‘“”…";
 const TALL_TEXT = "0123456789.–";
 
 let css = "";

@@ -1,6 +1,16 @@
-import { chopBars, loopBars, onChop, resetForTrack, setAuto, tapeStop } from "../core/chops";
+import {
+    cancelLoop,
+    chopBars,
+    isStopping,
+    loopBars,
+    loopRemaining,
+    onChop,
+    resetForTrack,
+    setAuto,
+    tapeStop,
+} from "../core/chops";
 import { dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
-import { applyCurve, applyCurveAtFrequencies, restoreBaseline } from "../core/eq";
+import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } from "../core/eq";
 import {
     barCount,
     barIndexAt,
@@ -10,7 +20,7 @@ import {
 } from "../core/grid";
 import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MOODS, curvePath, moodById } from "../core/moods";
-import { saveState } from "../core/state";
+import { clampPitch, saveState } from "../core/state";
 import type { Grid, SlabState } from "../types";
 import { CHIP_ICON, CLOSE_ICON, EMBLEM, SILL_SCREWS, TYRE_RADIUS, WHEEL_SIZE, WHEEL_SPIN, WHEEL_STATIC } from "./art";
 import { NUMBER_HEIGHT, NUMBER_WIDTH, SIGN_HEIGHT, SIGN_WIDTH, numberLayout, signLayout } from "./neon";
@@ -23,8 +33,10 @@ const PITCH_LIMIT = 1200;
 const EVERY_MIN = 1;
 const EVERY_MAX = 16;
 const DEVICE_NAME_MAX = 56;
-/** Longer than this, the dead-sign message takes two lines and the sign makes room. */
-const DEAD_LINE_CHARS = 58;
+/** Line height of the dead-sign message; two of these and the sign makes room. Keep in step with styles.ts. */
+const DEAD_LINE_PX = 18;
+/** After a failed analysis fetch, wait this long before each retry; then stop until the track changes. */
+const GRID_RETRY_MS = [5_000, 30_000, 120_000];
 /** The sign's height when it shares its bay with two lines of message. */
 const COMPACT_SIGN_HEIGHT = 50;
 
@@ -38,8 +50,8 @@ const TAGLINE = "Slow, loud and bangin’";
 const PX_PER_CENT = 12 / 100;
 const RAIL_WIDTH = WHEEL_SIZE + PX_PER_CENT * PITCH_LIMIT * 2;
 const RULER_WIDTH = 360;
-/** The native thumb is the tyre, so a click past the tyre lands where it was aimed. */
-const THUMB_SIZE = TYRE_RADIUS * 2;
+/** The native thumb is the whole wheel, so grabbing it anywhere drags it instead of jumping. */
+const THUMB_SIZE = WHEEL_SIZE;
 
 /** Centre of the wheel at this value, and the x of everything aligned to it. */
 function railX(cents: number): number {
@@ -57,7 +69,8 @@ function remoteDeviceName(): string | null {
 }
 
 /** A device can be called anything. Long names are cut at a word and end the sentence themselves. */
-function deviceSentence(name: string): string {
+function deviceSentence(raw: string): string {
+    const name = raw.trim().replace(/[.\s]+$/, "") || "another device";
     if (name.length <= DEVICE_NAME_MAX) return `${name}.`;
     const cut = name.slice(0, DEVICE_NAME_MAX);
     const word = cut.lastIndexOf(" ");
@@ -85,12 +98,27 @@ function capitalise(text: string): string {
     return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+let motionQuery: MediaQueryList | null = null;
+
+/** Asked on every tick while the wheel turns, so the query is made once. */
 function reducedMotion(): boolean {
     try {
-        return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        motionQuery ??= window.matchMedia("(prefers-reduced-motion: reduce)");
+        return motionQuery.matches;
     } catch {
         return false;
     }
+}
+
+/** Inputs that take no typing; a focused slider or switch must not swallow the pad keys. */
+const KEYLESS_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "color", "file", "image"]);
+
+/** Typing belongs to whatever has the caret, never to the pads. */
+function isTypingTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable) return true;
+    if (target instanceof HTMLInputElement) return !KEYLESS_INPUTS.has(target.type);
+    return Boolean(target.closest('textarea, select, [role="textbox"], [role="searchbox"], [role="combobox"]'));
 }
 
 /**
@@ -226,6 +254,20 @@ interface SpeedInfo {
     hint: string;
 }
 
+interface PadDef {
+    id: string;
+    label: string;
+    sub: string;
+    /** Resolves false when the edit couldn't happen; the pad then stays dark. */
+    run: () => boolean | Promise<boolean>;
+    /** Said when `run` comes back false. */
+    miss?: string;
+}
+
+/** Loop repeats the bar this many more times before the record runs on. */
+const LOOP_TIMES = 4;
+const LOOP_SUB = `${LOOP_TIMES} times`;
+
 export class Deck {
     private state: SlabState;
     private chip: HTMLButtonElement;
@@ -270,6 +312,9 @@ export class Deck {
 
     private pads: HTMLButtonElement[] = [];
     private padTimers = new Map<HTMLButtonElement, number>();
+    private loopSub: HTMLElement | null = null;
+    /** Stops any held-button repeat; run on destroy. */
+    private releases: (() => void)[] = [];
     private switchEl: HTMLButtonElement;
     private everyEl: HTMLSpanElement;
     private everyDown: HTMLButtonElement;
@@ -291,6 +336,12 @@ export class Deck {
     private rollTimer: number | null = null;
     private lastGridUri: string | null = null;
     private lastGridAttempt = 0;
+    /** Failed analysis fetches for the current track; each retry waits longer. */
+    private gridMisses = 0;
+    private announceTimer: number | null = null;
+    private resizeFrame: number | null = null;
+    private lastPlaying: boolean | null = null;
+    private lampFrame: number | null = null;
     private lastDspSync = 0;
     private pitchTimer: number | null = null;
     private pendingPitch: number | null = null;
@@ -303,7 +354,14 @@ export class Deck {
     private lastRemote: string | null = null;
     private onDocumentClick = (event: MouseEvent) => this.handleOutside(event);
     private onKey = (event: KeyboardEvent) => this.handleKey(event);
-    private onResize = () => this.position();
+    /** One reposition per frame, however fast the window is dragged. */
+    private onResize = () => {
+        if (this.resizeFrame !== null) return;
+        this.resizeFrame = window.requestAnimationFrame(() => {
+            this.resizeFrame = null;
+            this.position();
+        });
+    };
     private onScroll = () => this.renderScrollCue();
 
     constructor(state: SlabState) {
@@ -317,31 +375,34 @@ export class Deck {
         this.deadEl = h("p", { class: "slab-dead", "aria-live": "polite" });
 
         this.numberTube = new Tube("slab-number-tube", NUMBER_WIDTH, NUMBER_HEIGHT);
-        this.semiEl = h("span", { class: "slab-semi" });
+        this.semiEl = h("span", { class: "slab-semi", id: "slab-semi" });
+        // Visible text first in every name, so a voice command that reads the button works.
         this.nudgeDown = h("button", {
             class: "slab-press slab-nudge",
             type: "button",
-            "aria-label": "Down 10 cents",
-            onclick: () => {
-                if (!isOff(this.nudgeDown)) this.setPitch(this.state.pitch - 10, false);
-            },
+            "aria-label": "−10 cents",
+            title: "Down 10 cents. Hold to keep going, Shift for a semitone.",
         }, h("span", {}, "−10"));
         this.nudgeUp = h("button", {
             class: "slab-press slab-nudge",
             type: "button",
-            "aria-label": "Up 10 cents",
-            onclick: () => {
-                if (!isOff(this.nudgeUp)) this.setPitch(this.state.pitch + 10, false);
-            },
+            "aria-label": "+10 cents",
+            title: "Up 10 cents. Hold to keep going, Shift for a semitone.",
         }, h("span", {}, "+10"));
         this.normalButton = h("button", {
             class: "slab-press slab-normal",
             type: "button",
-            "aria-label": "Back to normal pitch",
-            onclick: () => {
-                if (!isOff(this.normalButton)) this.setPitch(0, true);
-            },
+            "aria-label": "Normal pitch",
         }, h("span", {}, "Normal"));
+        const nudge = (button: HTMLButtonElement, sign: 1 | -1) => (event: Event) => {
+            if (isOff(button)) return;
+            this.setPitch(this.state.pitch + sign * ((event as MouseEvent).shiftKey ? 100 : 10), false);
+        };
+        this.press(this.nudgeDown, nudge(this.nudgeDown, -1), true);
+        this.press(this.nudgeUp, nudge(this.nudgeUp, 1), true);
+        this.press(this.normalButton, () => {
+            if (!isOff(this.normalButton)) this.setPitch(0, true);
+        });
 
         this.pitchInput = h("input", {
             class: "slab-range",
@@ -350,8 +411,12 @@ export class Deck {
             min: String(-PITCH_LIMIT),
             max: String(PITCH_LIMIT),
             step: "10",
+            "aria-describedby": "slab-semi",
             oninput: () => this.onPitchInput(false),
             onchange: () => this.onPitchInput(true),
+            onkeydown: (event: KeyboardEvent) => this.onPitchKey(event),
+            // A drag right after a mood pick must follow the pointer, not finish the roll.
+            onpointerdown: () => this.stopRoll(),
         });
         this.hotUp = h("span", { class: "slab-rail-hot slab-rail-hot-up" });
         this.hotDown = h("span", { class: "slab-rail-hot slab-rail-hot-down" });
@@ -390,19 +455,19 @@ export class Deck {
         this.everyDown = h("button", {
             class: "slab-press slab-step",
             type: "button",
-            "aria-label": "Chop more often",
-            onclick: () => {
-                if (!isOff(this.everyDown)) this.setEvery(this.state.every - 1);
-            },
+            "aria-label": "Fewer bars between chops",
         }, h("span", {}, "−"));
         this.everyUp = h("button", {
             class: "slab-press slab-step",
             type: "button",
-            "aria-label": "Chop less often",
-            onclick: () => {
-                if (!isOff(this.everyUp)) this.setEvery(this.state.every + 1);
-            },
+            "aria-label": "More bars between chops",
         }, h("span", {}, "+"));
+        this.press(this.everyDown, () => {
+            if (!isOff(this.everyDown)) this.setEvery(this.state.every - 1);
+        }, true);
+        this.press(this.everyUp, () => {
+            if (!isOff(this.everyUp)) this.setEvery(this.state.every + 1);
+        }, true);
 
         this.eqNoteText = h("span", { class: "slab-eq-text" });
         this.eqNoteButton = h("button", {
@@ -463,6 +528,10 @@ export class Deck {
         void this.applyMood(this.state.moodId, false);
         void this.syncGrid();
         this.refresh();
+        // Measurements taken before the embedded faces arrive are in the fallback font.
+        void document.fonts?.ready.then(() => {
+            if (!this.disposed) this.renderSign();
+        });
         this.refreshTimer = window.setInterval(() => this.refresh(), 100);
         this.chipTimer = window.setInterval(() => this.ensureChip(), 1200);
     }
@@ -474,8 +543,13 @@ export class Deck {
         if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
         if (this.rollTimer !== null) window.clearTimeout(this.rollTimer);
         if (this.pitchTimer !== null) window.clearTimeout(this.pitchTimer);
+        if (this.announceTimer !== null) window.clearTimeout(this.announceTimer);
+        if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
         for (const timer of this.padTimers.values()) window.clearTimeout(timer);
         this.padTimers.clear();
+        for (const release of this.releases) release();
+        if (this.lampFrame !== null) window.cancelAnimationFrame(this.lampFrame);
+        this.lampFrame = null;
         this.spinAnimation?.cancel();
         this.spinAnimation = null;
         this.spinning = false;
@@ -497,36 +571,40 @@ export class Deck {
     onTrackChange(): void {
         resetForTrack();
         this.lastGridUri = null;
+        this.gridMisses = 0;
         void this.syncGrid();
         this.refresh();
     }
 
-    /** An older copy that stood aside may have left its sheet behind; this one wins. */
+    /**
+     * An older copy that stood aside may have left its sheet behind; this one
+     * wins. Either way the sheet goes last in the head, so it sits after
+     * Spotify's own CSS in the cascade, as it would on a clean boot.
+     */
     private injectStyles(): void {
-        const existing = document.getElementById(STYLE_ID);
-        if (existing) {
-            if (existing.textContent !== CSS) existing.textContent = CSS;
-            return;
-        }
-        const style = h("style", { id: STYLE_ID });
-        style.textContent = CSS;
+        const style = (document.getElementById(STYLE_ID) as HTMLStyleElement | null) ?? h("style", { id: STYLE_ID });
+        if (style.textContent !== CSS) style.textContent = CSS;
         document.head.append(style);
     }
 
+    /**
+     * Beside the lyrics button, where the playbar's own controls live. Without
+     * that anchor the end of the playbar will do for now; with no playbar at all
+     * the chip waits off the page rather than landing somewhere it can't be seen.
+     */
     private mountChip(): void {
         const lyrics = document.querySelector('[data-testid="lyrics-button"]');
         const host = lyrics?.parentElement;
-        if (host) {
-            host.insertBefore(this.chip, lyrics);
+        if (lyrics && host) {
+            if (this.chip.nextElementSibling !== lyrics) host.insertBefore(this.chip, lyrics);
             return;
         }
-        const bar = document.querySelector('[data-testid="now-playing-bar"]');
-        (bar ?? document.body).append(this.chip);
+        if (this.chip.isConnected) return;
+        document.querySelector('[data-testid="now-playing-bar"]')?.append(this.chip);
     }
 
-    /** Spotify rebuilds the playbar on some navigation, so put the chip back. */
+    /** Spotify builds the playbar late and rebuilds it on some navigation, so keep re-homing the chip. */
     private ensureChip(): void {
-        if (this.chip.isConnected) return;
         this.mountChip();
     }
 
@@ -542,6 +620,7 @@ export class Deck {
                 // A keyboard press arrives as a click with no pointer detail.
                 this.toggle(event.detail === 0);
             },
+            onkeydown: (event: KeyboardEvent) => this.handleTab(event, "chip"),
         });
         chip.innerHTML = CHIP_ICON;
         return chip;
@@ -563,6 +642,8 @@ export class Deck {
         }
         const rail = h("div", { class: "slab-rail" });
         rail.style.width = `${RAIL_WIDTH}px`;
+        // The native thumb's width comes from the same number as the input's travel.
+        rail.style.setProperty("--slab-thumb", `${THUMB_SIZE}px`);
 
         const tube = h("span", { class: "slab-rail-tube" });
         tube.style.left = `${railX(-PITCH_LIMIT)}px`;
@@ -702,39 +783,51 @@ export class Deck {
         );
 
         const padRow = h("div", { class: "slab-pads", role: "group", "aria-label": "Beat-synced edits" });
-        const padDefs: { id: string; label: string; sub: string; run: () => void }[] = [
-            { id: "chop", label: "Chop", sub: "1 bar", run: () => void chopBars(1) },
-            { id: "screw", label: "Screw", sub: "2 bars", run: () => void chopBars(2) },
-            { id: "spin", label: "Spin", sub: "4 bars", run: () => void chopBars(4) },
-            { id: "loop", label: "Loop", sub: "4x bar", run: () => void loopBars(4) },
+        const tooEarly = "Not that much record behind the needle yet.";
+        const padDefs: PadDef[] = [
+            { id: "chop1", label: "Chop", sub: "1 bar", run: () => chopBars(1), miss: tooEarly },
+            { id: "chop2", label: "Chop", sub: "2 bars", run: () => chopBars(2), miss: tooEarly },
+            { id: "chop4", label: "Chop", sub: "4 bars", run: () => chopBars(4), miss: tooEarly },
+            {
+                id: "loop",
+                label: "Loop",
+                sub: LOOP_SUB,
+                // A second press ends the loop early.
+                run: () => {
+                    if (loopRemaining() === 0) return loopBars(LOOP_TIMES);
+                    cancelLoop();
+                    this.flashActivity("Loop off");
+                    return true;
+                },
+                miss: "This bar is too short to loop.",
+            },
             {
                 id: "stop",
                 label: "Stop",
                 sub: "Tape stop",
                 run: () => {
+                    if (isStopping()) return false;
                     const linked = dspStatus().linked;
                     if (linked) void dspTapeStop();
                     // 380 ms down + 70 ms hold in the helper; pause right after
                     // the ramp bottoms out so the effect is not clipped.
-                    void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : undefined);
+                    return tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : undefined);
                 },
             },
         ];
-        for (const def of padDefs) {
+        padDefs.forEach((def, index) => {
+            const sub = h("small", {}, def.sub);
             const pad = h("button", {
                 class: "slab-press slab-pad",
                 type: "button",
                 "data-pad": def.id,
-                onclick: (event: Event) => {
-                    event.stopPropagation();
-                    if (isOff(pad)) return;
-                    this.hitPad(pad);
-                    def.run();
-                },
-            }, h("b", {}, def.label), h("small", {}, def.sub));
+                "aria-keyshortcuts": String(index + 1),
+            }, h("i", { class: "slab-key", "aria-hidden": "true" }, String(index + 1)), h("b", {}, def.label), sub);
+            if (def.id === "loop") this.loopSub = sub;
+            this.press(pad, () => this.firePad(pad, def));
             this.pads.push(pad);
             padRow.append(pad);
-        }
+        });
 
         const auto = h(
             "div",
@@ -755,6 +848,7 @@ export class Deck {
         // The lips sit on the scroll edges when a short window hides part of the car.
         panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, h("div", { class: "slab-lip slab-lip-end" }), this.statusEl);
         panel.addEventListener("click", (event) => event.stopPropagation());
+        panel.addEventListener("keydown", (event) => this.handleTab(event, "panel"));
         return panel;
     }
 
@@ -763,41 +857,83 @@ export class Deck {
         const target = event.target as Node | null;
         if (!target) return;
         if (this.panel.contains(target) || this.chip.contains(target)) return;
+        // Play, the seek bar and volume are part of playing the deck: after a tape
+        // stop the next move is Spotify's play button, so the playbar never closes it.
+        if (target instanceof Element && target.closest('[data-testid="now-playing-bar"]')) return;
         this.close();
     }
 
-    private handleKey(event: KeyboardEvent): void {
-        if (event.key === "Escape" && !this.panel.hidden) {
-            this.close();
-            return;
-        }
-        if (this.panel.hidden) return;
-        if (event.metaKey || event.ctrlKey || event.altKey) return;
-        const index = Number.parseInt(event.key, 10);
-        if (!Number.isFinite(index) || index < 1 || index > this.pads.length) return;
-        const target = event.target as HTMLElement | null;
-        if (target && /input|textarea/i.test(target.tagName)) return;
-        event.preventDefault();
-        if (!isOff(this.pads[index - 1])) this.pads[index - 1].click();
+    /** Everything Tab can land on in the panel, in order, skipping what is hidden or disabled. */
+    private focusables(): HTMLElement[] {
+        return [...this.panel.querySelectorAll<HTMLElement>("button, input, [tabindex]")].filter(
+            (node) => node.tabIndex >= 0 && !(node as HTMLInputElement).disabled && node.getClientRects().length > 0,
+        );
     }
 
-    /** Radiogroup keys, matching the grid: sideways is one mood, up and down a whole row. */
+    /**
+     * The panel lives at the end of the page but belongs right after the chip in
+     * the tab order: Tab on the open chip goes in, Shift+Tab from the first
+     * control comes back out to it, and Tab off the last control carries on to
+     * whatever follows the chip in the playbar.
+     */
+    private handleTab(event: KeyboardEvent, from: "chip" | "panel"): void {
+        if (event.key !== "Tab" || this.panel.hidden) return;
+        const stops = this.focusables();
+        if (!stops.length) return;
+        const active = document.activeElement;
+        if (from === "chip") {
+            if (event.shiftKey) return;
+            event.preventDefault();
+            stops[0].focus({ preventScroll: true });
+            return;
+        }
+        if (event.shiftKey && active === stops[0]) {
+            event.preventDefault();
+            this.chip.focus({ preventScroll: true });
+        } else if (!event.shiftKey && active === stops[stops.length - 1]) {
+            const next = this.chip.nextElementSibling;
+            event.preventDefault();
+            if (next instanceof HTMLElement && next.tabIndex >= 0) next.focus({ preventScroll: true });
+            else this.chip.focus({ preventScroll: true });
+        }
+    }
+
+    private handleKey(event: KeyboardEvent): void {
+        if (this.panel.hidden || event.defaultPrevented) return;
+        const target = event.target as Node | null;
+        const inPanel = Boolean(target && (this.panel.contains(target) || this.chip.contains(target)));
+        if (event.key === "Escape") {
+            // Esc in Spotify's search or one of its dialogs belongs to Spotify.
+            if (inPanel || target === document.body || target === document.documentElement) this.close();
+            return;
+        }
+        if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+        const index = Number.parseInt(event.key, 10);
+        if (!Number.isFinite(index) || index < 1 || index > this.pads.length) return;
+        if (isTypingTarget(event.target)) return;
+        event.preventDefault();
+        // A held key is one hit, not a machine gun of seeks. A dead pad still answers, with why.
+        if (event.repeat) return;
+        this.pads[index - 1].click();
+    }
+
+    /**
+     * Radiogroup keys: down and right go to the next mood, up and left to the one
+     * before. Picking a mood moves live pitch, so a held key doesn't sweep through
+     * them and the ends don't wrap from −560 straight to +400.
+     */
     private handleMoodKey(event: KeyboardEvent): void {
         const order = MOODS_BY_PITCH.map((mood) => mood.id);
         const from = order.indexOf(moodById(this.state.moodId).id);
         let to: number;
         switch (event.key) {
             case "ArrowRight":
-                to = (from + 1) % order.length;
+            case "ArrowDown":
+                to = Math.min(order.length - 1, from + 1);
                 break;
             case "ArrowLeft":
-                to = (from - 1 + order.length) % order.length;
-                break;
-            case "ArrowDown":
-                to = (from + 2) % order.length;
-                break;
             case "ArrowUp":
-                to = (from - 2 + order.length) % order.length;
+                to = Math.max(0, from - 1);
                 break;
             case "Home":
                 to = 0;
@@ -809,6 +945,7 @@ export class Deck {
                 return;
         }
         event.preventDefault();
+        if (event.repeat || to === from) return;
         void this.applyMood(order[to], true);
         this.moodButtons.get(order[to])?.focus();
     }
@@ -827,12 +964,15 @@ export class Deck {
         this.position();
         this.renderMoodState();
         this.refresh();
+        // The helper may have started since the last look; don't make the user wait out the backoff.
+        void probeDsp(true);
         if (fromKeyboard) this.moodButtons.get(moodById(this.state.moodId).id)?.focus();
     }
 
     close(): void {
-        // Focus inside the panel would otherwise fall to the document.
-        if (this.panel.contains(document.activeElement) && this.chip.isConnected) this.chip.focus();
+        // Focus inside the panel would otherwise fall to the document. Spotify's
+        // body doesn't scroll, so focusing must never scroll it either.
+        if (this.panel.contains(document.activeElement) && this.chip.isConnected) this.chip.focus({ preventScroll: true });
         this.panel.hidden = true;
         this.state.open = false;
         saveState(this.state);
@@ -885,7 +1025,6 @@ export class Deck {
         this.renderPitch(announce);
         this.renderDsp();
         if (announce) this.strikeSign();
-        this.chip.dataset.on = id !== "flat" ? "true" : "false";
 
         // The six native filters have exactly one owner. If ModernEQ is
         // installed and the user hasn't claimed them back, SLAB leaves them be.
@@ -925,8 +1064,9 @@ export class Deck {
     private onPitchInput(commit: boolean): void {
         const cents = Number.parseInt(this.pitchInput.value, 10);
         if (!Number.isFinite(cents)) return;
-        this.state.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, Math.round(cents / 10) * 10));
+        this.state.pitch = clampPitch(cents);
         this.renderPitch();
+        this.renderLit();
         this.pendingPitch = this.state.pitch;
 
         if (commit) {
@@ -937,10 +1077,32 @@ export class Deck {
         this.pitchTimer = window.setTimeout(() => this.flushPitch(false), 90);
     }
 
+    /**
+     * The range's own big steps are a tenth of its travel, 240 cents, which lands
+     * on no semitone. PageUp/PageDown and Shift+arrows move one semitone instead.
+     */
+    private onPitchKey(event: KeyboardEvent): void {
+        let step = 0;
+        if (event.key === "PageUp") step = 100;
+        else if (event.key === "PageDown") step = -100;
+        else if (event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowRight")) step = 100;
+        else if (event.shiftKey && (event.key === "ArrowDown" || event.key === "ArrowLeft")) step = -100;
+        if (!step) return;
+        event.preventDefault();
+        if (!this.pitchInput.disabled) this.setPitch(this.state.pitch + step, false);
+    }
+
+    private stopRoll(): void {
+        if (this.rollTimer !== null) window.clearTimeout(this.rollTimer);
+        this.rollTimer = null;
+        delete this.railEl.dataset.rolling;
+    }
+
     /** Nudges and Normal, which arrive as one committed value. */
     private setPitch(cents: number, roll: boolean): void {
-        this.state.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, cents));
+        this.state.pitch = clampPitch(cents);
         this.renderPitch(roll);
+        this.renderLit();
         this.pendingPitch = this.state.pitch;
         this.flushPitch(true);
     }
@@ -985,7 +1147,9 @@ export class Deck {
 
         setText(
             this.semiEl,
-            !linked
+            !status.checked
+                ? "Looking for the helper"
+                : !linked
                 ? "Pitch needs the helper"
                 : cents === 0
                   ? "Original key"
@@ -1036,15 +1200,7 @@ export class Deck {
      */
     private updateSpin(): void {
         if (this.disposed) return;
-        const status = dspStatus();
-        const should =
-            !this.panel.hidden &&
-            isPlaying() &&
-            status.linked === true &&
-            status.tapping === true &&
-            status.audio === true &&
-            !remoteDeviceName() &&
-            !reducedMotion();
+        const should = !this.panel.hidden && this.hearing().processing && !reducedMotion();
         if (should === this.spinning) return;
         this.spinning = should;
         if (!should) {
@@ -1080,7 +1236,8 @@ export class Deck {
 
     /** With no ModernEQ the row goes and the sill's fixed height re-centres the rest. */
     private renderEqNote(): void {
-        if (!this.modernEq) {
+        // A user who handed the EQ to ModernEQ and then removed it still needs a way to take it back.
+        if (!this.modernEq && this.state.eqOwner !== "modern") {
             this.eqNote.hidden = true;
             return;
         }
@@ -1117,23 +1274,67 @@ export class Deck {
         else void this.restoreModernEqCurve();
     }
 
+    /** The effects the helper is running: what it reports where it says, else what was sent. */
+    private helperEffects(): string[] {
+        const reported = dspStatus().params ?? {};
+        const sent = moodById(this.state.moodId).dsp;
+        const reverb = reported.reverb ?? sent.reverb;
+        const delay = reported.delayMix ?? sent.delayMix;
+        const lowpass = reported.lowpass ?? sent.lowpass;
+        return [
+            ...(this.state.pitch !== 0 ? ["pitch"] : []),
+            ...(reverb > 0 ? ["reverb"] : []),
+            ...(delay > 0 ? ["delay"] : []),
+            ...(lowpass < 20_000 ? ["low-pass"] : []),
+        ];
+    }
+
     /**
-     * The panel states what is true now, including the cases where SLAB is doing
-     * nothing audible: the EQ and the tap both only reach audio on this computer.
-     * The sign is lit while the mood has a way into the sound, by the EQ or by a
-     * helper with audio flowing. The pitch tube is lit only while the helper is
-     * shifting audio, and sits idle while it is running with nothing to shift. The
-     * paint only goes when the sound has left the room.
+     * What can be heard right now, decided in one place so the sign, the chip,
+     * the tube, the wheel and the sill can never tell different stories. The EQ
+     * and the tap both only reach audio on this computer. The EQ half counts when
+     * there is an EQ, SLAB owns it and the mood isn't Flat; the helper half counts
+     * while audio is flowing through it and it is changing something.
      */
-    private renderDsp(): void {
+    private hearing(): { remote: string | null; processing: boolean; audible: boolean } {
         const status = dspStatus();
         const remote = remoteDeviceName();
-        const processing = status.linked && status.tapping === true && status.audio === true && !remote;
+        const processing =
+            !remote && status.linked && status.tapping === true && status.audio === true && isPlaying();
+        const eq = !remote && eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
+        const helper = processing && this.helperEffects().length > 0;
+        return { remote, processing, audible: eq || helper };
+    }
 
+    /**
+     * The sign and the chip are lit only while the mood can be heard. The pitch
+     * tube is lit while the helper is processing audio here, so the slider acts
+     * live, and sits idle while the helper is running with nothing coming through.
+     * The paint only goes when the sound has left the room.
+     */
+    private renderLit(): void {
+        const { remote, processing, audible } = this.hearing();
+        const mood = moodById(this.state.moodId);
         setData(this.panel, "primer", remote ? "true" : "false");
-        setData(this.panel, "gas", !remote && (this.slabOwnsEq() || processing) ? "on" : "off");
-        setData(this.panel, "tube", remote || !status.linked ? "off" : processing ? "on" : "idle");
+        setData(this.panel, "gas", audible ? "on" : "off");
+        setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : processing ? "on" : "idle");
         setData(this.chip, "remote", remote ? "true" : "false");
+        setData(this.chip, "on", audible ? "true" : "false");
+        setAttr(
+            this.chip,
+            "aria-label",
+            audible
+                ? `SLAB playback moods, ${mood.name} on`
+                : mood.id === "flat"
+                  ? "SLAB playback moods, Flat"
+                  : `SLAB playback moods, ${mood.name} picked but not heard right now`,
+        );
+    }
+
+    /** The panel states what is true now, including the cases where SLAB is doing nothing audible. */
+    private renderDsp(): void {
+        const remote = remoteDeviceName();
+        this.renderLit();
 
         if (remote) {
             setText(this.deadEl, `Playing on ${deviceSentence(remote)} SLAB only reaches this computer.`);
@@ -1148,20 +1349,34 @@ export class Deck {
         this.updateSpin();
     }
 
-    /** What the helper is doing, built from the parameters actually sent to it. */
+    /** What the helper is doing, built from what it reports and what was sent to it. */
     private helperLine(): { state: string; text: string; title: string } {
         const status = dspStatus();
         if (remoteDeviceName()) {
             return {
                 state: "remote",
-                text: status.linked ? "Helper has nothing to process until this computer plays." : "Helper isn't running.",
+                text: status.linked ? "Helper has nothing to process until this computer plays." : "Helper isn’t running.",
                 title: "The EQ and the helper only touch audio on this computer.",
             };
         }
+        if (!status.checked) {
+            return {
+                state: "checking",
+                text: "Looking for the helper.",
+                title: "Checking whether the SLAB helper is running on this computer.",
+            };
+        }
         if (!status.linked) {
+            const shaping = eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
             return {
                 state: "offline",
-                text: this.slabOwnsEq() ? "Helper isn't running, so SLAB only shapes the EQ." : "Helper isn't running, so SLAB isn't changing the sound.",
+                text: shaping
+                    ? "Helper isn’t running, so SLAB only shapes the EQ."
+                    : !eqAvailable()
+                      ? "No helper and no EQ here, so SLAB can’t change the sound."
+                      : this.state.moodId === "flat" && this.slabOwnsEq()
+                        ? "Helper isn’t running. Flat leaves your EQ as it was."
+                        : "Helper isn’t running, so SLAB isn’t changing the sound.",
                 title: "Run the SLAB helper to get real pitch, reverb and delay. Without it SLAB only shapes the native EQ.",
             };
         }
@@ -1172,20 +1387,16 @@ export class Deck {
                 title: "The SLAB helper is running and will attach as soon as Spotify opens an audio stream.",
             };
         }
-        if (!status.audio) {
+        if (!status.audio || !isPlaying()) {
+            const paused = !isPlaying();
             return {
-                state: "silent",
-                text: "Helper is attached. No audio coming through yet.",
-                title: "The SLAB helper is attached to Spotify and nothing is playing here yet.",
+                state: paused ? "paused" : "silent",
+                text: paused ? "Helper is attached. Spotify is paused." : "Helper is attached. No audio coming through yet.",
+                title: "The SLAB helper is attached to Spotify and nothing is playing here.",
             };
         }
-        const dsp = moodById(this.state.moodId).dsp;
         const behind = typeof status.latencyMs === "number" ? `, ${Math.round(status.latencyMs)} ms behind` : "";
-        const effects = [
-            ...(this.state.pitch !== 0 ? ["pitch"] : []),
-            ...(dsp.reverb > 0 ? ["reverb"] : []),
-            ...(dsp.delayMix > 0 ? ["delay"] : []),
-        ];
+        const effects = this.helperEffects();
         const doing =
             effects.length === 0
                 ? "live and dry"
@@ -1204,20 +1415,32 @@ export class Deck {
         const { state, text, title } = this.helperLine();
         setText(this.helperEl, text);
         setAttr(this.helperEl, "title", title);
-        if (this.lastHelperState !== null && this.lastHelperState !== state) this.announce(text);
+        // The first answer after boot is not news; changes after that are.
+        if (this.lastHelperState !== null && this.lastHelperState !== "checking" && this.lastHelperState !== state) {
+            this.announce(text);
+        }
         this.lastHelperState = state;
     }
 
+    /** Emptied first, so the same words twice (two chops in a row) are still spoken twice. */
     private announce(text: string): void {
-        setText(this.statusEl, text);
+        this.statusEl.textContent = "";
+        if (this.announceTimer !== null) window.clearTimeout(this.announceTimer);
+        this.announceTimer = window.setTimeout(() => {
+            this.announceTimer = null;
+            this.statusEl.textContent = text;
+        }, 40);
     }
 
-    /** Playback can move to another device at any moment. */
+    /** Playback can move to another device at any moment, and a screen reader hears it go and come back. */
     private refreshConnect(): void {
         const remote = remoteDeviceName();
         if (remote === this.lastRemote) return;
+        const before = this.lastRemote;
         this.lastRemote = remote;
         this.renderDsp();
+        if (remote) this.announce(this.deadEl.textContent ?? "");
+        else if (before) this.announce("Spotify is playing on this computer again.");
     }
 
     private renderMoodState(): void {
@@ -1237,18 +1460,26 @@ export class Deck {
         this.renderSign();
         setAttr(this.signEl, "aria-label", `Mood: ${mood.name}`);
         setText(this.subEl, capitalise(mood.sub));
-        this.chip.dataset.on = mood.id !== "flat" ? "true" : "false";
-        setAttr(this.chip, "aria-label", mood.id === "flat" ? "SLAB playback moods, no mood on" : `SLAB playback moods, ${mood.name} on`);
+        this.renderLit();
     }
 
-    /** The tube keeps its gauge at any size; two lines of message get the sign's lower part. */
+    /**
+     * The tube keeps its gauge at any size; a message that wraps to two lines gets
+     * the sign's lower part. Measured, not counted, so a fallback font or a narrow
+     * name can't fool it. A hidden panel measures nothing, and opening it renders again.
+     */
     private renderSign(): void {
         const mood = moodById(this.state.moodId);
-        const compact = (this.deadEl.textContent ?? "").length > DEAD_LINE_CHARS;
+        const compact = this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
         this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
     }
 
     private toggleAuto(): void {
+        // It can always be switched off; with no beat grid it has nothing to count, so it won't go on.
+        if (!this.state.auto && !gridFor()) {
+            this.flashActivity("Auto chop needs a beat grid, and this track has none.");
+            return;
+        }
         this.state.auto = !this.state.auto;
         saveState(this.state);
         this.renderAutoState();
@@ -1284,7 +1515,69 @@ export class Deck {
         }, 1800);
     }
 
-    /** A press lights on the way down; a keyboard or auto hit lights for a moment. */
+    /**
+     * Pads and nudges act on the way down, like hardware: pointerdown for the
+     * mouse, keydown for Enter and Space. A click with no pointer behind it, from
+     * a screen reader or the number keys, still works. With `repeat`, holding
+     * keeps it going, after a pause long enough that a tap stays a tap.
+     */
+    private press(button: HTMLButtonElement, action: (event: Event) => void, repeat = false): void {
+        let downAt = 0;
+        let holdTimer: number | null = null;
+        const release = () => {
+            if (holdTimer !== null) window.clearTimeout(holdTimer);
+            holdTimer = null;
+        };
+        const hold = (event: Event, delay: number) => {
+            holdTimer = window.setTimeout(() => {
+                if (isOff(button)) return release();
+                action(event);
+                hold(event, 70);
+            }, delay);
+        };
+        button.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0 || !event.isPrimary) return;
+            // A pad is hit, not selected: focus and the caret stay where they were.
+            event.preventDefault();
+            downAt = Date.now();
+            action(event);
+            if (repeat) {
+                release();
+                hold(event, 420);
+            }
+        });
+        for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, release);
+        button.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.repeat && !repeat) return;
+            action(event);
+        });
+        button.addEventListener("keyup", (event) => {
+            if (event.key === " ") event.preventDefault();
+        });
+        button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (event.detail === 0 && Date.now() - downAt > 400) action(event);
+        });
+        this.releases.push(release);
+    }
+
+    /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
+    private firePad(pad: HTMLButtonElement, def: PadDef): void {
+        if (isOff(pad)) {
+            this.flashActivity("No beat grid for this track, so only Stop works.");
+            return;
+        }
+        void Promise.resolve(def.run()).then((ran) => {
+            if (this.disposed) return;
+            if (ran) this.hitPad(pad);
+            else if (def.miss) this.flashActivity(def.miss);
+        });
+    }
+
+    /** A hit lights the pad with the sign's gas for a moment. */
     private hitPad(pad: HTMLButtonElement | undefined): void {
         if (!pad) return;
         pad.dataset.hit = "true";
@@ -1326,10 +1619,30 @@ export class Deck {
         // A failed analysis fetch must not poison the track: if there is still
         // no grid for this URI, try again instead of trusting lastGridUri.
         if (!force && uri === this.lastGridUri && gridFor(uri)) return;
+        if (uri !== this.lastGridUri) this.gridMisses = 0;
         this.lastGridUri = uri;
         this.lastGridAttempt = Date.now();
-        await loadGrid(uri);
-        if (!this.disposed) this.refresh();
+        const grid = await loadGrid(uri);
+        if (this.disposed) return;
+        if (uri === this.lastGridUri) this.gridMisses = grid ? 0 : this.gridMisses + 1;
+        this.refresh();
+    }
+
+    /**
+     * Analysis can fail on the first try (player not hydrated, network hiccup),
+     * so a missing grid is fetched again: after 5 s, 30 s and 2 min, then left
+     * alone until the track changes. A track that changed without a songchange
+     * event is picked up here too.
+     */
+    private retryGrid(): void {
+        const uri = Spicetify.Player.data?.item?.uri;
+        if (!uri || gridFor(uri)) return;
+        if (uri !== this.lastGridUri) {
+            void this.syncGrid();
+            return;
+        }
+        const wait = GRID_RETRY_MS[this.gridMisses - 1];
+        if (wait !== undefined && Date.now() - this.lastGridAttempt > wait) void this.syncGrid(true);
     }
 
     /**
@@ -1378,15 +1691,16 @@ export class Deck {
         // the selected mood needs to reach it without waiting for a click.
         void probeDsp();
 
-        // Analysis can fail on the first try (player not hydrated, network hiccup).
-        // Retry at a slow cadence rather than leaving the deck blank forever.
-        if (!gridFor() && Date.now() - this.lastGridAttempt > 5_000) {
-            void this.syncGrid(true);
-        }
-
+        this.retryGrid();
         this.syncDspParams();
         this.refreshEqOwner();
         this.refreshConnect();
+        // Pausing changes what can be heard, so it relights the sign, tube and wheel.
+        const playingNow = isPlaying();
+        if (playingNow !== this.lastPlaying) {
+            this.lastPlaying = playingNow;
+            this.renderDsp();
+        }
         this.updateSpin();
 
         if (this.panel.hidden) return;
@@ -1406,28 +1720,9 @@ export class Deck {
             this.setLampCount(4);
             this.renderLamps(-1);
         } else {
-            const progress = progressMs();
-            const bar = barIndexAt(grid, progress);
-            const beat = beatIndexAt(grid, progress);
-            const total = barCount(grid);
-            const beatsPerBar = Math.max(1, grid.timeSignature || 4);
-            const beatInBar = ((beat - Math.max(0, bar) * beatsPerBar) % beatsPerBar + beatsPerBar) % beatsPerBar;
-
             setText(this.bpmEl, grid.tempo > 0 ? grid.tempo.toFixed(1) : "–");
-            setText(this.barEl, `Bar ${Math.max(1, bar + 1)} of ${total}`);
             setText(this.noGridEl, "");
-            this.setLampCount(Math.min(7, beatsPerBar));
-            this.renderLamps(beatInBar);
-            setAttr(this.lampsEl, "aria-label", `Beat ${beatInBar + 1} of ${beatsPerBar}`);
-
-            this.buildRuler(grid);
-            if (bar !== this.rulerBar) {
-                this.rulerBar = bar;
-                const span = grid.durationMs || 1;
-                const start = grid.bars[Math.max(0, bar)] ?? 0;
-                const lit = bar < 0 ? 0 : Math.min(RULER_WIDTH, Math.round((start / span) * (RULER_WIDTH - 1)) + 1);
-                this.rulerClip.style.clipPath = `inset(0 ${RULER_WIDTH - lit}px 0 0)`;
-            }
+            this.renderBeat(grid);
         }
 
         const speed = this.speedInfo();
@@ -1440,38 +1735,89 @@ export class Deck {
             if (off) setAttr(pad, "aria-describedby", "slab-nogrid");
             else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
         }
+        // A running loop keeps its pad lit and counts down on it.
+        const left = loopRemaining();
+        const loopPad = this.pads.find((pad) => pad.dataset.pad === "loop");
+        if (loopPad) setData(loopPad, "latched", left > 0 ? "true" : "false");
+        if (this.loopSub) setText(this.loopSub, left > 0 ? `${left} to go` : LOOP_SUB);
+        // Off with nothing to count; it can still be switched off if it was on.
+        const autoOff = !grid && !this.state.auto;
+        setOff(this.switchEl, autoOff);
+        if (autoOff) setAttr(this.switchEl, "aria-describedby", "slab-nogrid");
+        else if (this.switchEl.hasAttribute("aria-describedby")) this.switchEl.removeAttribute("aria-describedby");
+
+        if (playing && grid && this.lampFrame === null) this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
     }
 
-    /** The speed lock only explains anything while the helper is absent; otherwise it's noise. */
+    /** Bar, beat lamps and ruler, from where the record actually is. */
+    private renderBeat(grid: Grid): void {
+        const progress = progressMs();
+        const bar = barIndexAt(grid, progress);
+        const beat = beatIndexAt(grid, progress);
+        const beatsPerBar = Math.max(1, grid.timeSignature || 4);
+        // Counted from this bar's own first beat, so a pickup or a dropped beat
+        // earlier in the track can't push every later downbeat onto lamp two.
+        const firstBeat = beatIndexAt(grid, (grid.bars[Math.max(0, bar)] ?? 0) + 30);
+        const beatInBar = Math.max(0, Math.min(beatsPerBar - 1, beat - firstBeat));
+
+        setText(this.barEl, `Bar ${Math.max(1, bar + 1)} of ${barCount(grid)}`);
+        this.setLampCount(Math.min(7, beatsPerBar));
+        this.renderLamps(beatInBar);
+        setAttr(this.lampsEl, "aria-label", `Beat ${beatInBar + 1} of ${beatsPerBar}`);
+
+        this.buildRuler(grid);
+        if (bar !== this.rulerBar) {
+            this.rulerBar = bar;
+            const span = grid.durationMs || 1;
+            const start = grid.bars[Math.max(0, bar)] ?? 0;
+            const lit = bar < 0 ? 0 : Math.min(RULER_WIDTH, Math.round((start / span) * (RULER_WIDTH - 1)) + 1);
+            this.rulerClip.style.clipPath = `inset(0 ${RULER_WIDTH - lit}px 0 0)`;
+        }
+    }
+
+    /**
+     * While the panel is open and the record is playing, the lamps follow the
+     * beat every frame instead of every tenth of a second, so a lamp is never a
+     * hundred milliseconds late. Writes still only happen when a lamp changes.
+     */
+    private tickBeat(): void {
+        this.lampFrame = null;
+        if (this.disposed || this.panel.hidden || !isPlaying()) return;
+        const grid = gridFor();
+        if (!grid) return;
+        this.renderBeat(grid);
+        this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
+    }
+
+    /**
+     * The speed lock only explains anything while the helper is absent. With the
+     * helper live, tempo staying put is the README's business, not a line that
+     * sits on the sill all day.
+     */
     private speedInfo(): SpeedInfo {
         const dsp = dspStatus();
         const remote = remoteDeviceName();
-        if (dsp.linked && dsp.tapping && dsp.audio && !remote) {
-            return {
-                text: this.state.pitch === 0 ? "Tempo is untouched." : "Tempo stays the same.",
-                hint: "The SLAB helper works outside the player, so tempo is never changed.",
-            };
-        }
-        if (dsp.linked || remote) return { text: "", hint: "" };
+        if (!dsp.checked || dsp.linked || remote) return { text: "", hint: "" };
 
         const api = Spicetify.Platform.PlayerAPI;
-        const capabilities = api.getCapabilities?.();
+        const capabilities = typeof api.getCapabilities === "function" ? api.getCapabilities() : null;
         const state = api.getState();
         const reasons = state?.restrictions?.disallowSettingPlaybackSpeedReasons ?? [];
 
-        if (!capabilities?.canChangeSpeed) {
+        if (capabilities && !capabilities.canChangeSpeed) {
             return {
                 text: "This client has no playback speed control.",
                 hint: "This client does not expose playback speed.",
             };
         }
         if (reasons.length > 0) {
-            const reason = reasons[0];
+            const reason = String(reasons[0]);
             return {
                 text: reason === "unknown" ? "Spotify locks playback speed for music." : `Speed is locked: ${reason.replace(/_/g, " ")}.`,
                 hint: "Spotify blocks playback speed for music on this build. SLAB shapes tone and edits instead.",
             };
         }
+        if (!capabilities) return { text: "", hint: "" };
         return {
             text: "This build allows playback speed.",
             hint: "This build allows playback speed.",

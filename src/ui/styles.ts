@@ -469,13 +469,13 @@ ${FONT_CSS}
 .slab-range::-webkit-slider-runnable-track { height: 61px; background: transparent; }
 .slab-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 37px;
+  width: var(--slab-thumb, 57px);
   height: 61px;
   background: transparent;
   cursor: grab;
 }
 .slab-range::-moz-range-track { height: 61px; background: transparent; }
-.slab-range::-moz-range-thumb { width: 37px; height: 61px; background: transparent; border: 0; }
+.slab-range::-moz-range-thumb { width: var(--slab-thumb, 57px); height: 61px; background: transparent; border: 0; }
 
 .slab-wheel,
 .slab-roll,

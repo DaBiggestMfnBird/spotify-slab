@@ -12,7 +12,9 @@ const DEFAULTS: SlabState = {
     eqOwner: "auto",
 };
 
-function clampPitch(value: number): number {
+/** The one rule for a pitch value: ±1200 cents, on the slider's 10-cent grid. */
+export function clampPitch(value: number): number {
+    if (!Number.isFinite(value)) return 0;
     return Math.max(-1200, Math.min(1200, Math.round(value / 10) * 10));
 }
 
