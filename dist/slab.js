@@ -316,6 +316,11 @@ self.onmessage = (event) => {
       });
     });
   }
+  function autoBarsAhead(index) {
+    if (!autoUnsub || autoBaseline || index < 0) return null;
+    const from = Math.max(autoMaxBar, index);
+    return (Math.floor(from / autoEvery) + 1) * autoEvery - index;
+  }
   function stopAuto() {
     autoUnsub?.();
     autoUnsub = null;
@@ -706,9 +711,12 @@ self.onmessage = (event) => {
     const angle = degrees * Math.PI / 180;
     return `${fmt(cx + radius * Math.cos(angle))} ${fmt(cy + radius * Math.sin(angle))}`;
   }
-  var WHEEL_SIZE = 57;
-  var TYRE_RADIUS = 18.5;
-  var BOX = `viewBox="-28.5 -28.5 57 57" width="57" height="57" aria-hidden="true" focusable="false"`;
+  var TYRE_RADIUS = 21;
+  var WHEEL_SIZE = 47;
+  var POKE_X = 1.6;
+  var POKE_Y = 2.3;
+  var HALF = WHEEL_SIZE / 2;
+  var BOX = `viewBox="${-HALF} ${-HALF} ${WHEEL_SIZE} ${WHEEL_SIZE}" width="${WHEEL_SIZE}" height="${WHEEL_SIZE}" aria-hidden="true" focusable="false"`;
   var CHROME = (id) => `
   <linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
     <stop offset="0" stop-color="#F7F9F9"/><stop offset=".42" stop-color="#D7DCDF"/>
@@ -718,51 +726,59 @@ self.onmessage = (event) => {
   var WHEEL_STATIC = `
 <svg class="slab-wheel-base" ${BOX}>
   <defs>${CHROME("slab-chrome-rim")}</defs>
-  <circle cy="2" r="19.5" fill="#000" opacity=".5"/>
+  <circle cy="2" r="${TYRE_RADIUS + 1}" fill="#000" opacity=".5"/>
   <circle r="${TYRE_RADIUS}" fill="#0E0D0D"/>
-  <circle r="${TYRE_RADIUS - 0.5}" fill="none" stroke="#343332"/>
-  <circle r="13.2" fill="none" stroke="#F6F0E4" stroke-width="2.6"/>
-  <circle r="13.2" fill="none" stroke="#C4122C" stroke-width=".9"/>
-  <circle r="11.8" fill="#15171A"/>
-  <circle r="10.9" fill="none" stroke="url(#slab-chrome-rim)" stroke-width="1.9"/>
+  <circle r="${TYRE_RADIUS - 0.6}" fill="none" stroke="#343332" stroke-width=".7"/>
+  <circle r="17.6" fill="none" stroke="#F4F0E6" stroke-width="1.45"/>
+  <circle r="16.15" fill="none" stroke="#E2B53A" stroke-width=".85"/>
+  <circle r="13.3" fill="none" stroke="url(#slab-chrome-rim)" stroke-width="1.8"/>
+  <circle r="12.4" fill="#121416"/>
 </svg>`;
-  function elbow(angle) {
-    const out = (radius, side, lean = 0) => {
-      const a = (angle + lean) * Math.PI / 180;
-      const radial = [Math.cos(a), Math.sin(a)];
-      const tangent = [-radial[1], radial[0]];
-      return `${fmt(radial[0] * radius + tangent[0] * side)} ${fmt(radial[1] * radius + tangent[1] * side)}`;
-    };
-    const body = `M${out(11.5, -2)}L${out(21, -1.9)}L${out(28.2, -1.5, 8)}L${out(28.2, 1.5, 8)}L${out(21, 1.9)}L${out(11.5, 2)}Z`;
-    const shine = `M${out(12.5, -0.4)}L${out(21, -0.4)}L${out(27.2, -0.1, 8)}`;
-    return `<path d="${body}" fill="#C4CACE" stroke="#0C0D0E" stroke-width=".8" stroke-linejoin="round"/><path d="${shine}" fill="none" stroke="#FFFFFF" stroke-width="1.1" stroke-linecap="butt" stroke-linejoin="round"/>`;
-  }
-  function wheelSpin() {
+  function wheelSpokes() {
     let spokes = "";
-    for (let i = 0; i < 10; i++) {
-      spokes += `<path d="M${polar(2, i * 36)}L${polar(9.8, i * 36)}"/>`;
+    for (let i = 0; i < 30; i++) {
+      const a = i * 12;
+      spokes += `<path d="M${polar(12.3, a - 2.9)}L${polar(6.8, a - 3.8)}L${polar(6.8, a + 3.8)}L${polar(12.3, a + 2.9)}Z" fill="#B9C0C5"/>`;
+      spokes += `<path d="M${polar(12.05, a - 1.1)}L${polar(7.05, a - 1.5)}" stroke="#FFFFFF" stroke-width=".5"/>`;
     }
-    let elbows = "";
-    for (let i = 0; i < 5; i++) elbows += elbow(i * 72 + 18);
-    return `
-<svg class="slab-wheel-spin" ${BOX}>
-  <defs>${CHROME("slab-chrome-hub")}</defs>
-  <g fill="none" stroke="#AEB5BA" stroke-width="1.2">${spokes}</g>
-  ${elbows}
-  <path d="M-7 -2.2L-2.2 -1.5L2.2 -1.5L7 -2.2L7 2.2L2.2 1.5L-2.2 1.5L-7 2.2Z" fill="url(#slab-chrome-hub)" stroke="#16181A" stroke-width=".7" stroke-linejoin="round"/>
-  <circle r="2.2" fill="url(#slab-chrome-hub)" stroke="#16181A" stroke-width=".6"/>
-</svg>`;
+    return `<svg class="slab-wheel-spokes" ${BOX}>${spokes}</svg>`;
   }
-  var WHEEL_SPIN = wheelSpin();
+  var WHEEL_SPOKES = wheelSpokes();
+  var WHEEL_CONE = `
+<svg class="slab-wheel-cone" ${BOX}>
+  <defs>
+   <radialGradient id="slab-poke-cone" cx=".34" cy=".30" r=".75">
+     <stop offset="0" stop-color="#FFFFFF"/><stop offset=".28" stop-color="#EEF1F2"/>
+     <stop offset=".68" stop-color="#9EA6AB"/><stop offset="1" stop-color="#4E565B"/>
+   </radialGradient>
+   <radialGradient id="slab-poke-cast" cx=".5" cy=".5" r=".5">
+     <stop offset="0" stop-color="#000" stop-opacity=".75"/><stop offset=".55" stop-color="#000" stop-opacity=".38"/>
+     <stop offset="1" stop-color="#000" stop-opacity="0"/>
+   </radialGradient>
+  </defs>
+  <ellipse cx="${fmt(POKE_X + 2.5)}" cy="${fmt(POKE_Y + 3.2)}" rx="9.3" ry="8.4" fill="url(#slab-poke-cast)"/>
+  <circle r="7.15" fill="none" stroke="#F5F7F8" stroke-width="1.1"/>
+  <path d="M${polar(6.8, -120)}A6.8 6.8 0 1 0 ${polar(6.8, 60)}L${POKE_X} ${POKE_Y}Z" fill="#6F777C"/>
+  <circle cx="${fmt(POKE_X * 0.55)}" cy="${fmt(POKE_Y * 0.55)}" r="6.1" fill="url(#slab-poke-cone)"/>
+</svg>`;
+  var WHEEL_KNOCKOFF = `
+<svg class="slab-wheel-knock" ${BOX}>
+  <g transform="translate(${POKE_X} ${POKE_Y})">
+    <path d="M-7.7 -2L-2.6 -1.45L2.6 -1.45L7.7 -2L7.7 2L2.6 1.45L-2.6 1.45L-7.7 2Z" fill="#F1F4F5" stroke="#16181A" stroke-width=".65" stroke-linejoin="round"/>
+    <circle r="1.8" fill="#FFFFFF" stroke="#16181A" stroke-width=".55"/>
+  </g>
+</svg>`;
   function chipIcon() {
-    let pokes = "";
-    for (const a of [25, 115, 205, 295]) pokes += `<path d="M${polar(6.6, a, 10, 10)}L${polar(9.4, a, 10, 10)}"/>`;
+    let spokes = "";
+    for (let i = 0; i < 10; i++) spokes += `<path d="M${polar(5, i * 36 + 18, 10, 10)}L${polar(2.2, i * 36 + 18, 10, 10)}"/>`;
     return `
 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-  <g stroke="currentColor" stroke-width="2.2" stroke-linecap="round">${pokes}</g>
-  <circle cx="10" cy="10" r="7.2" fill="currentColor"/>
-  <circle cx="10" cy="10" r="4.6" fill="#141414" stroke="#FFFFFF" stroke-width="1.4"/>
-  <circle cx="10" cy="10" r="1.7" fill="currentColor"/>
+  <circle cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
+  <circle class="slab-chip-plain" cx="10" cy="10" r="6.4" stroke="currentColor" stroke-width="1"/>
+  <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="#F4F0E6" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
+  <g stroke="currentColor" stroke-width="1" stroke-linecap="round">${spokes}</g>
+  <path d="M6.4 9.2H13.6V10.8H6.4Z" fill="currentColor"/>
+  <circle cx="10" cy="10" r="1.3" fill="currentColor"/>
 </svg>`;
   }
   var CHIP_ICON = chipIcon();
@@ -770,13 +786,14 @@ self.onmessage = (event) => {
 <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false">
   <path d="M1.5 1.5l9 9m0-9l-9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 </svg>`;
-  function screw(x, y, slot) {
-    return `<g transform="translate(${x} ${y})"><circle r="3.6" fill="#55595D"/><circle r="3" fill="#C9CDD0"/><path d="M${polar(2.7, slot)}L${polar(2.7, slot + 180)}" stroke="#2B2D30" stroke-width="1"/></g>`;
-  }
-  var SILL_SCREWS = `
-<svg class="slab-sill-screws" viewBox="0 0 400 84" width="400" height="84" aria-hidden="true" focusable="false">
-  ${screw(9, 11, 20)}${screw(9, 73, 110)}${screw(391, 11, 70)}${screw(391, 73, 150)}
+  function phillips(slot) {
+    return `<svg class="slab-screw" viewBox="-4 -4 8 8" width="8" height="8" aria-hidden="true" focusable="false">
+  <circle r="3.7" fill="#4A4E52"/><circle r="3.1" fill="#C3C8CC"/><circle r="3.1" fill="none" stroke="#F2F4F5" stroke-width=".5" stroke-dasharray="4.9 14.6" transform="rotate(200)"/>
+  <path d="M${polar(2.2, slot)}L${polar(2.2, slot + 180)}M${polar(2.2, slot + 90)}L${polar(2.2, slot + 270)}" stroke="#2B2D30" stroke-width=".9" stroke-linecap="round"/>
 </svg>`;
+  }
+  var SILL_SCREW_LEFT = phillips(28);
+  var SILL_SCREW_RIGHT = phillips(71);
 
   // src/ui/neon-glyphs.ts
   var NEON_GLYPHS = {
@@ -990,17 +1007,40 @@ self.onmessage = (event) => {
   var CSS = `
 ${FONT_CSS}
 .slab-panel {
+  /* Whitewall, and its softer second line. */
   --wall: #FFF3E0;
-  --wall-soft: #F2E6D2;
-  --gas: #35DDF5;
-  --gas-glass: #86F0FC;
-  --gas-core: #EBFEFF;
-  /* Fat rolls with soft seams. The light comes from above, across all of them. */
-  --rolls: repeating-linear-gradient(90deg, #2C0D12 0, #43161C 5px, #4E1B22 11px, #43161C 17px, #2C0D12 22px);
-  --press-light: linear-gradient(180deg, rgba(255, 232, 220, 0.13) 0, rgba(255, 232, 220, 0.02) 42%, rgba(0, 0, 0, 0.18) 100%);
-  /* The same rolls with gas on them, mixed here because cyan over red turns grey. */
-  --lit-rolls: repeating-linear-gradient(90deg, #0C4A59 0, #105F72 5px, #126F84 11px, #105F72 17px, #0C4A59 22px);
-  --lit-edge: var(--gas);
+  --wall-soft: #EADCC6;
+  /*
+   * Gas: clear glass with argon and a drop of mercury, which burns blue. Neon
+   * proper only makes reds and oranges, and cyan needs phosphor-coated tube.
+   * Every use of the gas goes through these, so the sign, the number, the rail
+   * tube and a lit press are always one gas.
+   */
+  --gas: #4D6BFF;
+  --gas-glass: #9DB0FF;
+  --gas-core: #F3F5FF;
+  --gas-spill: color-mix(in srgb, var(--gas) 24%, transparent);
+  /* Gold, for the Vogue line and the pinstripe. Never a state colour. */
+  --gold: #D4A24C;
+  --gold-bright: #F0C46A;
+  /*
+   * Tuck and roll, rolled horizontally: seam, lit lip, padded crest, fall-off
+   * into the next seam. --roll is set per control so the rolls divide it
+   * evenly and a seam never runs through a line of type: a pad gets two rolls
+   * with the seam between its name and its sub-label, a small button one.
+   */
+  --rolls: repeating-linear-gradient(180deg,
+    #0D0304 0, #0D0304 1px, #6E3139 1px, #6A2D35 calc(var(--roll) * 0.22),
+    #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
+    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
+  /* The same rolls with the sign's gas falling on them: the gas mixed into the oxblood, never laid over it. */
+  --lit-rolls: repeating-linear-gradient(180deg,
+    #0B0820 0, #0B0820 1px,
+    color-mix(in srgb, var(--gas) 62%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
+    color-mix(in srgb, var(--gas) 52%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 42%, #3A151B) calc(var(--roll) * 0.83),
+    color-mix(in srgb, var(--gas) 26%, #22080C) calc(var(--roll) * 0.94), #0B0820 var(--roll));
+  --lit-edge: var(--gas-glass);
+  --roll: 18px;
   position: fixed;
   z-index: 2147483000;
   width: 400px;
@@ -1008,12 +1048,14 @@ ${FONT_CSS}
   box-sizing: border-box;
   overflow: hidden auto;
   overscroll-behavior: contain;
-  /* No scrollbar to take width from a fixed layout; the lips say when there is more. */
+  scroll-padding-block: 30px 70px;
+  /* No scrollbar to take width from a fixed layout; the lip and the pinned sill say when there is more. */
   scrollbar-width: none;
-  border-radius: 50% 50% 12px 12px / 16px 16px 12px 12px;
+  /* A 77-92 GM deck lid: nearly flat, a shallow crown, tight corners. */
+  border-radius: 50% 50% 10px 10px / 6px 6px 10px 10px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.62), 0 2px 0 rgba(0, 0, 0, 0.6);
   color: var(--wall);
-  font: 500 13px/1.25 "SLAB Barlow", "Barlow Semi Condensed", "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  font: 500 12px/16px "SLAB Barlow", "Barlow Semi Condensed", "Bahnschrift SemiCondensed", "Bahnschrift", "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
   font-variant-numeric: tabular-nums;
   text-align: left;
   letter-spacing: 0;
@@ -1021,7 +1063,10 @@ ${FONT_CSS}
 }
 .slab-panel::-webkit-scrollbar { display: none; }
 .slab-panel[hidden] { display: none; }
-.slab-panel[data-gas="off"] { --lit-rolls: repeating-linear-gradient(90deg, #4A4A49 0, #585857 5px, #626261 11px, #585857 17px, #4A4A49 22px); --lit-edge: var(--wall); }
+.slab-panel[data-gas="off"] { --lit-rolls: repeating-linear-gradient(180deg,
+    #121212 0, #121212 1px, #8A8A88 1px, #7E7E7C calc(var(--roll) * 0.22),
+    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
+    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); --lit-edge: var(--wall); }
 .slab-panel *, .slab-panel *::before, .slab-panel *::after { box-sizing: border-box; }
 :where(.slab-panel) button {
   font: inherit;
@@ -1034,14 +1079,13 @@ ${FONT_CSS}
   -webkit-appearance: none;
   appearance: none;
 }
-:where(.slab-panel) button:disabled,
 :where(.slab-panel) button[aria-disabled="true"] { cursor: not-allowed; }
 .slab-panel p { margin: 0; }
 .slab-panel svg { display: block; }
+/* An outline only, so a focused press keeps its bevel and a selected door its recess. */
 .slab-panel button:focus-visible {
   outline: 2px solid #fff;
-  outline-offset: 1px;
-  box-shadow: 0 0 0 4px #000;
+  outline-offset: 2px;
 }
 .slab-sr {
   position: absolute;
@@ -1059,9 +1103,10 @@ ${FONT_CSS}
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Short windows only: a chrome lip and a fade on whichever edge hides something. */
+/* Short windows only: a chrome lip and a light fade on the top edge when something is hidden above. */
 .slab-lip {
   position: sticky;
+  top: 0;
   z-index: 3;
   height: 0;
   pointer-events: none;
@@ -1071,80 +1116,107 @@ ${FONT_CSS}
   position: absolute;
   left: 0;
   right: 0;
-  height: 26px;
+  top: 0;
+  height: 12px;
+  border-top: 2px solid #D8DCDF;
+  background: linear-gradient(180deg, rgba(12, 2, 5, 0.6), rgba(12, 2, 5, 0));
   opacity: 0;
 }
-.slab-lip-top { top: 0; }
-.slab-lip-top::before {
-  top: 0;
-  border-top: 2px solid #D8DCDF;
-  background: linear-gradient(180deg, rgba(12, 2, 5, 0.85), rgba(12, 2, 5, 0));
-}
-.slab-lip-end { bottom: 0; }
-.slab-lip-end::before {
-  bottom: 0;
-  border-bottom: 2px solid #D8DCDF;
-  background: linear-gradient(0deg, rgba(12, 2, 5, 0.85), rgba(12, 2, 5, 0));
-}
-.slab-panel[data-above="true"] .slab-lip-top::before,
-.slab-panel[data-more="true"] .slab-lip-end::before { opacity: 1; }
+.slab-panel[data-above="true"] .slab-lip::before { opacity: 1; }
 
-/* Paint. Candy is a deep coat under a bright one, so colour alone does the depth:
-   near-black wine where the body turns away, bright candy where the lid and the
-   crease catch the light. There is no flake or noise, so type always sits on
-   calm colour. */
+/*
+ * Paint. Candy is a deep coat under a bright one, so colour does the depth:
+ * near-black wine where the body turns away, saturated red on the face, and
+ * a warmer, hotter red only where the light rolls over the crown and the body
+ * line. One light for the whole body; the doors and the lower panel share it.
+ * The clear coat shows as sharp reflections, and only where there's no type.
+ */
 .slab-body {
   position: relative;
   width: 400px;
   padding: 0 10px;
   border-radius: inherit;
   background:
-    linear-gradient(90deg, rgba(18, 0, 5, 0.6) 0, rgba(18, 0, 5, 0) 16px, rgba(18, 0, 5, 0) calc(100% - 16px), rgba(18, 0, 5, 0.6) 100%),
-    linear-gradient(180deg, #33040F 0, #8C0B25 5px, #CE1534 14px, #A30D29 28px, #6A0A1E 46px, #4C0616 74px, #470515 100%);
+    linear-gradient(90deg, rgba(16, 0, 5, 0.72) 0, rgba(16, 0, 5, 0.32) 6px, rgba(16, 0, 5, 0) 14px, rgba(16, 0, 5, 0) calc(100% - 14px), rgba(16, 0, 5, 0.32) calc(100% - 6px), rgba(16, 0, 5, 0.72) 100%),
+    linear-gradient(180deg, #E8202C 0, #B20E27 3px, #860A20 12px, #6E0719 30px, #640618 46%, #520514 74%, #3A030E 100%);
   box-shadow: inset 0 0 0 1px rgba(28, 0, 6, 0.55);
 }
+/* Clear coat over the crown, fading out before the corners. */
+.slab-body::before {
+  content: "";
+  position: absolute;
+  left: 9%;
+  right: 9%;
+  top: 2px;
+  height: 8px;
+  border-top: 1px solid rgba(255, 241, 238, 0.85);
+  border-radius: 50% 50% 0 0 / 4px 4px 0 0;
+  background: linear-gradient(180deg, rgba(255, 214, 206, 0.2), rgba(255, 214, 206, 0));
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 22%, #000 78%, transparent);
+  pointer-events: none;
+}
+/* A streak down each side rail, where the body turns away. */
+.slab-body::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 48px;
+  bottom: 96px;
+  border-left: 1px solid rgba(255, 214, 206, 0.3);
+  border-right: 1px solid rgba(255, 214, 206, 0.22);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 20%, #000 70%, transparent);
+  mask-image: linear-gradient(180deg, transparent, #000 20%, #000 70%, transparent);
+  pointer-events: none;
+}
+.slab-body > * { position: relative; }
+/* Primer is the first coat of a candy job: flat, matte, nothing reflects. */
 .slab-panel[data-primer="true"] .slab-body {
-  background: #575654;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.28) 0, rgba(0, 0, 0, 0) 14px, rgba(0, 0, 0, 0) calc(100% - 14px), rgba(0, 0, 0, 0.28) 100%),
+    #575654;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3);
 }
-/* The body line. Same crease in candy and in primer; only candy catches light. */
+.slab-panel[data-primer="true"] .slab-body::before,
+.slab-panel[data-primer="true"] .slab-body::after { display: none; }
+
+/* The body line: a crease across the car, its edge catching the light. */
 .slab-lower {
-  position: relative;
   margin: 8px -10px 0;
   padding: 0 10px;
-  border-top: 1px solid rgba(20, 0, 5, 0.8);
-  background:
-    linear-gradient(90deg, rgba(18, 0, 5, 0.6) 0, rgba(18, 0, 5, 0) 16px, rgba(18, 0, 5, 0) calc(100% - 16px), rgba(18, 0, 5, 0.6) 100%),
-    linear-gradient(180deg, #A60F2C 0, #BC1231 7px, #8E0C26 22px, #5E0819 44px, #450514 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 190, 190, 0.45);
 }
-.slab-panel[data-primer="true"] .slab-lower {
-  background: #515050;
-  border-top-color: rgba(0, 0, 0, 0.4);
-  box-shadow: none;
+.slab-lower::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 10px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(18, 0, 5, 0.85) 0, rgba(18, 0, 5, 0.85) 1px, rgba(255, 170, 160, 0.55) 1px, rgba(255, 170, 160, 0.55) 2px, rgba(232, 32, 44, 0.34) 2px, rgba(232, 32, 44, 0) 10px);
+}
+.slab-panel[data-primer="true"] .slab-lower::before {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.45) 0, rgba(0, 0, 0, 0.45) 1px, rgba(255, 255, 255, 0.1) 1px, rgba(255, 255, 255, 0.1) 2px, transparent 2px);
 }
 
-/* Deck lid, with the badge mounted on it. */
+/* Deck lid, with the nameplate mounted on it. */
 .slab-head {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   height: 40px;
-  padding: 8px 0 0 10px;
+  padding: 8px 0 0 12px;
 }
-.slab-badge { flex: none; }
+.slab-badge { flex: none; display: block; }
 .slab-tag {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
-  line-height: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--wall-soft);
 }
-.slab-tag[data-flash="true"] { color: var(--wall); font-weight: 600; }
 .slab-close {
   flex: none;
   width: 32px;
@@ -1156,40 +1228,40 @@ ${FONT_CSS}
 }
 .slab-close:hover { background: rgba(30, 5, 10, 0.45); }
 
-/* The trunk. */
+/* The trunk: a chrome frame round a vinyl-wrapped board the glass is mounted on. */
 .slab-trim {
-  position: relative;
   padding: 3px;
-  border-radius: 50% 50% 5px 5px / 10px 10px 5px 5px;
+  border-radius: 6px;
   background: linear-gradient(180deg, #F4F6F7 0, #AEB5BA 18%, #E9EDEF 40%, #7E858A 52%, #C3C9CD 72%, #8C9398 100%);
   box-shadow: 0 0 0 1px rgba(30, 0, 6, 0.8), 0 2px 3px 1px rgba(30, 0, 6, 0.7);
 }
 .slab-bay {
   position: relative;
-  padding: 7px 7px 5px;
+  padding: 8px 8px 4px;
   overflow: hidden;
-  border-radius: 50% 50% 3px 3px / 8px 8px 3px 3px;
+  border-radius: 3px;
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.4) 0, rgba(0, 0, 0, 0.04) 26px, rgba(255, 226, 214, 0.05) 46%, rgba(0, 0, 0, 0.22) 100%),
-    repeating-linear-gradient(90deg, #220A0D 0, #2F1014 7px, #3A1519 17px, #2F1014 27px, #220A0D 34px);
-  box-shadow: 0 0 0 1px #120405;
+    radial-gradient(120% 70% at 50% 0%, rgba(255, 225, 215, 0.1), rgba(255, 225, 215, 0) 60%),
+    linear-gradient(180deg, #2A0C10, #1E070A);
+  /* The welt: piping sewn round the board's edge. */
+  box-shadow: inset 0 0 0 4px #1A0609, inset 0 0 0 5px #3A1A1E, 0 0 0 1px #120405;
 }
-/* The gas landing on the lining. Static, gone with the gas, and screened so it adds
-   cyan light to the pleats instead of greying them. */
+/* The gas landing on the vinyl, screened so it adds light instead of greying it. Gone with the gas. */
 .slab-bay::before {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   mix-blend-mode: screen;
-  background: radial-gradient(72% 36% at 50% 20%, rgba(0, 96, 124, 0.34) 0, rgba(0, 96, 124, 0.14) 60%, rgba(0, 96, 124, 0) 100%);
+  background: radial-gradient(72% 36% at 50% 20%, var(--gas-spill) 0, color-mix(in srgb, var(--gas) 8%, transparent) 60%, transparent 100%);
 }
 .slab-panel[data-gas="off"] .slab-bay::before { display: none; }
 .slab-bay > * { position: relative; }
 
 ${NEON_CSS}
+
 /* The sign stage holds its size in every state. */
-.slab-stage { height: 88px; }
+.slab-stage { height: 84px; }
 .slab-sign {
   position: absolute;
   left: 0;
@@ -1203,12 +1275,12 @@ ${NEON_CSS}
   right: 0;
   bottom: 0;
   text-align: center;
-  font-size: 13px;
   line-height: 18px;
 }
 .slab-sub { color: var(--wall-soft); }
-/* Two lines at most, however long the device is called. */
+/* On the dead glass, two lines at most however long the device is called. */
 .slab-dead {
+  font-size: 14px;
   font-weight: 600;
   color: var(--wall);
   display: -webkit-box;
@@ -1216,8 +1288,11 @@ ${NEON_CSS}
   -webkit-line-clamp: 2;
   overflow: hidden;
 }
-.slab-dead:empty { display: none; }
 .slab-panel[data-primer="true"] .slab-sub { visibility: hidden; }
+/* A short window gets the compact sign and one line under it. */
+.slab-panel[data-short="true"] .slab-stage { height: 70px; }
+.slab-panel[data-short="true"] .slab-sub { display: none; }
+.slab-panel[data-short="true"] .slab-dead { -webkit-line-clamp: 1; }
 
 /* Pitch. */
 .slab-pitch-head {
@@ -1225,20 +1300,24 @@ ${NEON_CSS}
   align-items: center;
   gap: 4px;
   height: 42px;
+  margin-top: 4px;
 }
 .slab-pitch-words {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
-.slab-pitch-label { font-weight: 700; font-size: 14px; line-height: 17px; }
-.slab-semi { font-size: 12.5px; line-height: 16px; color: var(--wall-soft); white-space: nowrap; }
+.slab-pitch-label { font-weight: 600; font-size: 14px; line-height: 17px; color: var(--wall-soft); }
+.slab-semi { color: var(--wall-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .slab-number-tube { flex: none; width: 118px; height: 42px; }
-.slab-nudges { flex: none; display: flex; gap: 3px; margin-left: 8px; }
+.slab-nudges { flex: none; display: flex; gap: 4px; margin-left: 8px; }
 
-/* One press material: tuck and roll in the interior oxblood, on real travel. */
+/*
+ * One press material: tuck and roll in the interior oxblood, on real travel.
+ * A hit lights the rolls with the sign's gas; disabled rolls go dull and flat.
+ */
 .slab-press {
   position: relative;
   display: inline-flex;
@@ -1247,8 +1326,8 @@ ${NEON_CSS}
   justify-content: center;
   border-radius: 4px;
   color: var(--wall);
-  background: var(--press-light), var(--rolls);
-  box-shadow: inset 0 1px 0 rgba(255, 220, 220, 0.2), inset 0 -2px 3px rgba(0, 0, 0, 0.4), 0 2px 0 #0B0203, 0 3px 4px rgba(0, 0, 0, 0.5);
+  background: var(--rolls);
+  box-shadow: inset 0 1px 0 rgba(255, 220, 220, 0.2), inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 2px 0 #0B0203, 0 3px 4px rgba(0, 0, 0, 0.5);
   transition: transform 70ms ease-out, box-shadow 70ms ease-out;
 }
 .slab-press > * { position: relative; z-index: 1; }
@@ -1261,46 +1340,47 @@ ${NEON_CSS}
   opacity: 0;
   pointer-events: none;
 }
-/* Hover lifts the rolls a little; a hit lights them with the sign's gas. */
 .slab-press::before {
-  background: rgba(255, 243, 224, 0.08);
+  background: rgba(255, 243, 224, 0.09);
   transition: opacity 90ms ease-out;
 }
 .slab-press::after {
-  background: var(--press-light), var(--lit-rolls);
+  background: var(--lit-rolls);
   box-shadow: inset 0 0 0 1.5px var(--lit-edge);
   transition: opacity 160ms ease-out;
 }
-.slab-press:hover:not(:disabled):not([aria-disabled="true"])::before { opacity: 1; }
-.slab-press:active:not(:disabled):not([aria-disabled="true"]),
-.slab-press[data-hit="true"]:not(:disabled):not([aria-disabled="true"]) {
+.slab-press:hover:not([aria-disabled="true"])::before { opacity: 1; }
+.slab-press:active:not([aria-disabled="true"]),
+.slab-press[data-hit="true"]:not([aria-disabled="true"]),
+.slab-press[data-latched="true"],
+.slab-auto-press[aria-checked="true"] {
   transform: translateY(2px);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7), 0 0 0 #0B0203;
 }
-.slab-press:active:not(:disabled):not([aria-disabled="true"])::after,
-.slab-press[data-hit="true"]:not(:disabled):not([aria-disabled="true"])::after { opacity: 1; transition-duration: 0ms; }
-.slab-press:disabled,
+.slab-press:active:not([aria-disabled="true"])::after,
+.slab-press[data-hit="true"]:not([aria-disabled="true"])::after,
+.slab-press[data-latched="true"]::after,
+.slab-auto-press[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
 .slab-press[aria-disabled="true"] {
-  background: #2A1B1D;
-  color: #D6CCC2;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  filter: saturate(0.45) brightness(0.62);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-.slab-nudge { width: 42px; height: 36px; font-weight: 700; font-size: 13px; }
+.slab-nudge { --roll: 36px; width: 42px; height: 36px; font-weight: 600; font-size: 14px; }
 
-/* The rail. Height matches the wheel so nothing can overrun it. */
-.slab-rail { position: relative; height: 61px; margin: 4px 0 0 7px; }
+/* The rail. Its geometry comes from the wheel's own numbers, set on it in deck.ts. */
+.slab-rail { position: relative; height: calc(var(--slab-wheel) + 10px); margin: 4px 0 0 7px; }
 .slab-rail-tube,
 .slab-rail-hot {
   position: absolute;
-  top: 28px;
+  top: calc(var(--slab-wheel) / 2 - 2.5px);
   height: 5px;
   pointer-events: none;
 }
 .slab-rail-tube {
   border-radius: 1px;
-  background: linear-gradient(180deg, #1C8299 0, #2BA6BE 45%, #187689 100%);
-  box-shadow: 0 0 2px rgba(53, 221, 245, 0.6), 0 0 6px rgba(53, 221, 245, 0.22), 0 5px 5px rgba(0, 0, 0, 0.5);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gas) 56%, #000) 0, var(--gas) 45%, color-mix(in srgb, var(--gas) 50%, #000) 100%);
+  box-shadow: 0 0 2px color-mix(in srgb, var(--gas) 60%, transparent), 0 0 6px color-mix(in srgb, var(--gas) 24%, transparent), 0 5px 5px rgba(0, 0, 0, 0.5);
 }
 /* Electrode caps close the tube exactly at the scale ends. */
 .slab-rail-tube::before,
@@ -1316,18 +1396,18 @@ ${NEON_CSS}
 .slab-rail-tube::before { left: -2px; }
 .slab-rail-tube::after { right: -2px; }
 .slab-rail-hot {
-  background: #E2FCFF;
-  box-shadow: 0 0 2px 1px var(--gas), 0 0 8px 2px rgba(53, 221, 245, 0.7), 0 0 20px 5px rgba(53, 221, 245, 0.28);
+  background: var(--gas-core);
+  box-shadow: 0 0 2px 1px var(--gas), 0 0 8px 2px color-mix(in srgb, var(--gas) 70%, transparent), 0 0 20px 5px color-mix(in srgb, var(--gas) 28%, transparent);
   transform: scaleX(0);
 }
 .slab-rail-hot-up { transform-origin: 0 50%; }
 .slab-rail-hot-down { transform-origin: 100% 50%; }
 .slab-panel[data-tube="idle"] .slab-rail-tube {
-  background: linear-gradient(180deg, #4E7079, #6A8C95 45%, #41606A);
+  background: linear-gradient(180deg, #4E5A79, #6A779A 45%, #414C69);
   box-shadow: 0 5px 5px rgba(0, 0, 0, 0.55);
 }
 .slab-panel[data-tube="idle"] .slab-rail-hot {
-  background: linear-gradient(180deg, #9CC4CD, #BFDFE6);
+  background: linear-gradient(180deg, #A9B4D6, #C8D0EA);
   box-shadow: none;
 }
 .slab-panel[data-tube="off"] .slab-rail-tube {
@@ -1339,9 +1419,10 @@ ${NEON_CSS}
   background: linear-gradient(180deg, #F0F2F2, #D2D6D6);
   box-shadow: none;
 }
+/* Chrome clips holding the tube at each mood's cents. They reflect; they don't glow. */
 .slab-clip {
   position: absolute;
-  top: 25px;
+  top: calc(var(--slab-wheel) / 2 - 5.5px);
   width: 5px;
   height: 11px;
   margin-left: -2.5px;
@@ -1351,20 +1432,16 @@ ${NEON_CSS}
   pointer-events: none;
 }
 .slab-clip[data-lit="true"] {
-  background: var(--gas-core);
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.8), 0 0 5px 2px rgba(53, 221, 245, 0.85);
-}
-.slab-panel:not([data-tube="on"]) .slab-clip[data-lit="true"] {
-  background: linear-gradient(180deg, #FBFCFC, #C6CCD0);
-  box-shadow: 0 0 0 1px var(--wall);
+  background: linear-gradient(180deg, #FFFFFF, #E6E9EB 45%, #B9C0C5 55%, #FFFFFF);
+  box-shadow: 0 0 0 1px var(--gold), 0 2px 2px rgba(0, 0, 0, 0.6);
 }
 
-/* The scale, in the band under the tyre, above the wheel in the stack. */
+/* The scale, in the band under the tyre, above the wheel in the stack. Flat marks, no glow. */
 .slab-rail-marks {
   position: absolute;
   left: 0;
   right: 0;
-  top: 50px;
+  top: calc(var(--slab-wheel) - 1px);
   height: 11px;
   z-index: 1;
   pointer-events: none;
@@ -1379,13 +1456,11 @@ ${NEON_CSS}
 }
 .slab-rail-line { background: rgba(255, 243, 224, 0.3); }
 .slab-rail-run {
-  height: 3px;
   background: var(--gas-glass);
-  box-shadow: 0 0 5px 1px rgba(53, 221, 245, 0.6);
   transform: scaleX(0);
 }
-.slab-panel[data-tube="idle"] .slab-rail-run { background: #9CC4CD; box-shadow: none; }
-.slab-panel[data-tube="off"] .slab-rail-run { background: var(--wall); box-shadow: none; }
+.slab-panel[data-tube="idle"] .slab-rail-run { background: #A9B4D6; }
+.slab-panel[data-tube="off"] .slab-rail-run { background: var(--wall); }
 .slab-clip-foot {
   position: absolute;
   top: 0;
@@ -1400,19 +1475,15 @@ ${NEON_CSS}
   width: 7px;
   height: 10px;
   margin-left: -3.5px;
-  background: var(--gas-core);
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.8), 0 0 6px 2px rgba(53, 221, 245, 0.8);
-}
-.slab-panel:not([data-tube="on"]) .slab-clip-foot[data-lit="true"] {
-  background: var(--wall);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+  background: var(--gold-bright);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.8);
 }
 
 .slab-range {
   position: absolute;
   top: 0;
   z-index: 2;
-  height: 61px;
+  height: 100%;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -1423,43 +1494,49 @@ ${NEON_CSS}
 .slab-range:active { cursor: grabbing; }
 .slab-range:disabled { cursor: not-allowed; }
 .slab-range:focus { outline: 0; }
-.slab-range::-webkit-slider-runnable-track { height: 61px; background: transparent; }
+.slab-range::-webkit-slider-runnable-track { height: calc(var(--slab-wheel) + 10px); background: transparent; }
 .slab-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: var(--slab-thumb, 57px);
-  height: 61px;
+  width: var(--slab-thumb, 47px);
+  height: calc(var(--slab-wheel) + 10px);
   background: transparent;
   cursor: grab;
 }
-.slab-range::-moz-range-track { height: 61px; background: transparent; }
-.slab-range::-moz-range-thumb { width: var(--slab-thumb, 57px); height: 61px; background: transparent; border: 0; }
+.slab-range::-moz-range-track { height: calc(var(--slab-wheel) + 10px); background: transparent; }
+.slab-range::-moz-range-thumb { width: var(--slab-thumb, 47px); height: calc(var(--slab-wheel) + 10px); background: transparent; border: 0; }
 
 .slab-wheel,
 .slab-roll,
-.slab-spin {
+.slab-spin,
+.slab-cone {
   position: absolute;
   left: 0;
   top: 0;
-  width: 57px;
-  height: 57px;
-  transform-origin: 28.5px 28.5px;
+  width: var(--slab-wheel);
+  height: var(--slab-wheel);
+  transform-origin: calc(var(--slab-wheel) / 2) calc(var(--slab-wheel) / 2);
   pointer-events: none;
 }
-.slab-wheel { top: 2px; z-index: 1; }
-/* Follows the tyre, not the pokes, so it can't reach the controls around the rail. */
+.slab-wheel { z-index: 1; }
+.slab-wheel svg { position: absolute; left: 0; top: 0; }
+/* The knock-off turns about the poke's tip, not the axle. */
+.slab-roll.slab-knock, .slab-spin.slab-knock { transform-origin: var(--slab-poke); }
+/* Thirty spokes on a 12\xB0 pitch strobe at speed; they fade and the knock-off carries the turn. */
+.slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.45; }
+.slab-range:disabled ~ .slab-wheel { opacity: 0.6; }
+/* Follows the tyre, so it can't reach the controls around the rail. */
 .slab-range:focus-visible ~ .slab-wheel::after {
   content: "";
   position: absolute;
-  left: 8px;
-  top: 8px;
-  width: 41px;
-  height: 41px;
+  left: calc(var(--slab-wheel) / 2 - var(--slab-tyre) - 2px);
+  top: calc(var(--slab-wheel) / 2 - var(--slab-tyre) - 2px);
+  width: calc(var(--slab-tyre) * 2 + 4px);
+  height: calc(var(--slab-tyre) * 2 + 4px);
   border-radius: 50%;
   outline: 2px solid #fff;
   outline-offset: 0;
   box-shadow: 0 0 0 2px #000, inset 0 0 0 1px #000;
 }
-.slab-wheel-base, .slab-wheel-spin { position: absolute; left: 0; top: 0; }
 .slab-rail[data-rolling="true"] .slab-wheel,
 .slab-rail[data-rolling="true"] .slab-roll,
 .slab-rail[data-rolling="true"] .slab-rail-hot,
@@ -1467,59 +1544,42 @@ ${NEON_CSS}
   transition: transform 640ms cubic-bezier(0.3, 0.7, 0.2, 1);
 }
 
-.slab-scale { position: relative; height: 32px; margin-left: 7px; }
-.slab-scale > * { position: absolute; top: 4px; transform: translateX(-50%); }
-.slab-scale-end { font-size: 12px; line-height: 28px; font-weight: 600; white-space: nowrap; color: var(--wall-soft); }
-.slab-normal { width: 58px; height: 28px; font-size: 12.5px; font-weight: 700; }
-.slab-scale .slab-normal:active:not(:disabled):not([aria-disabled="true"]) { transform: translate(-50%, 2px); }
+.slab-scale { position: relative; height: 28px; margin-left: 7px; }
+.slab-scale > * { position: absolute; top: 1px; transform: translateX(-50%); }
+.slab-scale-end { line-height: 28px; white-space: nowrap; color: var(--wall-soft); }
+.slab-normal { --roll: 28px; width: 58px; height: 28px; font-weight: 600; }
+.slab-scale .slab-normal:active:not([aria-disabled="true"]) { transform: translate(-50%, 2px); }
 
-/* Moods, highest landing pitch first. Each is a door panel raised off the paint,
-   with a pinstripe pulled around it and a short return at its leading edge. */
+/*
+ * Moods, highest landing pitch first. Each is a door cut from the body: the
+ * same paint, a seam round it, and a pinstripe pulled by hand along its top
+ * and down its leading edge. The picked one sits recessed in the vinyl.
+ */
 .slab-moods {
-  position: relative;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   margin-top: 8px;
 }
 .slab-mood {
+  --stripe: var(--gold);
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
   grid-template-rows: 18px 16px;
-  column-gap: 4px;
+  column-gap: 6px;
   align-items: center;
   height: 42px;
-  padding: 4px 8px 4px 10px;
+  padding: 4px 8px 4px 14px;
   text-align: left;
   border-radius: 4px;
-  background: linear-gradient(180deg, #B4132F 0, #8E0E27 48%, #6F0A1F 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 214, 214, 0.5), 0 2px 0 #27040B, 0 3px 4px rgba(10, 0, 2, 0.5);
-  transition: transform 70ms ease-out, box-shadow 70ms ease-out;
+  background: rgba(255, 210, 210, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(20, 0, 5, 0.85), inset 0 1px 0 rgba(255, 200, 205, 0.28), inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  transition: transform 70ms ease-out;
 }
-.slab-mood::before {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  border: 1px solid rgba(255, 243, 224, 0.62);
-  border-radius: 3px;
-  pointer-events: none;
-}
-.slab-mood::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 10px;
-  bottom: 10px;
-  width: 1px;
-  background: rgba(255, 243, 224, 0.62);
-  pointer-events: none;
-}
-.slab-mood:hover { background: linear-gradient(180deg, #C4163A 0, #9C102C 48%, #7A0C23 100%); }
-.slab-mood:active {
-  transform: translateY(2px);
-  box-shadow: inset 0 1px 2px rgba(30, 0, 6, 0.6), 0 0 0 #27040B;
-}
+.slab-stripe { position: absolute; left: 0; top: 0; color: var(--stripe); pointer-events: none; }
+.slab-mood:hover { --stripe: var(--gold-bright); background: rgba(255, 210, 210, 0.08); transform: translateY(-1px); }
+.slab-mood:active { transform: translateY(1px); }
 .slab-mood-name {
   grid-column: 1;
   grid-row: 1;
@@ -1527,38 +1587,38 @@ ${NEON_CSS}
   font-size: 14px;
   line-height: 17px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.slab-mood-curve { grid-column: 2; grid-row: 1 / 3; overflow: visible; }
+.slab-mood-curve { grid-column: 2; grid-row: 1 / 3; overflow: visible; color: var(--wall-soft); }
 .slab-mood-zero { fill: none; stroke: currentColor; stroke-opacity: 0.3; stroke-width: 1; }
 .slab-mood-line { fill: none; stroke: currentColor; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
-.slab-mood-cents { grid-column: 1; grid-row: 2; font-size: 12.5px; line-height: 16px; font-weight: 700; }
+.slab-mood-cents { grid-column: 1; grid-row: 2; color: var(--wall-soft); }
 .slab-mood[aria-checked="true"] {
-  background: var(--press-light), var(--rolls);
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 214, 214, 0.32);
+  --stripe: var(--wall);
+  background: linear-gradient(180deg, #1E070A, #2A0C10);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 214, 214, 0.25);
+  transform: none;
 }
-.slab-mood[aria-checked="true"]::after { display: none; }
-.slab-panel[data-gas="on"] .slab-mood[aria-checked="true"]::before { border-color: var(--gas); }
-.slab-panel[data-gas="on"] .slab-mood[aria-checked="true"] .slab-mood-line { stroke: var(--gas-glass); }
-.slab-panel[data-primer="true"] .slab-mood:not([aria-checked="true"]) {
-  background: #5D5C5A;
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
-}
-.slab-panel[data-primer="true"] .slab-mood:not([aria-checked="true"])::before,
-.slab-panel[data-primer="true"] .slab-mood:not([aria-checked="true"])::after { display: none; }
+.slab-mood[aria-checked="true"] .slab-mood-curve { color: var(--wall); }
+/* A curve SLAB isn't allowed to apply (ModernEQ has the EQ, or there's no EQ) is only sketched. */
+.slab-panel[data-eq="other"] .slab-mood[aria-checked="true"] .slab-mood-line { stroke-dasharray: 3 3; }
+.slab-panel[data-primer="true"] .slab-mood:not([aria-checked="true"]) { background: rgba(255, 255, 255, 0.03); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.1); }
+.slab-panel[data-primer="true"] .slab-stripe { display: none; }
 
-/* Readout. */
-.slab-read { position: relative; padding: 4px 10px 0; }
+/* Readout: two columns, on the same lines as the doors above. */
+.slab-read { padding-top: 8px; }
 .slab-read-top {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 4px;
   align-items: center;
-  gap: 16px;
-  height: 34px;
+  height: 32px;
 }
-.slab-bpm { display: inline-flex; align-items: baseline; gap: 4px; min-width: 88px; white-space: nowrap; }
-.slab-bpm b { font: 700 29px/34px "SLAB Barlow Tall", "Barlow Condensed", "SLAB Barlow", "Arial Narrow", sans-serif; }
-.slab-bpm small { font-size: 12px; font-weight: 700; }
-.slab-count { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-.slab-bar { font-weight: 600; white-space: nowrap; }
+.slab-bpm { display: inline-flex; align-items: baseline; gap: 4px; padding-left: 14px; white-space: nowrap; }
+.slab-bpm b { font: 700 26px/32px "SLAB Barlow Tall", "Barlow Condensed", "SLAB Barlow", "Bahnschrift Condensed", "Arial Narrow", sans-serif; }
+.slab-count { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 14px; }
+.slab-bar { white-space: nowrap; }
 .slab-lamps { display: inline-flex; gap: 3px; flex: none; }
 .slab-lamps i {
   display: block;
@@ -1573,127 +1633,155 @@ ${NEON_CSS}
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-weight: 700;
   white-space: nowrap;
 }
 .slab-play::before {
   content: "";
-  width: 9px;
-  height: 11px;
+  width: 8px;
+  height: 10px;
   background: var(--wall);
-  clip-path: polygon(0 12%, 34% 12%, 34% 88%, 0 88%, 0 12%, 66% 12%, 100% 12%, 100% 88%, 66% 88%, 66% 12%);
+  clip-path: polygon(0 0, 34% 0, 34% 100%, 0 100%, 0 0, 66% 0, 100% 0, 100% 100%, 66% 100%, 66% 0);
 }
-.slab-panel[data-playing="true"] .slab-play::before { clip-path: polygon(0 0, 100% 50%, 0 100%); }
-.slab-ruler-slot { position: relative; height: 16px; }
-.slab-ruler { position: absolute; left: 0; top: 1px; width: 360px; height: 14px; }
+.slab-panel[data-playing="true"] .slab-play { visibility: hidden; }
+.slab-ruler-slot { position: relative; height: 16px; margin-top: 2px; }
+.slab-ruler { position: absolute; left: 10px; top: 1px; width: 360px; height: 14px; }
 .slab-ruler svg { position: absolute; left: 0; top: 0; }
 .slab-ruler-clip { position: absolute; inset: 0; clip-path: inset(0 100% 0 0); }
 .slab-ruler path { fill: none; stroke-width: 1; shape-rendering: crispEdges; }
 .slab-ruler-dim { stroke: rgba(255, 243, 224, 0.36); }
 .slab-ruler-lit { stroke: var(--wall); }
-.slab-nogrid {
+.slab-nogrid,
+.slab-flash {
   position: absolute;
-  inset: 0;
+  inset: 0 10px;
   display: none;
-  font-weight: 600;
-  font-size: 13px;
   line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.slab-nogrid { color: var(--wall-soft); }
+.slab-flash { font-weight: 600; color: var(--wall); }
 .slab-panel[data-grid="false"] .slab-nogrid { display: block; }
 .slab-panel[data-grid="false"] .slab-ruler { visibility: hidden; }
+/* A press's answer takes the ruler's place for a moment. */
+.slab-panel[data-flash="true"] .slab-flash { display: block; }
+.slab-panel[data-flash="true"] .slab-ruler,
+.slab-panel[data-flash="true"] .slab-nogrid { visibility: hidden; }
 
+/* Five pads; Stop, the one that halts the record, sits a hand's width apart. */
 .slab-pads {
-  position: relative;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
-.slab-pad { height: 54px; gap: 1px; }
-.slab-pad b { font-weight: 700; font-size: 15.5px; line-height: 18px; }
-.slab-pad small { font-size: 12px; line-height: 14px; font-weight: 500; }
+.slab-pad { --roll: 27px; height: 54px; gap: 1px; }
+.slab-pad[data-pad="stop"] { margin-left: 8px; }
+.slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
+.slab-pad small { font-size: 12px; line-height: 14px; color: var(--wall-soft); }
+/* The number key that plays it, small in the corner like a pad number on a sampler. */
+.slab-key {
+  position: absolute;
+  left: 6px;
+  top: 3px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--wall-soft);
+}
 
 .slab-auto {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 44px;
-  padding-top: 2px;
+  padding-top: 4px;
 }
-.slab-switch {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  height: 30px;
-  border-radius: 4px;
-}
-.slab-auto-title { font-weight: 700; font-size: 14px; }
-.slab-switch-track {
-  position: relative;
-  display: block;
-  width: 44px;
-  height: 26px;
-  border-radius: 4px;
-  background: #16040A;
-  box-shadow: inset 0 0 0 1px #E6D9C5, inset 0 2px 3px #000;
-}
-.slab-switch i {
-  position: absolute;
-  left: 4px;
-  top: 4px;
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  background: #A99C92;
-  transition: transform 120ms ease-out;
-}
-.slab-switch[aria-checked="true"] i { transform: translateX(18px); background: var(--wall); }
-.slab-stepper { display: flex; align-items: center; gap: 5px; }
-.slab-every { min-width: 74px; text-align: center; font-weight: 600; white-space: nowrap; }
-.slab-step { width: 34px; height: 30px; font-weight: 700; font-size: 16px; line-height: 1; }
+.slab-auto-press { --roll: 30px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-auto-on { display: none; }
+.slab-auto-press[aria-checked="true"] .slab-auto-on { display: inline; }
+.slab-stepper { display: flex; align-items: center; gap: 6px; }
+.slab-every { width: 140px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
+.slab-panel[data-auto="on"] .slab-every { color: var(--wall); }
+.slab-step { --roll: 30px; width: 34px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
 
-/* The kick plate: brushed metal screwed to the door sill, chrome round its edge,
-   with the status stamped straight into it. Paint can go to primer; this can't. */
+/*
+ * The scuff plate: stainless, ribbed along its length at top and bottom, a
+ * Phillips head at each end, the status stamped into the smooth field between.
+ * Paint can go to primer; this can't. In a short window it stays pinned to the
+ * bottom edge and the car scrolls behind it.
+ */
 .slab-sill {
-  position: relative;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
   margin: 0 -10px;
-  height: 84px;
-  border-radius: 0 0 12px 12px;
+  padding: 13px 18px 12px;
+  border-radius: 0 0 10px 10px;
   background:
-    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0, rgba(255, 255, 255, 0.025) 1px, rgba(0, 0, 0, 0.015) 1px, rgba(0, 0, 0, 0.015) 2px),
-    linear-gradient(180deg, #9EA2A6 0, #93979B 40%, #888C90 100%);
-  box-shadow:
-    inset 0 2px 0 #F3F5F6,
-    inset 0 3px 0 rgba(0, 0, 0, 0.3),
-    inset 2px 0 0 rgba(255, 255, 255, 0.55),
-    inset -2px 0 0 rgba(0, 0, 0, 0.26),
-    inset 0 -2px 0 #6A6E72;
+    repeating-linear-gradient(180deg, #F2F4F5 0, #F2F4F5 1px, #5C6064 1px, #5C6064 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px) left 0 top 4px / 100% 9px no-repeat,
+    repeating-linear-gradient(180deg, #F2F4F5 0, #F2F4F5 1px, #5C6064 1px, #5C6064 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px) left 0 bottom 3px / 100% 9px no-repeat,
+    linear-gradient(180deg, #8A9096 0, #B9BEC2 45%, #7D8389 100%);
+  box-shadow: inset 0 2px 0 #F3F5F6, inset 0 3px 0 rgba(0, 0, 0, 0.3), inset 0 -2px 0 #5F6569;
 }
-.slab-sill-screws { position: absolute; left: 0; top: 0; pointer-events: none; }
+
+/* When the car runs on behind the pinned plate, its edge fades into it. */
+.slab-panel[data-more="true"] .slab-sill::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 12px;
+  background: linear-gradient(0deg, rgba(12, 2, 5, 0.6), rgba(12, 2, 5, 0));
+  pointer-events: none;
+}
+.slab-screw-at { position: absolute; top: 50%; margin-top: -4px; }
+.slab-screw-left { left: 5px; }
+.slab-screw-right { right: 5px; }
+/* Room for two lines in every state, so the panel never changes height when a second line comes or goes. */
 .slab-sill-plate {
-  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  height: 84px;
-  padding: 2px 20px;
-  font-size: 12.5px;
+  padding: 3px 10px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #A7ACB0, #B5BABE);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.35), inset 0 -1px 0 rgba(255, 255, 255, 0.35);
   font-weight: 600;
-  line-height: 18px;
   color: #101114;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.24);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
 }
+/* With ModernEQ the plate keeps room for its row as well, again in every state. */
+.slab-sill[data-eq="on"] .slab-sill-plate { min-height: 64px; }
 .slab-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .slab-status:empty { display: none; }
-.slab-eq { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; margin-bottom: 2px; flex: none; }
+.slab-eq { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 24px; margin-bottom: 2px; flex: none; }
 .slab-eq[hidden] { display: none; }
 .slab-eq-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.slab-eq-btn { flex: none; height: 26px; padding: 0 10px; font-size: 12.5px; font-weight: 700; white-space: nowrap; text-shadow: none; box-shadow: inset 0 1px 0 rgba(255, 220, 220, 0.2), 0 2px 0 #2B2D30; }
+/* A stamped metal key on the metal plate, not upholstery bolted to it. */
+.slab-press.slab-eq-btn {
+  flex: none;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #101114;
+  text-shadow: none;
+  background: linear-gradient(180deg, #E8EBED, #B4B9BD);
+  box-shadow: inset 0 1px 0 #FFFFFF, inset 0 0 0 1px rgba(0, 0, 0, 0.25), 0 1px 0 #5C6064, 0 2px 2px rgba(0, 0, 0, 0.25);
+}
+.slab-press.slab-eq-btn::after { display: none; }
 
-/* Playbar chip. Same footprint as the client's own buttons. */
+/* Playbar chip. Same footprint as the client's own buttons, and its own active dot when on. */
 .slab-chip {
+  position: relative;
   width: 32px;
   height: 32px;
   border: 0;
@@ -1707,17 +1795,46 @@ ${NEON_CSS}
 }
 .slab-chip:hover { color: var(--spice-text, #fff); transform: scale(1.06); }
 .slab-chip:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
-.slab-chip[data-on="true"] { color: #35DDF5; }
-.slab-chip[data-on="true"][data-remote="true"] { color: var(--spice-text, #fff); }
+.slab-chip .slab-chip-vogue { display: none; }
+.slab-chip[data-on="true"] { color: var(--spice-text, #fff); }
+.slab-chip[data-on="true"] .slab-chip-vogue { display: inline; }
+.slab-chip[data-on="true"] .slab-chip-plain { display: none; }
+.slab-chip[data-on="true"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .slab-chip[aria-expanded="true"] { background: rgba(255, 255, 255, 0.1); }
 
 @media (prefers-reduced-motion: reduce) {
   .slab-panel { animation: none; }
-  .slab-press, .slab-press::before, .slab-press::after, .slab-mood, .slab-switch i { transition: none; }
+  .slab-press, .slab-press::before, .slab-press::after, .slab-mood { transition: none; }
+  .slab-mood:hover { transform: none; }
   .slab-rail[data-rolling="true"] .slab-wheel,
   .slab-rail[data-rolling="true"] .slab-roll,
   .slab-rail[data-rolling="true"] .slab-rail-hot,
   .slab-rail[data-rolling="true"] .slab-rail-run { transition: none; }
+}
+
+/* Windows High Contrast and other forced palettes: state by outline, never by paint. */
+@media (forced-colors: active) {
+  .slab-press, .slab-mood { border: 1px solid ButtonText; }
+  .slab-press[data-hit="true"], .slab-press[data-latched="true"], .slab-auto-press[aria-checked="true"], .slab-mood[aria-checked="true"] {
+    outline: 3px solid Highlight;
+    outline-offset: -3px;
+  }
+  .slab-press[aria-disabled="true"] { color: GrayText; border-color: GrayText; }
+  .slab-lamps i { border: 1px solid CanvasText; }
+  .slab-lamps i[data-on="true"] { background: Highlight; }
+  .slab-rail-tube { background: CanvasText; }
+  .slab-rail-hot, .slab-rail-run { background: Highlight; }
+  .slab-stripe { display: none; }
 }
 `;
 
@@ -1796,6 +1913,9 @@ ${NEON_CSS}
   var EVERY_MIN = 1;
   var EVERY_MAX = 16;
   var DEVICE_NAME_MAX = 56;
+  var PANEL_MAX_PX = 680;
+  var MIN_ROOM_PX = 320;
+  var SHORT_SAVING_PX = 14;
   var DEAD_LINE_PX = 18;
   var GRID_RETRY_MS = [5e3, 3e4, 12e4];
   var COMPACT_SIGN_HEIGHT = 50;
@@ -1904,9 +2024,21 @@ ${NEON_CSS}
   function isOff(button) {
     return button.getAttribute("aria-disabled") === "true";
   }
+  function pinstripe(id) {
+    const fade = `slab-stripe-${id}`;
+    return `<svg class="slab-stripe" viewBox="0 0 188 42" width="188" height="42" aria-hidden="true" focusable="false">
+  <defs><linearGradient id="${fade}" gradientUnits="userSpaceOnUse" x1="120" y1="0" x2="78" y2="0">
+    <stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/>
+  </linearGradient></defs>
+  <path d="M120 4.5H11Q4.5 4.5 4.5 11V29" fill="none" stroke="url(#${fade})" stroke-width="1"/>
+  <path d="M108 6.5H11.5Q6.5 6.5 6.5 11.5V25.5" fill="none" stroke="url(#${fade})" stroke-width=".5"/>
+  <path d="M4.5 28.5L6.1 32.2L4.5 37L2.9 32.2Z" fill="currentColor"/>
+</svg>`;
+  }
   var MOODS_BY_PITCH = [...MOODS].sort(
     (a, b) => b.dsp.pitch - a.dsp.pitch || Number(b.id === "flat") - Number(a.id === "flat")
   );
+  var NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
   var LOOP_TIMES = 4;
   var LOOP_SUB = `${LOOP_TIMES} times`;
   var Deck = class {
@@ -1922,6 +2054,7 @@ ${NEON_CSS}
       this.loopSub = null;
       /** Stops any held-button repeat; run on destroy. */
       this.releases = [];
+      this.sillEl = null;
       this.lastHelperState = null;
       this.disposed = false;
       this.disposeDsp = null;
@@ -1941,7 +2074,8 @@ ${NEON_CSS}
       this.pitchTimer = null;
       this.pendingPitch = null;
       this.renderedCents = null;
-      this.spinAnimation = null;
+      /** Spokes and knock-off spin as one; two animations on one clock. */
+      this.spinAnimations = [];
       this.strikeAnimation = null;
       this.spinning = false;
       this.modernEq = false;
@@ -2011,15 +2145,24 @@ ${NEON_CSS}
       this.hotDown = h("span", { class: "slab-rail-hot slab-rail-hot-down" });
       this.runUp = h("span", { class: "slab-rail-run slab-rail-hot-up" });
       this.runDown = h("span", { class: "slab-rail-run slab-rail-hot-down" });
-      this.spinEl = h("span", { class: "slab-spin", html: WHEEL_SPIN });
+      this.spinEl = h("span", { class: "slab-spin", html: WHEEL_SPOKES });
       this.rollEl = h("span", { class: "slab-roll" }, this.spinEl);
-      this.wheelEl = h("span", { class: "slab-wheel", html: WHEEL_STATIC }, this.rollEl);
+      this.knockSpinEl = h("span", { class: "slab-spin slab-knock", html: WHEEL_KNOCKOFF });
+      this.knockRollEl = h("span", { class: "slab-roll slab-knock" }, this.knockSpinEl);
+      this.wheelEl = h(
+        "span",
+        { class: "slab-wheel", html: WHEEL_STATIC },
+        this.rollEl,
+        h("span", { class: "slab-cone", html: WHEEL_CONE }),
+        this.knockRollEl
+      );
       this.railEl = this.buildRail();
       this.bpmEl = h("b", {}, "\u2013");
       this.barEl = h("span", { class: "slab-bar" }, "Bar \u2013");
       this.lampsEl = h("span", { class: "slab-lamps", role: "img", "aria-label": "No beat" });
       this.setLampCount(4);
       this.playEl = h("span", { class: "slab-play" }, "Paused");
+      this.flashEl = h("span", { class: "slab-flash" });
       this.rulerEl = h("div", {
         class: "slab-ruler",
         "aria-hidden": "true",
@@ -2031,13 +2174,14 @@ ${NEON_CSS}
       this.rulerClip = this.rulerEl.querySelector(".slab-ruler-clip");
       this.noGridEl = h("p", { class: "slab-nogrid", id: "slab-nogrid" });
       this.switchEl = h("button", {
-        class: "slab-switch",
+        class: "slab-press slab-auto-press",
         type: "button",
         role: "switch",
         "aria-checked": String(state.auto),
+        "aria-label": "Auto chop",
         onclick: () => this.toggleAuto()
-      }, h("span", { class: "slab-switch-track" }, h("i")), h("span", { class: "slab-auto-title" }, "Auto chop"));
-      this.everyEl = h("span", { class: "slab-every", "aria-live": "polite" });
+      }, h("span", {}, "Auto chop", h("span", { class: "slab-auto-on" }, " on")));
+      this.everyEl = h("span", { class: "slab-every" });
       this.everyDown = h("button", {
         class: "slab-press slab-step",
         type: "button",
@@ -2080,6 +2224,7 @@ ${NEON_CSS}
       this.mountChip();
       document.body.append(this.panel);
       document.addEventListener("click", this.onDocumentClick, true);
+      document.addEventListener("contextmenu", this.onDocumentClick, true);
       document.addEventListener("keydown", this.onKey);
       window.addEventListener("resize", this.onResize);
       this.panel.addEventListener("scroll", this.onScroll, { passive: true });
@@ -2122,12 +2267,13 @@ ${NEON_CSS}
       for (const release of this.releases) release();
       if (this.lampFrame !== null) window.cancelAnimationFrame(this.lampFrame);
       this.lampFrame = null;
-      this.spinAnimation?.cancel();
-      this.spinAnimation = null;
+      for (const animation of this.spinAnimations) animation.cancel();
+      this.spinAnimations = [];
       this.spinning = false;
       this.strikeAnimation?.cancel();
       this.strikeAnimation = null;
       document.removeEventListener("click", this.onDocumentClick, true);
+      document.removeEventListener("contextmenu", this.onDocumentClick, true);
       document.removeEventListener("keydown", this.onKey);
       window.removeEventListener("resize", this.onResize);
       this.panel.removeEventListener("scroll", this.onScroll);
@@ -2205,6 +2351,9 @@ ${NEON_CSS}
       const rail = h("div", { class: "slab-rail" });
       rail.style.width = `${RAIL_WIDTH}px`;
       rail.style.setProperty("--slab-thumb", `${THUMB_SIZE}px`);
+      rail.style.setProperty("--slab-wheel", `${WHEEL_SIZE}px`);
+      rail.style.setProperty("--slab-tyre", `${TYRE_RADIUS}px`);
+      rail.style.setProperty("--slab-poke", `${WHEEL_SIZE / 2 + POKE_X}px ${WHEEL_SIZE / 2 + POKE_Y}px`);
       const tube = h("span", { class: "slab-rail-tube" });
       tube.style.left = `${railX(-PITCH_LIMIT)}px`;
       tube.style.width = `${railX(PITCH_LIMIT) - railX(-PITCH_LIMIT)}px`;
@@ -2307,9 +2456,9 @@ ${NEON_CSS}
           tabindex: "-1",
           onclick: () => void this.applyMood(mood.id, true)
         });
-        button.innerHTML = `
+        button.innerHTML = `${pinstripe(mood.id)}
         <span class="slab-mood-name">${mood.name}</span>
-        <span class="slab-mood-cents">${formatCents(mood.dsp.pitch)}</span>
+        <span class="slab-mood-cents">${formatCents(mood.dsp.pitch)}<span class="slab-sr"> cents</span></span>
         <svg class="slab-mood-curve" viewBox="0 0 58 32" width="58" height="32" aria-hidden="true" focusable="false">
           <path class="slab-mood-zero" d="M0 16H58"/>
           <path class="slab-mood-line" d="${curvePath(mood.gains, 58, 32)}"/>
@@ -2324,17 +2473,17 @@ ${NEON_CSS}
           "div",
           { class: "slab-read-top" },
           h("span", { class: "slab-bpm" }, this.bpmEl, h("small", {}, "BPM")),
-          h("span", { class: "slab-count" }, this.barEl, this.lampsEl),
-          this.playEl
+          h("span", { class: "slab-count" }, this.barEl, this.lampsEl, this.playEl)
         ),
-        h("div", { class: "slab-ruler-slot" }, this.rulerEl, this.noGridEl)
+        // What a press just did shows here, right above the pads, then the ruler comes back.
+        h("div", { class: "slab-ruler-slot" }, this.rulerEl, this.noGridEl, this.flashEl)
       );
       const padRow = h("div", { class: "slab-pads", role: "group", "aria-label": "Beat-synced edits" });
       const tooEarly = "Not that much record behind the needle yet.";
       const padDefs = [
-        { id: "chop1", label: "Chop", sub: "1 bar", run: () => chopBars(1), miss: tooEarly },
-        { id: "chop2", label: "Chop", sub: "2 bars", run: () => chopBars(2), miss: tooEarly },
-        { id: "chop4", label: "Chop", sub: "4 bars", run: () => chopBars(4), miss: tooEarly },
+        { id: "chop1", label: "Chop", sub: "1 bar back", run: () => chopBars(1), miss: tooEarly },
+        { id: "chop2", label: "Chop", sub: "2 bars back", run: () => chopBars(2), miss: tooEarly },
+        { id: "chop4", label: "Chop", sub: "4 bars back", run: () => chopBars(4), miss: tooEarly },
         {
           id: "loop",
           label: "Loop",
@@ -2379,14 +2528,16 @@ ${NEON_CSS}
         this.switchEl,
         h("div", { class: "slab-stepper" }, this.everyDown, this.everyEl, this.everyUp)
       );
-      const sill = h(
+      this.sillEl = h(
         "div",
-        { class: "slab-sill", html: SILL_SCREWS },
+        { class: "slab-sill" },
+        h("span", { class: "slab-screw-at slab-screw-left", html: SILL_SCREW_LEFT }),
+        h("span", { class: "slab-screw-at slab-screw-right", html: SILL_SCREW_RIGHT }),
         h("div", { class: "slab-sill-plate" }, this.eqNote, this.helperEl, this.speedEl)
       );
       const lower = h("div", { class: "slab-lower" }, readout, padRow, auto);
-      const body = h("div", { class: "slab-body" }, head, trim, moodGrid, lower, sill);
-      panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, h("div", { class: "slab-lip slab-lip-end" }), this.statusEl);
+      const body = h("div", { class: "slab-body" }, head, trim, moodGrid, lower, this.sillEl);
+      panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, this.statusEl);
       panel.addEventListener("click", (event) => event.stopPropagation());
       panel.addEventListener("keydown", (event) => this.handleTab(event, "panel"));
       return panel;
@@ -2511,13 +2662,27 @@ ${NEON_CSS}
     position() {
       if (this.panel.hidden) return;
       const rect = this.chip.getBoundingClientRect();
+      const bar = document.querySelector('[data-testid="now-playing-bar"]')?.getBoundingClientRect();
+      const ceiling = Math.min(rect.top, bar && bar.height > 0 && bar.top > 0 ? bar.top : rect.top) - 8;
+      const room = ceiling - 8;
+      const wasShort = this.panel.dataset.short === "true";
+      const natural = this.panel.scrollHeight + (wasShort ? SHORT_SAVING_PX : 0);
+      const short = room < Math.min(PANEL_MAX_PX, natural);
+      if (short !== wasShort) {
+        setData(this.panel, "short", String(short));
+        this.renderSign();
+      }
       const width = this.panel.offsetWidth || 400;
-      const height = this.panel.offsetHeight || 680;
       const maxLeft = Math.max(8, window.innerWidth - width - 8);
-      const maxTop = Math.max(8, window.innerHeight - height - 8);
       let left = Math.max(8, Math.min(maxLeft, rect.right - width));
-      let top = rect.top - height - 10;
-      if (top < 8) {
+      let top;
+      if (room >= MIN_ROOM_PX) {
+        this.panel.style.maxHeight = `${Math.min(PANEL_MAX_PX, room)}px`;
+        top = ceiling - this.panel.offsetHeight;
+      } else {
+        this.panel.style.maxHeight = "";
+        const height = this.panel.offsetHeight || PANEL_MAX_PX;
+        const maxTop = Math.max(8, window.innerHeight - height - 8);
         top = rect.bottom + 10;
         if (top > maxTop) {
           top = Math.max(8, Math.min(maxTop, rect.bottom - height));
@@ -2526,7 +2691,7 @@ ${NEON_CSS}
         }
       }
       this.panel.style.left = `${Math.round(left)}px`;
-      this.panel.style.top = `${Math.round(top)}px`;
+      this.panel.style.top = `${Math.round(Math.max(8, top))}px`;
       this.renderScrollCue();
     }
     /** Only when a short window has hidden part of the panel. Writes only on change. */
@@ -2642,7 +2807,7 @@ ${NEON_CSS}
       setAttr(
         this.railEl,
         "title",
-        linked ? "Pitch shift applied to Spotify's audio by the SLAB helper." : "Pitch needs the SLAB helper running. The browser cannot repitch a DRM-protected stream."
+        linked ? "Pitch shift applied to Spotify\u2019s audio by the SLAB helper." : "Pitch needs the SLAB helper running. The browser cannot repitch a DRM-protected stream."
       );
       setText(
         this.semiEl,
@@ -2668,15 +2833,16 @@ ${NEON_CSS}
         delete this.railEl.dataset.rolling;
       }
       const x = railX(cents) - WHEEL_SIZE / 2;
-      const turned = x / TYRE_RADIUS * (180 / Math.PI);
+      const turned = `rotate(${(x / TYRE_RADIUS * (180 / Math.PI)).toFixed(1)}deg)`;
       this.wheelEl.style.transform = `translateX(${x}px)`;
-      this.rollEl.style.transform = `rotate(${turned.toFixed(1)}deg)`;
+      this.rollEl.style.transform = turned;
+      this.knockRollEl.style.transform = turned;
       const reach = Math.abs(cents) / PITCH_LIMIT;
       this.hotUp.style.transform = `scaleX(${cents > 0 ? reach : 0})`;
       this.hotDown.style.transform = `scaleX(${cents < 0 ? reach : 0})`;
       this.runUp.style.transform = this.hotUp.style.transform;
       this.runDown.style.transform = this.hotDown.style.transform;
-      if (this.spinAnimation) this.spinAnimation.playbackRate = 2 ** (cents / 1200);
+      for (const animation of this.spinAnimations) animation.playbackRate = 2 ** (cents / 1200);
     }
     /**
      * The spokes turn only while this computer is making the sound being shifted.
@@ -2688,18 +2854,18 @@ ${NEON_CSS}
       const should = !this.panel.hidden && this.hearing().processing && !reducedMotion();
       if (should === this.spinning) return;
       this.spinning = should;
+      setData(this.wheelEl, "spin", should ? "on" : "off");
       if (!should) {
-        this.spinAnimation?.pause();
+        for (const animation of this.spinAnimations) animation.pause();
         return;
       }
-      if (!this.spinAnimation) {
-        this.spinAnimation = this.spinEl.animate(
-          [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
-          { duration: SPIN_MS, iterations: Infinity, easing: "linear" }
-        );
-        this.spinAnimation.playbackRate = 2 ** (this.state.pitch / 1200);
+      if (!this.spinAnimations.length) {
+        const turn = [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }];
+        const timing = { duration: SPIN_MS, iterations: Infinity, easing: "linear" };
+        this.spinAnimations = [this.spinEl.animate(turn, timing), this.knockSpinEl.animate(turn, timing)];
+        for (const animation of this.spinAnimations) animation.playbackRate = 2 ** (this.state.pitch / 1200);
       }
-      this.spinAnimation.play();
+      for (const animation of this.spinAnimations) animation.play();
     }
     /** True when SLAB is allowed to write the six native EQ bands. */
     slabOwnsEq() {
@@ -2720,9 +2886,11 @@ ${NEON_CSS}
     renderEqNote() {
       if (!this.modernEq && this.state.eqOwner !== "modern") {
         this.eqNote.hidden = true;
+        if (this.sillEl) setData(this.sillEl, "eq", "off");
         return;
       }
       this.eqNote.hidden = false;
+      if (this.sillEl) setData(this.sillEl, "eq", "on");
       const label = this.eqNoteButton.firstElementChild;
       if (this.slabOwnsEq()) {
         setText(this.eqNoteText, "SLAB has the EQ.");
@@ -2794,10 +2962,11 @@ ${NEON_CSS}
       setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : processing ? "on" : "idle");
       setData(this.chip, "remote", remote ? "true" : "false");
       setData(this.chip, "on", audible ? "true" : "false");
+      setData(this.panel, "eq", eqAvailable() && this.slabOwnsEq() ? "slab" : "other");
       setAttr(
         this.chip,
         "aria-label",
-        audible ? `SLAB playback moods, ${mood.name} on` : mood.id === "flat" ? "SLAB playback moods, Flat" : `SLAB playback moods, ${mood.name} picked but not heard right now`
+        remote ? `SLAB playback moods. Spotify is playing on ${remote}, so SLAB isn\u2019t heard.` : audible ? `SLAB playback moods, ${mood.name} on` : mood.id === "flat" ? "SLAB playback moods, Flat" : `SLAB playback moods, ${mood.name} picked but not heard right now`
       );
     }
     /** The panel states what is true now, including the cases where SLAB is doing nothing audible. */
@@ -2862,7 +3031,7 @@ ${NEON_CSS}
       return {
         state: "live",
         text: `Helper is ${doing}${behind}.`,
-        title: "The SLAB helper is running and processing Spotify's audio."
+        title: "The SLAB helper is running and processing Spotify\u2019s audio."
       };
     }
     /** Runs from the refresh loop so the latency and the mood can't go stale. */
@@ -2919,7 +3088,7 @@ ${NEON_CSS}
      */
     renderSign() {
       const mood = moodById(this.state.moodId);
-      const compact = this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
+      const compact = this.panel.dataset.short === "true" || this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
       this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
     }
     toggleAuto() {
@@ -2938,24 +3107,38 @@ ${NEON_CSS}
       this.state.every = next;
       saveState(this.state);
       this.renderAutoState();
+      this.announce(`Every ${next} bar${next === 1 ? "" : "s"}`);
     }
     renderAutoState() {
       const every = this.state.every;
       setAttr(this.switchEl, "aria-checked", String(this.state.auto));
-      setText(this.everyEl, `Every ${every} bar${every === 1 ? "" : "s"}`);
+      setData(this.panel, "auto", this.state.auto ? "on" : "off");
+      this.renderEvery();
       setOff(this.everyDown, every <= EVERY_MIN);
       setOff(this.everyUp, every >= EVERY_MAX);
       setAuto(this.state.auto, every);
     }
-    /** Activity borrows the tagline's slot, so nothing else in the panel moves. */
+    /** "Every 4 bars", and while auto chop runs, how far off the next cut is, so it can be played to. */
+    renderEvery() {
+      const every = this.state.every;
+      const base = `Every ${every} bar${every === 1 ? "" : "s"}`;
+      const grid = gridFor();
+      const ahead = this.state.auto && grid && isPlaying() ? autoBarsAhead(barIndexAt(grid, progressMs())) : null;
+      setText(this.everyEl, ahead === null ? base : `${base}, ${ahead === 1 ? "next bar" : `next in ${ahead}`}`);
+    }
+    /**
+     * What a press just did, said right above the pads in the ruler's place for
+     * a moment, so the answer lands where the hand is. Nothing else moves.
+     */
     flashActivity(text) {
-      this.tagEl.textContent = text;
-      this.tagEl.dataset.flash = "true";
+      this.flashEl.textContent = text;
+      setData(this.panel, "flash", "true");
       this.announce(text);
       if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
       this.activityTimer = window.setTimeout(() => {
-        this.tagEl.textContent = TAGLINE;
-        delete this.tagEl.dataset.flash;
+        this.activityTimer = null;
+        this.flashEl.textContent = "";
+        setData(this.panel, "flash", "false");
       }, 1800);
     }
     /**
@@ -3008,7 +3191,7 @@ ${NEON_CSS}
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     firePad(pad, def) {
       if (isOff(pad)) {
-        this.flashActivity("No beat grid for this track, so only Stop works.");
+        this.flashActivity(NO_GRID);
         return;
       }
       void Promise.resolve(def.run()).then((ran) => {
@@ -3133,7 +3316,7 @@ ${NEON_CSS}
       if (!grid) {
         setText(this.bpmEl, "\u2013");
         setText(this.barEl, "Bar \u2013");
-        setText(this.noGridEl, "No beat grid for this track, so only Stop works.");
+        setText(this.noGridEl, NO_GRID);
         setAttr(this.lampsEl, "aria-label", "No beat");
         this.setLampCount(4);
         this.renderLamps(-1);
@@ -3151,6 +3334,7 @@ ${NEON_CSS}
         if (off) setAttr(pad, "aria-describedby", "slab-nogrid");
         else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
       }
+      this.renderEvery();
       const left = loopRemaining();
       const loopPad = this.pads.find((pad) => pad.dataset.pad === "loop");
       if (loopPad) setData(loopPad, "latched", left > 0 ? "true" : "false");

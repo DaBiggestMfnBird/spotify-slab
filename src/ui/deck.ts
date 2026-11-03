@@ -1,4 +1,5 @@
 import {
+    autoBarsAhead,
     cancelLoop,
     chopBars,
     isStopping,
@@ -22,7 +23,20 @@ import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MOODS, curvePath, moodById } from "../core/moods";
 import { clampPitch, saveState } from "../core/state";
 import type { Grid, SlabState } from "../types";
-import { CHIP_ICON, CLOSE_ICON, SILL_SCREWS, TYRE_RADIUS, WHEEL_SIZE, WHEEL_SPIN, WHEEL_STATIC } from "./art";
+import {
+    CHIP_ICON,
+    CLOSE_ICON,
+    POKE_X,
+    POKE_Y,
+    SILL_SCREW_LEFT,
+    SILL_SCREW_RIGHT,
+    TYRE_RADIUS,
+    WHEEL_CONE,
+    WHEEL_KNOCKOFF,
+    WHEEL_SIZE,
+    WHEEL_SPOKES,
+    WHEEL_STATIC,
+} from "./art";
 import { NUMBER_HEIGHT, NUMBER_WIDTH, SIGN_HEIGHT, SIGN_WIDTH, numberLayout, signLayout } from "./neon";
 import { CSS, STYLE_ID } from "./styles";
 import { Tube } from "./tube";
@@ -34,6 +48,11 @@ const PITCH_LIMIT = 1200;
 const EVERY_MIN = 1;
 const EVERY_MAX = 16;
 const DEVICE_NAME_MAX = 56;
+/** The tallest the panel gets, and the least room above the playbar worth opening into. */
+const PANEL_MAX_PX = 680;
+const MIN_ROOM_PX = 320;
+/** What the compact sign saves; keep in step with .slab-stage in styles.ts. */
+const SHORT_SAVING_PX = 14;
 /** Line height of the dead-sign message; two of these and the sign makes room. Keep in step with styles.ts. */
 const DEAD_LINE_PX = 18;
 /** After a failed analysis fetch, wait this long before each retry; then stop until the track changes. */
@@ -189,6 +208,23 @@ function isOff(button: HTMLButtonElement): boolean {
     return button.getAttribute("aria-disabled") === "true";
 }
 
+/**
+ * A pinstripe pulled by hand along the top of a door and down its leading
+ * edge: it comes in from nothing, turns the corner, and finishes in a spear.
+ * Open, never a box around the door.
+ */
+function pinstripe(id: string): string {
+    const fade = `slab-stripe-${id}`;
+    return `<svg class="slab-stripe" viewBox="0 0 188 42" width="188" height="42" aria-hidden="true" focusable="false">
+  <defs><linearGradient id="${fade}" gradientUnits="userSpaceOnUse" x1="120" y1="0" x2="78" y2="0">
+    <stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/>
+  </linearGradient></defs>
+  <path d="M120 4.5H11Q4.5 4.5 4.5 11V29" fill="none" stroke="url(#${fade})" stroke-width="1"/>
+  <path d="M108 6.5H11.5Q6.5 6.5 6.5 11.5V25.5" fill="none" stroke="url(#${fade})" stroke-width=".5"/>
+  <path d="M4.5 28.5L6.1 32.2L4.5 37L2.9 32.2Z" fill="currentColor"/>
+</svg>`;
+}
+
 /** Display order only: highest landing pitch first, so position means something. */
 const MOODS_BY_PITCH = [...MOODS].sort(
     (a, b) => b.dsp.pitch - a.dsp.pitch || Number(b.id === "flat") - Number(a.id === "flat"),
@@ -208,6 +244,9 @@ interface PadDef {
     /** Said when `run` comes back false. */
     miss?: string;
 }
+
+/** Said once, under the readout, whenever a track has no beat grid. */
+const NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
 
 /** Loop repeats the bar this many more times before the record runs on. */
 const LOOP_TIMES = 4;
@@ -235,6 +274,8 @@ export class Deck {
     private wheelEl: HTMLSpanElement;
     private rollEl: HTMLSpanElement;
     private spinEl: HTMLSpanElement;
+    private knockRollEl: HTMLSpanElement;
+    private knockSpinEl: HTMLSpanElement;
     private hotUp: HTMLSpanElement;
     private hotDown: HTMLSpanElement;
     private runUp: HTMLSpanElement;
@@ -271,6 +312,8 @@ export class Deck {
     private helperEl: HTMLParagraphElement;
     private speedEl: HTMLParagraphElement;
     private statusEl: HTMLSpanElement;
+    private flashEl: HTMLSpanElement;
+    private sillEl: HTMLDivElement | null = null;
     private lastHelperState: string | null = null;
 
     private disposed = false;
@@ -291,7 +334,8 @@ export class Deck {
     private pitchTimer: number | null = null;
     private pendingPitch: number | null = null;
     private renderedCents: number | null = null;
-    private spinAnimation: Animation | null = null;
+    /** Spokes and knock-off spin as one; two animations on one clock. */
+    private spinAnimations: Animation[] = [];
     private strikeAnimation: Animation | null = null;
     private spinning = false;
     private modernEq = false;
@@ -367,16 +411,28 @@ export class Deck {
         this.hotDown = h("span", { class: "slab-rail-hot slab-rail-hot-down" });
         this.runUp = h("span", { class: "slab-rail-run slab-rail-hot-up" });
         this.runDown = h("span", { class: "slab-rail-run slab-rail-hot-down" });
-        this.spinEl = h("span", { class: "slab-spin", html: WHEEL_SPIN });
+        // The spokes roll and spin about the axle; the cone is fixed to the
+        // viewpoint; the knock-off rolls and spins about the cone's tip.
+        this.spinEl = h("span", { class: "slab-spin", html: WHEEL_SPOKES });
         this.rollEl = h("span", { class: "slab-roll" }, this.spinEl);
-        this.wheelEl = h("span", { class: "slab-wheel", html: WHEEL_STATIC }, this.rollEl);
+        this.knockSpinEl = h("span", { class: "slab-spin slab-knock", html: WHEEL_KNOCKOFF });
+        this.knockRollEl = h("span", { class: "slab-roll slab-knock" }, this.knockSpinEl);
+        this.wheelEl = h(
+            "span",
+            { class: "slab-wheel", html: WHEEL_STATIC },
+            this.rollEl,
+            h("span", { class: "slab-cone", html: WHEEL_CONE }),
+            this.knockRollEl,
+        );
         this.railEl = this.buildRail();
 
         this.bpmEl = h("b", {}, "–");
         this.barEl = h("span", { class: "slab-bar" }, "Bar –");
         this.lampsEl = h("span", { class: "slab-lamps", role: "img", "aria-label": "No beat" });
         this.setLampCount(4);
+        // Only a pause is news; playing is what the deck is for.
         this.playEl = h("span", { class: "slab-play" }, "Paused");
+        this.flashEl = h("span", { class: "slab-flash" });
 
         this.rulerEl = h("div", {
             class: "slab-ruler",
@@ -389,14 +445,17 @@ export class Deck {
         this.rulerClip = this.rulerEl.querySelector(".slab-ruler-clip") as HTMLDivElement;
         this.noGridEl = h("p", { class: "slab-nogrid", id: "slab-nogrid" });
 
+        // A latching press, in the same tuck and roll as the pads: it stays down
+        // and lit while auto chop runs, and says so in words.
         this.switchEl = h("button", {
-            class: "slab-switch",
+            class: "slab-press slab-auto-press",
             type: "button",
             role: "switch",
             "aria-checked": String(state.auto),
+            "aria-label": "Auto chop",
             onclick: () => this.toggleAuto(),
-        }, h("span", { class: "slab-switch-track" }, h("i")), h("span", { class: "slab-auto-title" }, "Auto chop"));
-        this.everyEl = h("span", { class: "slab-every", "aria-live": "polite" });
+        }, h("span", {}, "Auto chop", h("span", { class: "slab-auto-on" }, " on")));
+        this.everyEl = h("span", { class: "slab-every" });
         this.everyDown = h("button", {
             class: "slab-press slab-step",
             type: "button",
@@ -443,6 +502,8 @@ export class Deck {
         this.mountChip();
         document.body.append(this.panel);
         document.addEventListener("click", this.onDocumentClick, true);
+        // The panel sits above Spotify's own menus, so opening one closes it.
+        document.addEventListener("contextmenu", this.onDocumentClick, true);
         document.addEventListener("keydown", this.onKey);
         window.addEventListener("resize", this.onResize);
         this.panel.addEventListener("scroll", this.onScroll, { passive: true });
@@ -495,12 +556,13 @@ export class Deck {
         for (const release of this.releases) release();
         if (this.lampFrame !== null) window.cancelAnimationFrame(this.lampFrame);
         this.lampFrame = null;
-        this.spinAnimation?.cancel();
-        this.spinAnimation = null;
+        for (const animation of this.spinAnimations) animation.cancel();
+        this.spinAnimations = [];
         this.spinning = false;
         this.strikeAnimation?.cancel();
         this.strikeAnimation = null;
         document.removeEventListener("click", this.onDocumentClick, true);
+        document.removeEventListener("contextmenu", this.onDocumentClick, true);
         document.removeEventListener("keydown", this.onKey);
         window.removeEventListener("resize", this.onResize);
         this.panel.removeEventListener("scroll", this.onScroll);
@@ -589,6 +651,9 @@ export class Deck {
         rail.style.width = `${RAIL_WIDTH}px`;
         // The native thumb's width comes from the same number as the input's travel.
         rail.style.setProperty("--slab-thumb", `${THUMB_SIZE}px`);
+        rail.style.setProperty("--slab-wheel", `${WHEEL_SIZE}px`);
+        rail.style.setProperty("--slab-tyre", `${TYRE_RADIUS}px`);
+        rail.style.setProperty("--slab-poke", `${WHEEL_SIZE / 2 + POKE_X}px ${WHEEL_SIZE / 2 + POKE_Y}px`);
 
         const tube = h("span", { class: "slab-rail-tube" });
         tube.style.left = `${railX(-PITCH_LIMIT)}px`;
@@ -705,9 +770,9 @@ export class Deck {
                 tabindex: "-1",
                 onclick: () => void this.applyMood(mood.id, true),
             });
-            button.innerHTML = `
+            button.innerHTML = `${pinstripe(mood.id)}
         <span class="slab-mood-name">${mood.name}</span>
-        <span class="slab-mood-cents">${formatCents(mood.dsp.pitch)}</span>
+        <span class="slab-mood-cents">${formatCents(mood.dsp.pitch)}<span class="slab-sr"> cents</span></span>
         <svg class="slab-mood-curve" viewBox="0 0 58 32" width="58" height="32" aria-hidden="true" focusable="false">
           <path class="slab-mood-zero" d="M0 16H58"/>
           <path class="slab-mood-line" d="${curvePath(mood.gains, 58, 32)}"/>
@@ -721,18 +786,18 @@ export class Deck {
             { class: "slab-read" },
             h("div", { class: "slab-read-top" },
                 h("span", { class: "slab-bpm" }, this.bpmEl, h("small", {}, "BPM")),
-                h("span", { class: "slab-count" }, this.barEl, this.lampsEl),
-                this.playEl,
+                h("span", { class: "slab-count" }, this.barEl, this.lampsEl, this.playEl),
             ),
-            h("div", { class: "slab-ruler-slot" }, this.rulerEl, this.noGridEl),
+            // What a press just did shows here, right above the pads, then the ruler comes back.
+            h("div", { class: "slab-ruler-slot" }, this.rulerEl, this.noGridEl, this.flashEl),
         );
 
         const padRow = h("div", { class: "slab-pads", role: "group", "aria-label": "Beat-synced edits" });
         const tooEarly = "Not that much record behind the needle yet.";
         const padDefs: PadDef[] = [
-            { id: "chop1", label: "Chop", sub: "1 bar", run: () => chopBars(1), miss: tooEarly },
-            { id: "chop2", label: "Chop", sub: "2 bars", run: () => chopBars(2), miss: tooEarly },
-            { id: "chop4", label: "Chop", sub: "4 bars", run: () => chopBars(4), miss: tooEarly },
+            { id: "chop1", label: "Chop", sub: "1 bar back", run: () => chopBars(1), miss: tooEarly },
+            { id: "chop2", label: "Chop", sub: "2 bars back", run: () => chopBars(2), miss: tooEarly },
+            { id: "chop4", label: "Chop", sub: "4 bars back", run: () => chopBars(4), miss: tooEarly },
             {
                 id: "loop",
                 label: "Loop",
@@ -781,17 +846,22 @@ export class Deck {
             h("div", { class: "slab-stepper" }, this.everyDown, this.everyEl, this.everyUp),
         );
 
-        const sill = h(
+        // The scuff plate: stainless, ribbed along its length, a Phillips head at
+        // each end, and the status stamped into the smooth field between the ribs.
+        this.sillEl = h(
             "div",
-            { class: "slab-sill", html: SILL_SCREWS },
+            { class: "slab-sill" },
+            h("span", { class: "slab-screw-at slab-screw-left", html: SILL_SCREW_LEFT }),
+            h("span", { class: "slab-screw-at slab-screw-right", html: SILL_SCREW_RIGHT }),
             h("div", { class: "slab-sill-plate" }, this.eqNote, this.helperEl, this.speedEl),
         );
 
         // The body line: one crease across the door, with the deeper coat under it.
         const lower = h("div", { class: "slab-lower" }, readout, padRow, auto);
-        const body = h("div", { class: "slab-body" }, head, trim, moodGrid, lower, sill);
-        // The lips sit on the scroll edges when a short window hides part of the car.
-        panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, h("div", { class: "slab-lip slab-lip-end" }), this.statusEl);
+        const body = h("div", { class: "slab-body" }, head, trim, moodGrid, lower, this.sillEl);
+        // In a short window the sill stays on the bottom edge and the car scrolls
+        // behind it; a lip on the top edge says when something is hidden above.
+        panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, this.statusEl);
         panel.addEventListener("click", (event) => event.stopPropagation());
         panel.addEventListener("keydown", (event) => this.handleTab(event, "panel"));
         return panel;
@@ -932,13 +1002,35 @@ export class Deck {
     private position(): void {
         if (this.panel.hidden) return;
         const rect = this.chip.getBoundingClientRect();
+        const bar = document.querySelector('[data-testid="now-playing-bar"]')?.getBoundingClientRect();
+        // The top of the playbar, or of the chip when there is no playbar to find.
+        const ceiling = Math.min(rect.top, bar && bar.height > 0 && bar.top > 0 ? bar.top : rect.top) - 8;
+        const room = ceiling - 8;
+
+        // A window with less room than the whole car gets the compact sign and
+        // scrolls behind the pinned sill. The saving is added back before
+        // comparing, so the choice can't flip-flop between the two layouts.
+        const wasShort = this.panel.dataset.short === "true";
+        const natural = this.panel.scrollHeight + (wasShort ? SHORT_SAVING_PX : 0);
+        const short = room < Math.min(PANEL_MAX_PX, natural);
+        if (short !== wasShort) {
+            setData(this.panel, "short", String(short));
+            this.renderSign();
+        }
+
         const width = this.panel.offsetWidth || 400;
-        const height = this.panel.offsetHeight || 680;
         const maxLeft = Math.max(8, window.innerWidth - width - 8);
-        const maxTop = Math.max(8, window.innerHeight - height - 8);
         let left = Math.max(8, Math.min(maxLeft, rect.right - width));
-        let top = rect.top - height - 10;
-        if (top < 8) {
+        let top: number;
+        if (room >= MIN_ROOM_PX) {
+            // Above the playbar, never over it: after a tape stop the next move is Spotify's play button.
+            this.panel.style.maxHeight = `${Math.min(PANEL_MAX_PX, room)}px`;
+            top = ceiling - this.panel.offsetHeight;
+        } else {
+            // No real room above: below the chip, then beside it, so it never covers the chip.
+            this.panel.style.maxHeight = "";
+            const height = this.panel.offsetHeight || PANEL_MAX_PX;
+            const maxTop = Math.max(8, window.innerHeight - height - 8);
             top = rect.bottom + 10;
             if (top > maxTop) {
                 top = Math.max(8, Math.min(maxTop, rect.bottom - height));
@@ -947,7 +1039,7 @@ export class Deck {
             }
         }
         this.panel.style.left = `${Math.round(left)}px`;
-        this.panel.style.top = `${Math.round(top)}px`;
+        this.panel.style.top = `${Math.round(Math.max(8, top))}px`;
         this.renderScrollCue();
     }
 
@@ -1086,7 +1178,7 @@ export class Deck {
             this.railEl,
             "title",
             linked
-                ? "Pitch shift applied to Spotify's audio by the SLAB helper."
+                ? "Pitch shift applied to Spotify’s audio by the SLAB helper."
                 : "Pitch needs the SLAB helper running. The browser cannot repitch a DRM-protected stream.",
         );
 
@@ -1126,16 +1218,17 @@ export class Deck {
         }
 
         const x = railX(cents) - WHEEL_SIZE / 2;
-        const turned = (x / TYRE_RADIUS) * (180 / Math.PI);
+        const turned = `rotate(${((x / TYRE_RADIUS) * (180 / Math.PI)).toFixed(1)}deg)`;
         this.wheelEl.style.transform = `translateX(${x}px)`;
-        this.rollEl.style.transform = `rotate(${turned.toFixed(1)}deg)`;
+        this.rollEl.style.transform = turned;
+        this.knockRollEl.style.transform = turned;
         const reach = Math.abs(cents) / PITCH_LIMIT;
         this.hotUp.style.transform = `scaleX(${cents > 0 ? reach : 0})`;
         this.hotDown.style.transform = `scaleX(${cents < 0 ? reach : 0})`;
         this.runUp.style.transform = this.hotUp.style.transform;
         this.runDown.style.transform = this.hotDown.style.transform;
 
-        if (this.spinAnimation) this.spinAnimation.playbackRate = 2 ** (cents / 1200);
+        for (const animation of this.spinAnimations) animation.playbackRate = 2 ** (cents / 1200);
     }
 
     /**
@@ -1148,18 +1241,20 @@ export class Deck {
         const should = !this.panel.hidden && this.hearing().processing && !reducedMotion();
         if (should === this.spinning) return;
         this.spinning = should;
+        // Thirty spokes on a 12° pitch strobe backwards at speed, so they fade
+        // while turning and the knock-off's ears carry the motion.
+        setData(this.wheelEl, "spin", should ? "on" : "off");
         if (!should) {
-            this.spinAnimation?.pause();
+            for (const animation of this.spinAnimations) animation.pause();
             return;
         }
-        if (!this.spinAnimation) {
-            this.spinAnimation = this.spinEl.animate(
-                [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
-                { duration: SPIN_MS, iterations: Infinity, easing: "linear" },
-            );
-            this.spinAnimation.playbackRate = 2 ** (this.state.pitch / 1200);
+        if (!this.spinAnimations.length) {
+            const turn = [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }];
+            const timing = { duration: SPIN_MS, iterations: Infinity, easing: "linear" };
+            this.spinAnimations = [this.spinEl.animate(turn, timing), this.knockSpinEl.animate(turn, timing)];
+            for (const animation of this.spinAnimations) animation.playbackRate = 2 ** (this.state.pitch / 1200);
         }
-        this.spinAnimation.play();
+        for (const animation of this.spinAnimations) animation.play();
     }
 
     /** True when SLAB is allowed to write the six native EQ bands. */
@@ -1184,9 +1279,11 @@ export class Deck {
         // A user who handed the EQ to ModernEQ and then removed it still needs a way to take it back.
         if (!this.modernEq && this.state.eqOwner !== "modern") {
             this.eqNote.hidden = true;
+            if (this.sillEl) setData(this.sillEl, "eq", "off");
             return;
         }
         this.eqNote.hidden = false;
+        if (this.sillEl) setData(this.sillEl, "eq", "on");
         const label = this.eqNoteButton.firstElementChild as Element;
         if (this.slabOwnsEq()) {
             setText(this.eqNoteText, "SLAB has the EQ.");
@@ -1265,14 +1362,18 @@ export class Deck {
         setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : processing ? "on" : "idle");
         setData(this.chip, "remote", remote ? "true" : "false");
         setData(this.chip, "on", audible ? "true" : "false");
+        // A curve SLAB isn't allowed to apply is drawn as a dashed sketch, not as the real thing.
+        setData(this.panel, "eq", eqAvailable() && this.slabOwnsEq() ? "slab" : "other");
         setAttr(
             this.chip,
             "aria-label",
-            audible
-                ? `SLAB playback moods, ${mood.name} on`
-                : mood.id === "flat"
-                  ? "SLAB playback moods, Flat"
-                  : `SLAB playback moods, ${mood.name} picked but not heard right now`,
+            remote
+                ? `SLAB playback moods. Spotify is playing on ${remote}, so SLAB isn’t heard.`
+                : audible
+                  ? `SLAB playback moods, ${mood.name} on`
+                  : mood.id === "flat"
+                    ? "SLAB playback moods, Flat"
+                    : `SLAB playback moods, ${mood.name} picked but not heard right now`,
         );
     }
 
@@ -1351,7 +1452,7 @@ export class Deck {
         return {
             state: "live",
             text: `Helper is ${doing}${behind}.`,
-            title: "The SLAB helper is running and processing Spotify's audio.",
+            title: "The SLAB helper is running and processing Spotify’s audio.",
         };
     }
 
@@ -1415,7 +1516,9 @@ export class Deck {
      */
     private renderSign(): void {
         const mood = moodById(this.state.moodId);
-        const compact = this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
+        const compact =
+            this.panel.dataset.short === "true" ||
+            (this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5);
         this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
     }
 
@@ -1437,26 +1540,41 @@ export class Deck {
         this.state.every = next;
         saveState(this.state);
         this.renderAutoState();
+        this.announce(`Every ${next} bar${next === 1 ? "" : "s"}`);
     }
 
     private renderAutoState(): void {
         const every = this.state.every;
         setAttr(this.switchEl, "aria-checked", String(this.state.auto));
-        setText(this.everyEl, `Every ${every} bar${every === 1 ? "" : "s"}`);
+        setData(this.panel, "auto", this.state.auto ? "on" : "off");
+        this.renderEvery();
         setOff(this.everyDown, every <= EVERY_MIN);
         setOff(this.everyUp, every >= EVERY_MAX);
         setAuto(this.state.auto, every);
     }
 
-    /** Activity borrows the tagline's slot, so nothing else in the panel moves. */
+    /** "Every 4 bars", and while auto chop runs, how far off the next cut is, so it can be played to. */
+    private renderEvery(): void {
+        const every = this.state.every;
+        const base = `Every ${every} bar${every === 1 ? "" : "s"}`;
+        const grid = gridFor();
+        const ahead = this.state.auto && grid && isPlaying() ? autoBarsAhead(barIndexAt(grid, progressMs())) : null;
+        setText(this.everyEl, ahead === null ? base : `${base}, ${ahead === 1 ? "next bar" : `next in ${ahead}`}`);
+    }
+
+    /**
+     * What a press just did, said right above the pads in the ruler's place for
+     * a moment, so the answer lands where the hand is. Nothing else moves.
+     */
     private flashActivity(text: string): void {
-        this.tagEl.textContent = text;
-        this.tagEl.dataset.flash = "true";
+        this.flashEl.textContent = text;
+        setData(this.panel, "flash", "true");
         this.announce(text);
         if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
         this.activityTimer = window.setTimeout(() => {
-            this.tagEl.textContent = TAGLINE;
-            delete this.tagEl.dataset.flash;
+            this.activityTimer = null;
+            this.flashEl.textContent = "";
+            setData(this.panel, "flash", "false");
         }, 1800);
     }
 
@@ -1512,7 +1630,7 @@ export class Deck {
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     private firePad(pad: HTMLButtonElement, def: PadDef): void {
         if (isOff(pad)) {
-            this.flashActivity("No beat grid for this track, so only Stop works.");
+            this.flashActivity(NO_GRID);
             return;
         }
         void Promise.resolve(def.run()).then((ran) => {
@@ -1660,7 +1778,7 @@ export class Deck {
         if (!grid) {
             setText(this.bpmEl, "–");
             setText(this.barEl, "Bar –");
-            setText(this.noGridEl, "No beat grid for this track, so only Stop works.");
+            setText(this.noGridEl, NO_GRID);
             setAttr(this.lampsEl, "aria-label", "No beat");
             this.setLampCount(4);
             this.renderLamps(-1);
@@ -1680,6 +1798,7 @@ export class Deck {
             if (off) setAttr(pad, "aria-describedby", "slab-nogrid");
             else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
         }
+        this.renderEvery();
         // A running loop keeps its pad lit and counts down on it.
         const left = loopRemaining();
         const loopPad = this.pads.find((pad) => pad.dataset.pad === "loop");

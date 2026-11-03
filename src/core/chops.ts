@@ -273,6 +273,16 @@ function startAuto(): void {
     });
 }
 
+/**
+ * Bars from `index` until auto chop cuts next: the first phrase line past the
+ * furthest bar reached. Null while it isn't counting.
+ */
+export function autoBarsAhead(index: number): number | null {
+    if (!autoUnsub || autoBaseline || index < 0) return null;
+    const from = Math.max(autoMaxBar, index);
+    return (Math.floor(from / autoEvery) + 1) * autoEvery - index;
+}
+
 function stopAuto(): void {
     autoUnsub?.();
     autoUnsub = null;
