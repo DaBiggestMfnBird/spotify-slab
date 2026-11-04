@@ -4,7 +4,7 @@ import { eqAvailable, initEq } from "./core/eq";
 import { loadState } from "./core/state";
 import { Deck } from "./ui/deck";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const LOG = "[SLAB]";
 
 interface BootClaim {
@@ -38,18 +38,24 @@ function isNewer(a: string, b: string): boolean {
     return false;
 }
 
+/** A copy that gives up hands the claim back, so a later copy of the same version can still load. */
+function release(claim: BootClaim): void {
+    if (window.__slabClaim === claim) window.__slabClaim = undefined;
+}
+
 async function boot(claim: BootClaim): Promise<void> {
     const player = await waitFor(() =>
         typeof Spicetify !== "undefined" && Spicetify.Player ? Spicetify.Player : null,
     );
     if (!player) {
         console.warn(LOG, "player never appeared, giving up");
+        release(claim);
         return;
     }
 
     const eqApi = await waitFor(() => Spicetify.Platform.EqualizerAPI ?? null, 10000);
     const eqReady = eqApi ? await initEq() : false;
-    if (!eqReady) console.warn(LOG, "equalizer unavailable — moods will be inert");
+    if (!eqReady) console.warn(LOG, "equalizer unavailable, moods will be inert");
 
     // Another copy loaded while this one was waiting on the player.
     if (window.__slabClaim !== claim) return;
@@ -84,18 +90,20 @@ async function boot(claim: BootClaim): Promise<void> {
         destroy,
     };
 
-    console.info(LOG, `v${VERSION} ready · eq=${eqReady ? "on" : "off"}`);
+    console.info(LOG, `v${VERSION} ready, eq=${eqReady ? "on" : "off"}`);
 }
 
 // The same extension can load twice: once from the local Extensions folder and
-// once from the Marketplace's CDN copy. The last one in replaces the first, so
-// an out-of-date install must not be allowed to take over from a newer build.
+// once from the Marketplace's CDN copy. A newer build takes over from an older
+// one; an older or identical copy stands down, so a stale CDN copy of the same
+// version can't silently replace the one already running. (scripts/dev-inject
+// clears the claim first, so a hot reload always lands.)
 const running = window.SLAB as { version?: string; destroy?: () => void } | undefined;
 const claimed = window.__slabClaim as BootClaim | undefined;
 const rival = running?.version ?? claimed?.version;
 
-if (rival && isNewer(rival, VERSION)) {
-    console.info(LOG, `v${VERSION} standing down — v${rival} is already loaded`);
+if (rival && !isNewer(VERSION, rival)) {
+    console.info(LOG, `v${VERSION} standing down, v${rival} is already loaded`);
 } else {
     const claim: BootClaim = { version: VERSION };
     window.__slabClaim = claim;
@@ -104,5 +112,8 @@ if (rival && isNewer(rival, VERSION)) {
     } catch {
         /* ignore */
     }
-    void boot(claim).catch((error) => console.error(LOG, "boot failed", error));
+    void boot(claim).catch((error) => {
+        release(claim);
+        console.error(LOG, "boot failed", error);
+    });
 }

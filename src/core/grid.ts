@@ -9,6 +9,18 @@ import type { Grid } from "../types";
 
 const cache = new Map<string, Grid>();
 const inflight = new Map<string, Promise<Grid | null>>();
+/** Spotify runs all day; keep the grids of the last few tracks, not every track ever played. */
+const CACHE_LIMIT = 24;
+
+function remember(uri: string, grid: Grid): void {
+    cache.delete(uri);
+    cache.set(uri, grid);
+    while (cache.size > CACHE_LIMIT) {
+        const oldest = cache.keys().next().value;
+        if (oldest === undefined) break;
+        cache.delete(oldest);
+    }
+}
 
 function currentUri(): string | null {
     return Spicetify.Player.data?.item?.uri ?? null;
@@ -20,7 +32,11 @@ export async function loadGrid(uri?: string): Promise<Grid | null> {
     if (!target.startsWith("spotify:track:")) return null;
 
     const cached = cache.get(target);
-    if (cached) return cached;
+    if (cached) {
+        // A replayed track is recent again, so it isn't the next one pushed out.
+        remember(target, cached);
+        return cached;
+    }
 
     const running = inflight.get(target);
     if (running) return running;
@@ -45,7 +61,7 @@ export async function loadGrid(uri?: string): Promise<Grid | null> {
                 bars,
                 durationMs,
             };
-            cache.set(target, grid);
+            remember(target, grid);
             return grid;
         } catch {
             return null;
@@ -63,10 +79,7 @@ export function gridFor(uri?: string): Grid | null {
     return target ? cache.get(target) ?? null : null;
 }
 
-export function clearGrids(): void {
-    cache.clear();
-    inflight.clear();
-}
+
 
 /** Index of the last marker at or before `ms`. Returns -1 when before the first. */
 export function indexAt(markers: number[], ms: number): number {
@@ -98,18 +111,15 @@ export function beatIndexAt(grid: Grid, ms: number): number {
     return indexAt(grid.beats, ms);
 }
 
-/** Milliseconds until the next beat lands. Capped so a bad grid can't stall a pad. */
-export function msToNextBeat(grid: Grid, ms: number): number {
-    const index = indexAt(grid.beats, ms);
-    const next = grid.beats[index + 1];
-    if (next === undefined) return 0;
-    return Math.max(0, Math.min(900, next - ms));
-}
 
+/** The last bar has no next one to measure to: it runs as long as the one before it, or to the end of the track. */
 export function barLengthMs(grid: Grid, index: number): number {
     const start = barStartMs(grid, index);
     const next = grid.bars[index + 1];
-    return next !== undefined ? next - start : 2000;
+    if (next !== undefined) return next - start;
+    const previous = grid.bars[index - 1];
+    if (previous !== undefined) return start - previous;
+    return Math.max(300, grid.durationMs - start);
 }
 
 export function barCount(grid: Grid): number {

@@ -59,6 +59,9 @@ await send("Runtime.enable");
 
 await evaluate(`(() => {
   try { window.SLAB?.destroy?.(); } catch (e) { console.warn("[SLAB] old instance", e); }
+  // An equal version stands down by design, so a hot reload drops the claim first.
+  window.SLAB = undefined;
+  window.__slabClaim = undefined;
   document.querySelectorAll(".slab-chip, .slab-panel, #slab-styles").forEach((n) => n.remove());
   return true;
 })()`);
