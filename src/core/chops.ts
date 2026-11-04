@@ -24,6 +24,13 @@ let busy = false;
 
 /** The furthest jump back any pad makes; a bigger backward move is the user's own seek. */
 const MAX_CHOP_BARS = 4;
+/** When a pad last jumped the record; its jumps, however many in a row, are never the user's own seek. */
+let padJumpAt = 0;
+const PAD_JUMP_GRACE_MS = 1500;
+/** The bar the last hand-made cut (a pad or a loop jump) left from; auto chop counts it as that line's cut. */
+let manualBar = -2;
+/** The bar auto chop saw on its last tick, to tell a jump from steady play. */
+let autoLastIndex: number | null = null;
 
 let autoUnsub: (() => void) | null = null;
 let autoEvery = 4;
@@ -59,7 +66,7 @@ function seek(ms: number): void {
  * still lands where it should. Resolves false, and does nothing, when there
  * isn't that much record behind the needle yet.
  */
-export async function chopBars(bars: number): Promise<boolean> {
+export async function chopBars(bars: number, auto = false): Promise<boolean> {
     if (busy) return false;
     busy = true;
     try {
@@ -74,7 +81,10 @@ export async function chopBars(bars: number): Promise<boolean> {
         const back = index - span;
         const phase = (now - barStartMs(grid, index)) / barLengthMs(grid, index);
         seek(barStartMs(grid, back) + phase * barLengthMs(grid, back));
-        emit("chop", `Back ${span} bar${span === 1 ? "" : "s"}`);
+        if (auto) return true;
+        padJumpAt = Date.now();
+        manualBar = index;
+        emit("chop", `${span} bar${span === 1 ? "" : "s"} back`);
         return true;
     } finally {
         busy = false;
@@ -87,7 +97,12 @@ export function cancelLoop(): void {
     loopLeft = 0;
 }
 
-/** Repeats still to come in the running loop, or 0 when there is none. */
+/** A loop is running, its last pass included. */
+export function isLooping(): boolean {
+    return loopUnsub !== null;
+}
+
+/** Jumps back still to come in the running loop; 0 during its last pass or with no loop. */
 export function loopRemaining(): number {
     return loopUnsub ? loopLeft : 0;
 }
@@ -108,9 +123,11 @@ export async function loopBars(times = 4): Promise<boolean> {
     const grid = await ensureGrid();
     if (!grid) return false;
 
+    // Before the first downbeat there is no bar to repeat yet.
+    const index = barIndexAt(grid, Spicetify.Player.getProgress());
+    if (index < 0) return false;
     cancelLoop();
 
-    const index = Math.max(0, barIndexAt(grid, Spicetify.Player.getProgress()));
     const start = barStartMs(grid, index);
     const length = barLengthMs(grid, index);
     if (length < 300) return false;
@@ -135,14 +152,18 @@ export async function loopBars(times = 4): Promise<boolean> {
             return;
         }
         if (at < end - LOOP_LEAD_MS) return;
-
-        seek(start);
-        armed = false;
-        loopLeft -= 1;
+        // The last pass has played out to the bar line: the record runs on.
         if (loopLeft <= 0) {
             cancelLoop();
             emit("loop", "Loop done");
+            return;
         }
+
+        // A late tick has already run past the line; carry the overshoot so the loop stays in time.
+        seek(start + Math.max(0, at - end));
+        armed = false;
+        loopLeft -= 1;
+        manualBar = index;
     });
 
     emit("loop", `Looping this bar ${total} times`);
@@ -187,6 +208,13 @@ async function runTapeStop(options: { fade?: boolean; pauseDelayMs?: number }): 
     const origin = Date.now();
 
     await new Promise<void>((resolve) => {
+        let done = false;
+        const finish = (): void => {
+            if (done) return;
+            done = true;
+            unsub();
+            resolve();
+        };
         const unsub = subscribe(() => {
             const progress = duration === 0 ? 1 : Math.min(1, (Date.now() - origin) / duration);
             if (fade) {
@@ -196,11 +224,10 @@ async function runTapeStop(options: { fade?: boolean; pauseDelayMs?: number }): 
                     /* ignore */
                 }
             }
-            if (progress >= 1) {
-                unsub();
-                resolve();
-            }
+            if (progress >= 1) finish();
         });
+        // The record stops even if the clock never ticks.
+        window.setTimeout(finish, duration + 250);
     });
 
     try {
@@ -218,9 +245,7 @@ async function runTapeStop(options: { fade?: boolean; pauseDelayMs?: number }): 
     return true;
 }
 
-export function isAutoRunning(): boolean {
-    return autoUnsub !== null;
-}
+
 
 /** Changing N keeps the clock running; only the switch starts and stops it. */
 export function setAuto(enabled: boolean, every = 4): void {
@@ -254,10 +279,24 @@ function startAuto(): void {
 
         const index = barIndexAt(grid, Spicetify.Player.getProgress());
         if (index < 0) return;
-        if (autoBaseline || index < autoMaxBar - MAX_CHOP_BARS) {
-            // Just started, or the user dragged the record back further than any pad goes.
+        const last = autoLastIndex;
+        autoLastIndex = index;
+        if (autoBaseline || last === null) {
             autoBaseline = false;
             autoMaxBar = index;
+            return;
+        }
+        // Judged at the moment of the jump, not afterwards: pads jump back as far as they
+        // like, stacked or not, and the replayed bars still never count; only the user
+        // dragging the record back past any pad's reach starts the count again from there.
+        if (index < last) {
+            const padJumped = Date.now() - padJumpAt < PAD_JUMP_GRACE_MS;
+            if (!padJumped && index < autoMaxBar - MAX_CHOP_BARS) autoMaxBar = index;
+            return;
+        }
+        // Dragged forward more than a bar: count from there, never cut mid-bar on arrival.
+        if (index > last + 1) {
+            autoMaxBar = Math.max(autoMaxBar, index);
             return;
         }
         if (index <= autoMaxBar) return;
@@ -265,9 +304,11 @@ function startAuto(): void {
 
         if (Date.now() < autoCooldownUntil) return;
         if (index % autoEvery !== 0) return;
+        // A chop or a loop just played over this phrase line already; one cut per line.
+        if (manualBar >= index - 1) return;
 
         autoCooldownUntil = Date.now() + 900;
-        void chopBars(1).then((did) => {
+        void chopBars(1, true).then((did) => {
             if (did) emit("auto", `Auto chop, every ${autoEvery} bar${autoEvery === 1 ? "" : "s"}`);
         });
     });
@@ -286,6 +327,7 @@ export function autoBarsAhead(index: number): number | null {
 function stopAuto(): void {
     autoUnsub?.();
     autoUnsub = null;
+    autoLastIndex = null;
     autoMaxBar = -1;
     autoCooldownUntil = 0;
 }
@@ -293,6 +335,7 @@ function stopAuto(): void {
 export function resetForTrack(): void {
     cancelLoop();
     autoBaseline = true;
+    autoLastIndex = null;
     autoMaxBar = -1;
     autoCooldownUntil = 0;
 }

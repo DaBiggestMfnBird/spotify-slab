@@ -32,8 +32,12 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-/** A point, with the bend radius to use if the tube turns there. */
-type Point = [number, number] | [number, number, number];
+/**
+ * A point, with the bend radius to use if the tube turns there, and for a sharp
+ * point (the middle of w, the valley of M) the height the bent glass must reach:
+ * a tight bend pulls the tip in, so the corner itself goes further out.
+ */
+type Point = [number, number] | [number, number, number] | [number, number, number, number];
 type Step = { kind: "lit" | "dark" | "move"; points: Point[] };
 
 const lit = (...points: Point[]): Step => ({ kind: "lit", points });
@@ -189,7 +193,7 @@ const GLYPHS: Record<string, Skeleton> = {
         advance: 70,
         walk: [
             dark([12, 0], [6, 0, 6], [0, X]),
-            lit([0, X], [6, 0, 6], [18, 0, 6], [30, 48, 6], [42, 0, 6], [54, 0, 6], [60, X]),
+            lit([0, X], [6, 0, 6], [18, 0, 6], [30, 52, 6, 52], [42, 0, 6], [54, 0, 6], [60, X]),
             dark([60, X], [54, 0, 6], [48, 0]),
         ],
     },
@@ -214,7 +218,7 @@ const GLYPHS: Record<string, Skeleton> = {
     },
     M: {
         advance: 70,
-        walk: [lit([0, 0], [0, CAP, 6], [12, CAP, 6], [29, 40, 6], [46, CAP, 6], [58, CAP, 6], [58, 0])],
+        walk: [lit([0, 0], [0, CAP, 6], [12, CAP, 6], [29, 40, 6, 40], [46, CAP, 6], [58, CAP, 6], [58, 0])],
         supports: [[0, 20], [58, 20]],
     },
     R: {
@@ -311,6 +315,52 @@ function fmt(value: number): string {
 /** Design units (y up) to sign units (y down). Upright: a sign-shop gothic, not a 4° accident. */
 const toSign = (x: number, y: number): [number, number] => [x, -y];
 
+/** The bend at point i, as the tangent length, the radius actually used and the turn angle. */
+function fillet(at: [number, number][], i: number, radius: number) {
+    const [ax, ay] = at[i - 1];
+    const [bx, by] = at[i];
+    const [cx, cy] = at[i + 1];
+    const before = Math.hypot(bx - ax, by - ay);
+    const after = Math.hypot(cx - bx, cy - by);
+    const u = [(bx - ax) / before, (by - ay) / before];
+    const v = [(cx - bx) / after, (cy - by) / after];
+    const turn = Math.acos(Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1])));
+    const room = Math.min(before * (i - 1 === 0 ? 1 : 0.5), after * (i + 1 === at.length - 1 ? 1 : 0.5));
+    const t = Math.min(radius * Math.tan(turn / 2), room);
+    return { u, v, turn, t, r: t / Math.tan(turn / 2) };
+}
+
+/** How far up (in design units) the bent glass reaches at point i. */
+function tipHeight(at: [number, number][], i: number, radius: number): number {
+    const { u, v, turn, r } = fillet(at, i, radius);
+    const bisector = [v[0] - u[0], v[1] - u[1]];
+    const length = Math.hypot(bisector[0], bisector[1]);
+    const reach = r / Math.sin((Math.PI - turn) / 2) - r;
+    return -(at[i][1] + (bisector[1] / length) * reach);
+}
+
+/** Moves each sharp point until its bent glass reaches the height it asks for. */
+function settle(points: Point[], at: [number, number][]): void {
+    points.forEach((point, i) => {
+        if (point.length < 4) return;
+        const target = point[3] as number;
+        const radius = (point[2] as number) ?? RADIUS;
+        const height = (y: number) => {
+            at[i] = [at[i][0], -y];
+            return tipHeight(at, i, radius) - target;
+        };
+        let low = target - 120;
+        let high = target + 120;
+        if (Math.sign(height(low)) === Math.sign(height(high))) throw new Error(`can't settle the point at ${point}`);
+        for (let step = 0; step < 60; step++) {
+            const mid = (low + high) / 2;
+            if (Math.sign(height(mid)) === Math.sign(height(low))) low = mid;
+            else high = mid;
+        }
+        height((low + high) / 2);
+    });
+}
+
 /**
  * Straight glass with each turn taken around a former: a true circular bend,
  * drawn as a cubic. A turn may use up to the whole of a segment that ends the
@@ -320,6 +370,7 @@ const toSign = (x: number, y: number): [number, number] => [x, -y];
  */
 function bend(points: Point[]): string {
     const at = points.map((p) => toSign(p[0], p[1]));
+    settle(points, at);
     let d = `M${fmt(at[0][0])} ${fmt(at[0][1])}`;
     for (let i = 1; i < at.length - 1; i++) {
         const [ax, ay] = at[i - 1];

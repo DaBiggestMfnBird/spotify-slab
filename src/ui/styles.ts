@@ -193,7 +193,7 @@ ${FONT_CSS}
   align-items: center;
   gap: 10px;
   height: 40px;
-  padding: 8px 0 0 12px;
+  padding: 8px 0 0 14px;
 }
 .slab-badge { flex: none; display: block; }
 .slab-tag {
@@ -224,7 +224,7 @@ ${FONT_CSS}
 }
 .slab-bay {
   position: relative;
-  padding: 8px 8px 4px;
+  padding: 8px 8px 6px;
   overflow: hidden;
   border-radius: 3px;
   background:
@@ -247,57 +247,66 @@ ${FONT_CSS}
 
 ${NEON_CSS}
 
-/* The sign stage holds its size in every state. */
-.slab-stage { height: 84px; }
+/*
+ * The sign stage holds its size in every state: the sign's board, then one line
+ * of subtitle, in flow, so larger text spacing pushes the panel down rather than
+ * pushing words into the glass. A two-line message gets the compact sign.
+ */
+.slab-stage { display: flex; flex-direction: column; min-height: 84px; }
 .slab-sign {
-  position: absolute;
-  left: 0;
-  top: 0;
+  position: relative;
+  flex: none;
   width: 360px;
-  height: 70px;
+  height: 66px;
 }
+.slab-panel[data-compact="true"] .slab-sign { height: 48px; }
 .slab-sub, .slab-dead {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
   text-align: center;
   line-height: 18px;
 }
 .slab-sub { color: var(--wall-soft); }
-/* On the dead glass, two lines at most however long the device is called. */
+/* On the dead glass: where it's playing on one line (the name is cut short to fit), what that means on the next. */
 .slab-dead {
   font-size: 14px;
   font-weight: 600;
   color: var(--wall);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
 }
-.slab-panel[data-primer="true"] .slab-sub { visibility: hidden; }
+.slab-dead[hidden] { display: none; }
+.slab-dead-where, .slab-dead-why { display: block; }
+/* The message takes the subtitle's line; with no message the line is the subtitle's. */
+.slab-panel[data-primer="true"] .slab-sub { display: none; }
 /* A short window gets the compact sign and one line under it. */
-.slab-panel[data-short="true"] .slab-stage { height: 70px; }
+.slab-panel[data-short="true"] .slab-stage { min-height: 70px; }
 .slab-panel[data-short="true"] .slab-sub { display: none; }
-.slab-panel[data-short="true"] .slab-dead { -webkit-line-clamp: 1; }
+.slab-panel[data-short="true"] .slab-mood { min-height: 34px; grid-template-rows: minmax(26px, auto); }
+.slab-panel[data-short="true"] .slab-mood-cents {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.slab-panel[data-short="true"] .slab-mood-curve { height: 26px; }
+.slab-panel[data-short="true"] .slab-sill-plate { min-height: 20px; }
 
 /* Pitch. */
 .slab-pitch-head {
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 42px;
+  min-height: 42px;
   margin-top: 4px;
 }
 .slab-pitch-words {
   flex: 1;
   min-width: 0;
+  padding-left: 3px;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 .slab-pitch-label { font-weight: 600; font-size: 14px; line-height: 17px; color: var(--wall-soft); }
-.slab-semi { color: var(--wall-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slab-semi { color: var(--wall-soft); }
 .slab-number-tube { flex: none; width: 118px; height: 42px; }
 .slab-nudges { flex: none; display: flex; gap: 4px; margin-left: 8px; }
 
@@ -317,10 +326,10 @@ ${NEON_CSS}
     #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
     #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
   --lit-rolls: repeating-linear-gradient(180deg,
-    color-mix(in srgb, var(--gas) 12%, #0D0304) 0, color-mix(in srgb, var(--gas) 12%, #0D0304) 1px,
-    color-mix(in srgb, var(--gas-glass) 78%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
-    color-mix(in srgb, var(--gas) 34%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 14%, #3A151B) calc(var(--roll) * 0.83),
-    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
+    #0A0306 0, #0A0306 1px,
+    color-mix(in srgb, var(--gas-glass) 72%, #4A1C22) 1px, color-mix(in srgb, var(--gas) 42%, #3A141A) calc(var(--roll) * 0.22),
+    color-mix(in srgb, var(--gas) 12%, #2A0C11) calc(var(--roll) * 0.5), #1C070B calc(var(--roll) * 0.83),
+    #130407 calc(var(--roll) * 0.94), #0A0306 var(--roll));
   position: relative;
   display: inline-flex;
   flex-direction: column;
@@ -350,10 +359,14 @@ ${NEON_CSS}
   background: var(--lit-rolls);
   transition: opacity 160ms ease-out;
 }
+/* With the gas out there's no light to catch: a latched press reads as pushed in, with a whitewall edge. */
 .slab-panel[data-gas="off"] .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
-    #121212 0, #121212 1px, #A9A9A6 1px, #8A8A88 calc(var(--roll) * 0.22),
-    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
-    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); }
+    #0E0E0E 0, #0E0E0E 1px, #5A5A58 1px, #4A4A49 calc(var(--roll) * 0.22),
+    #383837 calc(var(--roll) * 0.5), #2A2A29 calc(var(--roll) * 0.83),
+    #1E1E1D calc(var(--roll) * 0.94), #0E0E0E var(--roll)); }
+.slab-panel[data-gas="off"] .slab-press::after { box-shadow: inset 0 0 0 1px rgba(255, 243, 224, 0.7); }
+/* Auto chop latched with no beat grid is waiting, not cutting: pushed in, unlit. */
+.slab-panel[data-grid="false"] .slab-auto-press[aria-checked="true"]::after { opacity: 0; }
 .slab-press:hover:not([aria-disabled="true"])::before { opacity: 1; }
 .slab-press:active:not([aria-disabled="true"]),
 .slab-press[data-hit="true"]:not([aria-disabled="true"]),
@@ -527,7 +540,8 @@ ${NEON_CSS}
 /* The knock-off turns about the poke's tip, not the axle. */
 .slab-roll.slab-knock, .slab-spin.slab-knock { transform-origin: var(--slab-poke); }
 /* Thirty spokes on a 12° pitch strobe at speed; they fade and the knock-off carries the turn. */
-.slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.45; }
+.slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.65; }
+.slab-wheel[data-spin="on"] .slab-roll.slab-knock { opacity: 0.8; }
 .slab-range:disabled ~ .slab-wheel { filter: saturate(0.35) brightness(0.75); }
 /* Spinning, the well behind the faded spokes reads as blurred chrome, not a dark turbine. */
 .slab-wheel[data-spin="on"] .slab-well { fill: #5E666B; }
@@ -573,10 +587,10 @@ ${NEON_CSS}
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
-  grid-template-rows: 18px 16px;
+  grid-template-rows: minmax(18px, auto) minmax(16px, auto);
   column-gap: 6px;
   align-items: center;
-  height: 42px;
+  min-height: 42px;
   padding: 4px 8px 4px 14px;
   text-align: left;
   border-radius: 4px;
@@ -593,9 +607,8 @@ ${NEON_CSS}
   font-weight: 700;
   font-size: 14px;
   line-height: 17px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wider text spacing wraps a long name onto a second line; it's never cut. */
+  overflow-wrap: anywhere;
 }
 .slab-mood-curve { grid-column: 2; grid-row: 1 / 3; overflow: visible; color: var(--wall-soft); }
 .slab-mood-zero { fill: none; stroke: currentColor; stroke-opacity: 0.3; stroke-width: 1; }
@@ -621,9 +634,11 @@ ${NEON_CSS}
   column-gap: 4px;
   align-items: center;
   height: 32px;
+  padding-right: 10px;
 }
 .slab-bpm { display: inline-flex; align-items: baseline; gap: 4px; padding-left: 14px; white-space: nowrap; }
 .slab-bpm b { font: 700 26px/32px "SLAB Barlow Tall", "Barlow Condensed", "SLAB Barlow", "Bahnschrift Condensed", "Arial Narrow", sans-serif; }
+.slab-bpm small { font-size: 12px; font-weight: 500; }
 .slab-count { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 14px; }
 .slab-bar { white-space: nowrap; }
 .slab-lamps { display: inline-flex; gap: 3px; flex: none; }
@@ -679,12 +694,12 @@ ${NEON_CSS}
 /* Five pads; Stop, the one that halts the record, sits a hand's width apart. */
 .slab-pads {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr)) 4px minmax(0, 1fr);
   gap: 4px;
   margin-top: 8px;
 }
 .slab-pad { --roll: 27px; height: 54px; gap: 1px; }
-.slab-pad[data-pad="stop"] { margin-left: 8px; }
+.slab-pad[data-pad="stop"] { grid-column: 6; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
 .slab-pad small { font-size: 12px; line-height: 14px; color: var(--wall-soft); }
 /* The number key that plays it, small in the corner like a pad number on a sampler. */
@@ -705,11 +720,11 @@ ${NEON_CSS}
   height: 44px;
   padding-top: 4px;
 }
-.slab-auto-press { --roll: 30px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-auto-press { --roll: 30px; min-width: 104px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
 .slab-auto-on { display: none; }
 .slab-auto-press[aria-checked="true"] .slab-auto-on { display: inline; }
 .slab-stepper { display: flex; align-items: center; gap: 6px; }
-.slab-every { width: 140px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
+.slab-every { width: 150px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
 .slab-panel[data-auto="on"] .slab-every { color: var(--wall); }
 .slab-step { --roll: 30px; width: 34px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
 
@@ -730,8 +745,8 @@ ${NEON_CSS}
   background:
     repeating-linear-gradient(180deg, #F2F4F5 0, #F2F4F5 1px, #5C6064 1px, #5C6064 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px) left 0 top 4px / 100% 9px no-repeat,
     repeating-linear-gradient(180deg, #F2F4F5 0, #F2F4F5 1px, #5C6064 1px, #5C6064 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px) left 0 bottom 3px / 100% 9px no-repeat,
-    linear-gradient(180deg, #8A9096 0, #B9BEC2 45%, #7D8389 100%);
-  box-shadow: inset 0 2px 0 #F3F5F6, inset 0 3px 0 rgba(0, 0, 0, 0.3), inset 0 -2px 0 #5F6569;
+    linear-gradient(180deg, #7B8187 0, #A3A8AC 45%, #6F757B 100%);
+  box-shadow: inset 0 2px 0 #E4E7E9, inset 0 3px 0 rgba(0, 0, 0, 0.3), inset 0 -2px 0 #565C60;
 }
 
 /* When the car runs on behind the pinned plate, its edge fades into it. */
@@ -755,20 +770,21 @@ ${NEON_CSS}
   min-height: 38px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 3px 10px;
+  justify-content: flex-start;
+  padding: 3px 6px;
   border-radius: 2px;
-  background: linear-gradient(180deg, #A7ACB0, #B5BABE);
+  background: linear-gradient(180deg, #90969A, #9DA2A6);
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.35), inset 0 -1px 0 rgba(255, 255, 255, 0.35);
   font-weight: 600;
   color: #101114;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 /* With ModernEQ the plate keeps room for its row as well, again in every state. */
-.slab-sill[data-eq="on"] .slab-sill-plate { min-height: 64px; }
-.slab-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slab-sill[data-eq="on"] .slab-sill-plate { min-height: 62px; }
+/* Status wraps rather than being cut off; the plate grows to hold it. */
+.slab-status { overflow-wrap: anywhere; }
 .slab-status:empty { display: none; }
-.slab-eq { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 24px; margin-bottom: 2px; flex: none; }
+.slab-eq { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 22px; flex: none; }
 .slab-eq[hidden] { display: none; }
 .slab-eq-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A stamped metal key on the metal plate, not upholstery bolted to it. */
@@ -785,6 +801,8 @@ ${NEON_CSS}
   box-shadow: inset 0 1px 0 #FFFFFF, inset 0 0 0 1px rgba(0, 0, 0, 0.25), 0 1px 0 #5C6064, 0 2px 2px rgba(0, 0, 0, 0.25);
 }
 .slab-press.slab-eq-btn::after { display: none; }
+/* On the bright stainless a white ring vanishes; the plate gets a dark one. */
+.slab-sill button:focus-visible { outline-color: #101114; }
 
 /* Playbar chip. Same footprint as the client's own buttons, and its own active dot when on. */
 .slab-chip {
@@ -830,6 +848,28 @@ ${NEON_CSS}
   .slab-rail[data-rolling="true"] .slab-rail-run { transition: none; }
 }
 
+/*
+ * An engine without color-mix() would drop every gas mix: the lit tube would
+ * vanish and hits would lose their light. These are the same mixes worked out
+ * for the default argon, as plain colours.
+ */
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  .slab-panel { --gas-spill: rgba(62, 88, 255, 0.24); }
+  .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
+    #0A0306 0, #0A0306 1px, #8D93D0 1px, #403E8A calc(var(--roll) * 0.22),
+    #2F1730 calc(var(--roll) * 0.5), #1C070B calc(var(--roll) * 0.83),
+    #130407 calc(var(--roll) * 0.94), #0A0306 var(--roll)); }
+  .slab-bay::before { background: radial-gradient(72% 36% at 50% 20%, rgba(62, 88, 255, 0.24) 0, rgba(62, 88, 255, 0.08) 60%, rgba(62, 88, 255, 0) 100%); }
+  .slab-rail-tube {
+    background: linear-gradient(180deg, #2B3C8F 0, #4D6BFF 45%, #263680 100%);
+    box-shadow: 0 0 2px rgba(77, 107, 255, 0.6), 0 0 6px rgba(77, 107, 255, 0.24), 0 5px 5px rgba(0, 0, 0, 0.5);
+  }
+  .slab-rail-hot { box-shadow: 0 0 2px 1px #4D6BFF, 0 0 8px 2px rgba(77, 107, 255, 0.7), 0 0 20px 5px rgba(77, 107, 255, 0.28); }
+  .slab-panel[data-tube="idle"] .slab-rail-tube { background: linear-gradient(180deg, #424D7B, #596492 45%, #3B4673); }
+  .slab-panel[data-tube="idle"] .slab-rail-hot { background: linear-gradient(180deg, #9CA8D7, #AFBBE9); }
+  .slab-panel[data-tube="idle"] .slab-rail-run { background: #9CA8D7; }
+}
+
 /* Windows High Contrast and other forced palettes: state by outline, never by paint. */
 @media (forced-colors: active) {
   .slab-press, .slab-mood { border: 1px solid ButtonText; }
@@ -842,6 +882,9 @@ ${NEON_CSS}
   .slab-lamps i[data-on="true"] { background: Highlight; }
   .slab-rail-tube { background: CanvasText; }
   .slab-rail-hot, .slab-rail-run { background: Highlight; }
-  .slab-stripe { display: none; }
+  .slab-panel .slab-stripe { display: none; }
+  /* Neon becomes plain system-coloured line work: no glow, no shadow, readable on any palette. */
+  .slab-tube [data-l="glass"], .slab-tube [data-l="core"], .slab-tube [data-l="frost"], .slab-tube [data-l="frostHi"] { stroke: CanvasText; }
+  .slab-tube [data-l="bloom"], .slab-tube [data-l="halo"], .slab-tube-cast, .slab-tube [data-l="dark"] { display: none; }
 }
 `;

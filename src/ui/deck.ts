@@ -2,6 +2,7 @@ import {
     autoBarsAhead,
     cancelLoop,
     chopBars,
+    isLooping,
     isStopping,
     loopBars,
     loopRemaining,
@@ -50,9 +51,9 @@ const EVERY_MAX = 16;
 const DEVICE_NAME_MAX = 56;
 /** The tallest the panel gets, and the least room above the playbar worth opening into. */
 const PANEL_MAX_PX = 680;
-const MIN_ROOM_PX = 320;
-/** What the compact sign saves; keep in step with .slab-stage in styles.ts. */
-const SHORT_SAVING_PX = 14;
+const MIN_ROOM_PX = 160;
+/** What short mode saves (sign 14, doors 3 x 8, sill 18); keep in step with the data-short rules in styles.ts. */
+const SHORT_SAVING_PX = 56;
 /** Line height of the dead-sign message; two of these and the sign makes room. Keep in step with styles.ts. */
 const DEAD_LINE_PX = 18;
 /** After a failed analysis fetch, wait this long before each retry; then stop until the track changes. */
@@ -89,10 +90,10 @@ function remoteDeviceName(): string | null {
 }
 
 /** A device can be called anything. Long names are cut at a word and end the sentence themselves. */
-function deviceSentence(raw: string): string {
+function deviceSentence(raw: string, max = DEVICE_NAME_MAX): string {
     const name = raw.trim().replace(/[.\s]+$/, "") || "another device";
-    if (name.length <= DEVICE_NAME_MAX) return `${name}.`;
-    const cut = name.slice(0, DEVICE_NAME_MAX);
+    if (name.length <= max) return `${name}.`;
+    const cut = name.slice(0, max);
     const word = cut.lastIndexOf(" ");
     return `${(word > 12 ? cut.slice(0, word) : cut).trimEnd()}…`;
 }
@@ -129,6 +130,15 @@ function reducedMotion(): boolean {
         return false;
     }
 }
+
+/** Spotify's transport: play, skip, the seek bar and volume. Clicking these keeps the panel open. */
+const TRANSPORT = [
+    '[data-testid^="control-button-"]',
+    '[data-testid="playback-progressbar"]',
+    '[data-testid="volume-bar"]',
+    '[data-testid="volume-bar-toggle-mute-button"]',
+    ".player-controls",
+].join(", ");
 
 /** Inputs that take no typing; a focused slider or switch must not swallow the pad keys. */
 const KEYLESS_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "color", "file", "image"]);
@@ -267,6 +277,9 @@ export class Deck {
     private signEl: HTMLDivElement;
     private subEl: HTMLParagraphElement;
     private deadEl: HTMLParagraphElement;
+    private deadWhereEl: HTMLSpanElement;
+    /** The device Spotify is playing on, when it isn't this computer. */
+    private deadRemote: string | null = null;
 
     private numberTube: Tube;
     private semiEl: HTMLSpanElement;
@@ -303,6 +316,7 @@ export class Deck {
     private pads: HTMLButtonElement[] = [];
     private padTimers = new Map<HTMLButtonElement, number>();
     private loopSub: HTMLElement | null = null;
+    private padDefs = new Map<HTMLButtonElement, PadDef>();
     /** Stops any held-button repeat; run on destroy. */
     private releases: (() => void)[] = [];
     private switchEl: HTMLButtonElement;
@@ -331,9 +345,12 @@ export class Deck {
     /** Failed analysis fetches for the current track; each retry waits longer. */
     private gridMisses = 0;
     private announceTimer: number | null = null;
+    private settleTimer: number | null = null;
     private resizeFrame: number | null = null;
     private lastPlaying: boolean | null = null;
     private lampFrame: number | null = null;
+    /** Re-places the panel when its own height changes (the ModernEQ row, a short window). */
+    private sizeWatch: ResizeObserver | null = null;
     private lastDspSync = 0;
     private pitchTimer: number | null = null;
     private pendingPitch: number | null = null;
@@ -346,6 +363,12 @@ export class Deck {
     private lastEqCheck = 0;
     private lastRemote: string | null = null;
     private onDocumentClick = (event: MouseEvent) => this.handleOutside(event);
+    /** Where the last press began: a click is only "outside" if it started outside. */
+    private pressedInside = false;
+    private onPointerStart = (event: PointerEvent) => {
+        const target = event.target as Node | null;
+        this.pressedInside = Boolean(target && (this.panel.contains(target) || this.chip.contains(target)));
+    };
     private onKey = (event: KeyboardEvent) => this.handleKey(event);
     /** One reposition per frame, however fast the window is dragged. */
     private onResize = () => {
@@ -365,7 +388,11 @@ export class Deck {
         this.signTube = new Tube("slab-sign-tube", SIGN_WIDTH, SIGN_HEIGHT);
         this.signEl = h("div", { class: "slab-sign", role: "img" }, this.signTube.node);
         this.subEl = h("p", { class: "slab-sub" });
-        this.deadEl = h("p", { class: "slab-dead", "aria-live": "polite" });
+        // Where it's playing, then what that means, each on its own line, so the second is never the one cut.
+        this.deadWhereEl = h("span", { class: "slab-dead-where" });
+        this.deadEl = h("p", { class: "slab-dead" }, this.deadWhereEl, " ",
+            h("span", { class: "slab-dead-why" }, "SLAB only reaches this computer."));
+        this.deadEl.hidden = true;
 
         this.numberTube = new Tube("slab-number-tube", NUMBER_WIDTH, NUMBER_HEIGHT);
         this.semiEl = h("span", { class: "slab-semi", id: "slab-semi" });
@@ -496,8 +523,10 @@ export class Deck {
         this.panel = this.buildPanel();
 
         onChop((event) => {
-            this.flashActivity(event.label);
-            if (event.kind === "auto") this.hitPad(this.pads[0]);
+            // Auto chop cuts every few bars on its own; it's shown, not spoken each time.
+            const automatic = event.kind === "auto";
+            this.flashActivity(event.label, !automatic);
+            if (automatic) this.hitPad(this.pads[0]);
         });
     }
 
@@ -505,12 +534,17 @@ export class Deck {
         this.injectStyles();
         this.mountChip();
         document.body.append(this.panel);
+        document.addEventListener("pointerdown", this.onPointerStart, true);
         document.addEventListener("click", this.onDocumentClick, true);
         // The panel sits above Spotify's own menus, so opening one closes it.
         document.addEventListener("contextmenu", this.onDocumentClick, true);
         document.addEventListener("keydown", this.onKey);
         window.addEventListener("resize", this.onResize);
         this.panel.addEventListener("scroll", this.onScroll, { passive: true });
+        if (typeof ResizeObserver === "function") {
+            this.sizeWatch = new ResizeObserver(() => this.onResize());
+            this.sizeWatch.observe(this.panel);
+        }
 
         if (this.state.open) this.open();
         else this.panel.hidden = true;
@@ -538,10 +572,16 @@ export class Deck {
         void this.applyMood(this.state.moodId, false);
         void this.syncGrid();
         this.refresh();
-        // Measurements taken before the embedded faces arrive are in the fallback font.
-        void document.fonts?.ready.then(() => {
-            if (!this.disposed) this.renderSign();
-        });
+        // Measurements taken before the embedded faces arrive are in the fallback
+        // font, and nothing asks for them until text is drawn, so ask now.
+        void Promise.all([
+            document.fonts?.load('600 14px "SLAB Barlow"'),
+            document.fonts?.load('500 12px "SLAB Barlow"'),
+        ])
+            .catch(() => undefined)
+            .then(() => {
+                if (!this.disposed) this.renderSign();
+            });
         this.refreshTimer = window.setInterval(() => this.refresh(), 100);
         this.chipTimer = window.setInterval(() => this.ensureChip(), 1200);
     }
@@ -554,6 +594,7 @@ export class Deck {
         if (this.rollTimer !== null) window.clearTimeout(this.rollTimer);
         if (this.pitchTimer !== null) window.clearTimeout(this.pitchTimer);
         if (this.announceTimer !== null) window.clearTimeout(this.announceTimer);
+        if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
         if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
         for (const timer of this.padTimers.values()) window.clearTimeout(timer);
         this.padTimers.clear();
@@ -565,11 +606,14 @@ export class Deck {
         this.spinning = false;
         this.strikeAnimation?.cancel();
         this.strikeAnimation = null;
+        document.removeEventListener("pointerdown", this.onPointerStart, true);
         document.removeEventListener("click", this.onDocumentClick, true);
         document.removeEventListener("contextmenu", this.onDocumentClick, true);
         document.removeEventListener("keydown", this.onKey);
         window.removeEventListener("resize", this.onResize);
         this.panel.removeEventListener("scroll", this.onScroll);
+        this.sizeWatch?.disconnect();
+        this.sizeWatch = null;
         this.chip.remove();
         this.panel.remove();
         // A newer copy may be taking over, and it brings its own sheet.
@@ -607,16 +651,22 @@ export class Deck {
         const lyrics = document.querySelector('[data-testid="lyrics-button"]');
         const host = lyrics?.parentElement;
         if (lyrics && host) {
-            if (this.chip.nextElementSibling !== lyrics) host.insertBefore(this.chip, lyrics);
+            // Already among the controls is home, even if another extension sits between it and Lyrics.
+            if (this.chip.parentElement !== host) host.insertBefore(this.chip, lyrics);
             return;
         }
         if (this.chip.isConnected) return;
         document.querySelector('[data-testid="now-playing-bar"]')?.append(this.chip);
     }
 
-    /** Spotify builds the playbar late and rebuilds it on some navigation, so keep re-homing the chip. */
+    /**
+     * Spotify builds the playbar late and rebuilds it on some navigation, so keep
+     * re-homing the chip, and place an open panel again once its anchor exists.
+     */
     private ensureChip(): void {
+        const wasHome = this.chip.isConnected;
         this.mountChip();
+        if (!wasHome && this.chip.isConnected && !this.panel.hidden) this.position();
     }
 
     private buildChip(): HTMLButtonElement {
@@ -808,24 +858,33 @@ export class Deck {
                 sub: LOOP_SUB,
                 // A second press ends the loop early.
                 run: () => {
-                    if (loopRemaining() === 0) return loopBars(LOOP_TIMES);
+                    if (!isLooping()) return loopBars(LOOP_TIMES);
                     cancelLoop();
                     this.flashActivity("Loop off");
                     return true;
                 },
-                miss: "This bar is too short to loop.",
+                miss: "Nothing to loop here yet.",
             },
             {
                 id: "stop",
                 label: "Stop",
                 sub: "Tape stop",
                 run: () => {
-                    if (isStopping()) return false;
+                    if (isStopping()) {
+                        this.flashActivity("Already stopping");
+                        return false;
+                    }
+                    if (!isPlaying()) {
+                        this.flashActivity("Already stopped");
+                        return false;
+                    }
                     const linked = dspStatus().linked;
                     if (linked) void dspTapeStop();
                     // 380 ms down + 70 ms hold in the helper; pause right after
-                    // the ramp bottoms out so the effect is not clipped.
-                    return tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : undefined);
+                    // the ramp bottoms out so the effect is not clipped. The pad
+                    // lights now, as the stop starts, not when it's over.
+                    void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : undefined);
+                    return true;
                 },
             },
         ];
@@ -839,6 +898,7 @@ export class Deck {
             }, h("i", { class: "slab-key", "aria-hidden": "true" }, String(index + 1)), h("b", {}, def.label), sub);
             if (def.id === "loop") this.loopSub = sub;
             this.press(pad, () => this.firePad(pad, def));
+            this.padDefs.set(pad, def);
             this.pads.push(pad);
             padRow.append(pad);
         });
@@ -875,10 +935,16 @@ export class Deck {
         if (this.panel.hidden) return;
         const target = event.target as Node | null;
         if (!target) return;
+        if (event.type === "click" && this.pressedInside) {
+            this.pressedInside = false;
+            return;
+        }
         if (this.panel.contains(target) || this.chip.contains(target)) return;
         // Play, the seek bar and volume are part of playing the deck: after a tape
-        // stop the next move is Spotify's play button, so the playbar never closes it.
-        if (target instanceof Element && target.closest('[data-testid="now-playing-bar"]')) return;
+        // stop the next move is Spotify's play button, so those never close it.
+        // Anything that opens a menu (a right-click, devices, the queue) does, so
+        // the menu isn't hidden under the panel.
+        if (event.type === "click" && target instanceof Element && target.closest(TRANSPORT)) return;
         this.close();
     }
 
@@ -910,16 +976,38 @@ export class Deck {
             event.preventDefault();
             this.chip.focus({ preventScroll: true });
         } else if (!event.shiftKey && active === stops[stops.length - 1]) {
-            const next = this.chip.nextElementSibling;
+            const next = this.stopAfterChip();
+            if (!next) return;
             event.preventDefault();
-            if (next instanceof HTMLElement && next.tabIndex >= 0) next.focus({ preventScroll: true });
-            else this.chip.focus({ preventScroll: true });
+            next.focus({ preventScroll: true });
         }
+    }
+
+    /** The next thing Tab would reach after the chip in the page's own order, skipping the panel and anything disabled. */
+    private stopAfterChip(): HTMLElement | null {
+        const all = [...document.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]")].filter(
+            (node) =>
+                node.tabIndex >= 0 &&
+                !node.hasAttribute("disabled") &&
+                !this.panel.contains(node) &&
+                node.getClientRects().length > 0,
+        );
+        const at = all.indexOf(this.chip);
+        return at >= 0 ? (all[at + 1] ?? null) : null;
     }
 
     private handleKey(event: KeyboardEvent): void {
         if (this.panel.hidden || event.defaultPrevented) return;
         const target = event.target as Node | null;
+        // Shift+Tab from whatever follows the chip comes back into the panel, the way it left.
+        if (event.key === "Tab" && event.shiftKey && target instanceof HTMLElement && target === this.stopAfterChip()) {
+            const stops = this.focusables();
+            if (stops.length) {
+                event.preventDefault();
+                stops[stops.length - 1].focus({ preventScroll: true });
+            }
+            return;
+        }
         const inPanel = Boolean(target && (this.panel.contains(target) || this.chip.contains(target)));
         if (event.key === "Escape") {
             // Esc in Spotify's search or one of its dialogs belongs to Spotify.
@@ -933,7 +1021,9 @@ export class Deck {
         event.preventDefault();
         // A held key is one hit, not a machine gun of seeks. A dead pad still answers, with why.
         if (event.repeat) return;
-        this.pads[index - 1].click();
+        const pad = this.pads[index - 1];
+        const def = this.padDefs.get(pad);
+        if (def) this.firePad(pad, def);
     }
 
     /**
@@ -965,7 +1055,7 @@ export class Deck {
         }
         event.preventDefault();
         if (event.repeat || to === from) return;
-        void this.applyMood(order[to], true);
+        void this.applyMood(order[to], true, false);
         this.moodButtons.get(order[to])?.focus();
     }
 
@@ -985,7 +1075,10 @@ export class Deck {
         this.refresh();
         // The helper may have started since the last look; don't make the user wait out the backoff.
         void probeDsp(true);
-        if (fromKeyboard) this.moodButtons.get(moodById(this.state.moodId).id)?.focus();
+        if (fromKeyboard) {
+            if (!this.pitchInput.disabled) this.pitchInput.focus({ preventScroll: true });
+            else this.moodButtons.get(moodById(this.state.moodId).id)?.focus({ preventScroll: true });
+        }
     }
 
     close(): void {
@@ -1054,7 +1147,7 @@ export class Deck {
         setData(this.panel, "above", this.panel.scrollTop > 2 ? "true" : "false");
     }
 
-    private async applyMood(id: string, announce: boolean): Promise<void> {
+    private async applyMood(id: string, announce: boolean, speak = true): Promise<void> {
         this.state.moodId = id;
         const mood = moodById(id);
         // Moods are presets for the pitch slider, not a separate concept: pick
@@ -1078,7 +1171,7 @@ export class Deck {
         // this resolves false and the mood stays EQ-only.
         void sendDsp({ ...mood.dsp, pitch: this.state.pitch });
 
-        if (announce) this.flashActivity(mood.name);
+        if (announce) this.flashActivity(mood.name, speak);
     }
 
     /** The one flourish: a neon sign catching as the gas strikes. */
@@ -1139,9 +1232,10 @@ export class Deck {
         delete this.railEl.dataset.rolling;
     }
 
-    /** Nudges and Normal, which arrive as one committed value. */
+    /** Nudges and Normal, which arrive as one committed value; the new pitch is said once the presses stop. */
     private setPitch(cents: number, roll: boolean): void {
         this.state.pitch = clampPitch(cents);
+        this.announceSettled(() => this.pitchInput.getAttribute("aria-valuetext") ?? "");
         this.renderPitch(roll);
         this.renderLit();
         this.pendingPitch = this.state.pitch;
@@ -1169,7 +1263,7 @@ export class Deck {
         const cents = this.state.pitch;
         const status = dspStatus();
         const linked = status.linked;
-        const applied = linked && status.tapping === true && status.audio === true && !remoteDeviceName();
+        const applied = this.hearing().processing;
 
         if (this.pitchInput.value !== String(cents)) this.pitchInput.value = String(cents);
         // A native disable would drop the focus to the document.
@@ -1242,7 +1336,7 @@ export class Deck {
      */
     private updateSpin(): void {
         if (this.disposed) return;
-        const should = !this.panel.hidden && this.hearing().processing && !reducedMotion();
+        const should = !this.panel.hidden && this.hearing().shifting && !reducedMotion();
         if (should === this.spinning) return;
         this.spinning = should;
         // Thirty spokes on a 12° pitch strobe backwards at speed, so they fade
@@ -1278,16 +1372,27 @@ export class Deck {
         this.flashActivity(this.slabOwnsEq() ? "SLAB has the EQ" : "ModernEQ has the EQ");
     }
 
+    /** Places the panel again if it's open; its height changes with the ModernEQ row. */
+    private reposition(): void {
+        if (!this.panel.hidden) this.position();
+    }
+
     /** With no ModernEQ the row goes and the sill's fixed height re-centres the rest. */
     private renderEqNote(): void {
         // A user who handed the EQ to ModernEQ and then removed it still needs a way to take it back.
         if (!this.modernEq && this.state.eqOwner !== "modern") {
+            // Hiding the row under a focused key would drop focus to the page; keep it on the mood.
+            if (!this.eqNote.hidden && this.eqNote.contains(document.activeElement)) {
+                this.moodButtons.get(moodById(this.state.moodId).id)?.focus({ preventScroll: true });
+            }
             this.eqNote.hidden = true;
             if (this.sillEl) setData(this.sillEl, "eq", "off");
+            this.reposition();
             return;
         }
         this.eqNote.hidden = false;
         if (this.sillEl) setData(this.sillEl, "eq", "on");
+        this.reposition();
         const label = this.eqNoteButton.firstElementChild as Element;
         if (this.slabOwnsEq()) {
             setText(this.eqNoteText, "SLAB has the EQ.");
@@ -1298,11 +1403,15 @@ export class Deck {
         }
     }
 
-    /** Hand the bands back with the curve ModernEQ last saved. */
+    /**
+     * Hand the bands back with the curve ModernEQ last saved. With no saved
+     * curve, put back the user's own, so SLAB's mood isn't left on the filters
+     * while the sill says SLAB isn't changing the sound.
+     */
     private async restoreModernEqCurve(): Promise<void> {
         const bands = modernEqBands();
-        if (!bands) return;
-        await applyCurveAtFrequencies(bands);
+        if (bands) await applyCurveAtFrequencies(bands);
+        else await restoreBaseline();
     }
 
     /** ModernEQ can appear after SLAB does; re-check slowly, not every tick. */
@@ -1320,18 +1429,18 @@ export class Deck {
         else void this.restoreModernEqCurve();
     }
 
-    /** The effects the helper is running: what it reports where it says, else what was sent. */
+    /**
+     * The effects the helper is running, from what SLAB sent it: the picked
+     * mood's parameters with the slider's pitch. What the helper reports lags a
+     * mood change by a probe, and syncDspParams() corrects any real drift.
+     */
     private helperEffects(): string[] {
-        const reported = dspStatus().params ?? {};
         const sent = moodById(this.state.moodId).dsp;
-        const reverb = reported.reverb ?? sent.reverb;
-        const delay = reported.delayMix ?? sent.delayMix;
-        const lowpass = reported.lowpass ?? sent.lowpass;
         return [
             ...(this.state.pitch !== 0 ? ["pitch"] : []),
-            ...(reverb > 0 ? ["reverb"] : []),
-            ...(delay > 0 ? ["delay"] : []),
-            ...(lowpass < 20_000 ? ["low-pass"] : []),
+            ...(sent.reverb > 0 ? ["reverb"] : []),
+            ...(sent.delayMix > 0 ? ["delay"] : []),
+            ...(sent.lowpass < 20_000 ? ["low-pass"] : []),
         ];
     }
 
@@ -1342,28 +1451,30 @@ export class Deck {
      * there is an EQ, SLAB owns it and the mood isn't Flat; the helper half counts
      * while audio is flowing through it and it is changing something.
      */
-    private hearing(): { remote: string | null; processing: boolean; audible: boolean } {
+    private hearing(): { remote: string | null; processing: boolean; shifting: boolean; audible: boolean } {
         const status = dspStatus();
         const remote = remoteDeviceName();
         const processing =
             !remote && status.linked && status.tapping === true && status.audio === true && isPlaying();
         const eq = !remote && eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
         const helper = processing && this.helperEffects().length > 0;
-        return { remote, processing, audible: eq || helper };
+        // Paused, nothing is heard, whatever the EQ is set to.
+        return { remote, processing, shifting: processing && this.state.pitch !== 0, audible: isPlaying() && (eq || helper) };
     }
 
     /**
      * The sign and the chip are lit only while the mood can be heard. The pitch
-     * tube is lit while the helper is processing audio here, so the slider acts
-     * live, and sits idle while the helper is running with nothing coming through.
-     * The paint only goes when the sound has left the room.
+     * tube, its number and the wheel's spin say the same about pitch: lit and
+     * turning only while the helper is actually shifting it, warm idle glass
+     * while the helper is ready with nothing to shift. The paint only goes when
+     * the sound has left the room.
      */
     private renderLit(): void {
-        const { remote, processing, audible } = this.hearing();
+        const { remote, shifting, audible } = this.hearing();
         const mood = moodById(this.state.moodId);
         setData(this.panel, "primer", remote ? "true" : "false");
         setData(this.panel, "gas", audible ? "on" : "off");
-        setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : processing ? "on" : "idle");
+        setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : shifting ? "on" : "idle");
         setData(this.chip, "remote", remote ? "true" : "false");
         setData(this.chip, "on", audible ? "true" : "false");
         // A curve SLAB isn't allowed to apply is drawn as a dashed sketch, not as the real thing.
@@ -1374,7 +1485,7 @@ export class Deck {
             remote
                 ? `SLAB playback moods. Spotify is playing on ${remote}, so SLAB isn’t heard.`
                 : audible
-                  ? `SLAB playback moods, ${mood.name} on`
+                  ? `SLAB playback moods, ${mood.name}${this.state.pitch !== 0 ? `, ${formatSemitones(this.state.pitch)} ${this.state.pitch < 0 ? "down" : "up"}` : ""} on`
                   : mood.id === "flat"
                     ? "SLAB playback moods, Flat"
                     : `SLAB playback moods, ${mood.name} picked but not heard right now`,
@@ -1386,11 +1497,14 @@ export class Deck {
         const remote = remoteDeviceName();
         this.renderLit();
 
+        this.deadRemote = remote;
         if (remote) {
-            setText(this.deadEl, `Playing on ${deviceSentence(remote)} SLAB only reaches this computer.`);
+            setText(this.deadWhereEl, `Playing on ${deviceSentence(remote)}`);
             setAttr(this.deadEl, "title", `Playing on ${remote}. Moods, pitch and effects apply when Spotify plays here.`);
+            this.deadEl.hidden = false;
         } else {
-            setText(this.deadEl, "");
+            this.deadEl.hidden = true;
+            setText(this.deadWhereEl, "");
             this.deadEl.removeAttribute("title");
         }
         this.renderSign();
@@ -1466,10 +1580,20 @@ export class Deck {
         setText(this.helperEl, text);
         setAttr(this.helperEl, "title", title);
         // The first answer after boot is not news; changes after that are.
-        if (this.lastHelperState !== null && this.lastHelperState !== "checking" && this.lastHelperState !== state) {
+        const quiet = (name: string | null) => name === "live" || name === "paused" || name === "silent";
+        if (this.lastHelperState !== null && this.lastHelperState !== "checking" && this.lastHelperState !== state && !(quiet(this.lastHelperState) && quiet(state))) {
             this.announce(text);
         }
         this.lastHelperState = state;
+    }
+
+    /** For values a held button steps through: speak only the one it stops on, read when it stops. */
+    private announceSettled(text: () => string): void {
+        if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+        this.settleTimer = window.setTimeout(() => {
+            this.settleTimer = null;
+            this.announce(text());
+        }, 500);
     }
 
     /** Emptied first, so the same words twice (two chops in a row) are still spoken twice. */
@@ -1489,7 +1613,7 @@ export class Deck {
         const before = this.lastRemote;
         this.lastRemote = remote;
         this.renderDsp();
-        if (remote) this.announce(this.deadEl.textContent ?? "");
+        if (remote) this.announce(`Playing on ${deviceSentence(remote)} SLAB only reaches this computer.`);
         else if (before) this.announce("Spotify is playing on this computer again.");
     }
 
@@ -1514,15 +1638,35 @@ export class Deck {
     }
 
     /**
+     * "Playing on …" keeps to its one line: a long device name is cut back a word
+     * at a time until it fits, so the line under it is never the one pushed out,
+     * at any text spacing. The full name stays in the title and the chip's name.
+     * A hidden panel measures nothing; opening it renders again.
+     */
+    private fitDeadLine(): void {
+        const remote = this.deadRemote;
+        if (!remote || this.deadEl.hidden) return;
+        const where = this.deadWhereEl;
+        let max = DEVICE_NAME_MAX;
+        setText(where, `Playing on ${deviceSentence(remote, max)}`);
+        while (max > 8 && where.offsetHeight > DEAD_LINE_PX * 1.5) {
+            max -= 4;
+            setText(where, `Playing on ${deviceSentence(remote, max)}`);
+        }
+    }
+
+    /**
      * The tube keeps its gauge at any size; a message that wraps to two lines gets
      * the sign's lower part. Measured, not counted, so a fallback font or a narrow
      * name can't fool it. A hidden panel measures nothing, and opening it renders again.
      */
     private renderSign(): void {
+        this.fitDeadLine();
         const mood = moodById(this.state.moodId);
         const compact =
             this.panel.dataset.short === "true" ||
-            (this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5);
+            (!this.deadEl.hidden && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5);
+        setData(this.panel, "compact", compact ? "true" : "false");
         this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
     }
 
@@ -1544,7 +1688,7 @@ export class Deck {
         this.state.every = next;
         saveState(this.state);
         this.renderAutoState();
-        this.announce(`Every ${next} bar${next === 1 ? "" : "s"}`);
+        this.announceSettled(() => `Every ${next} bar${next === 1 ? "" : "s"}`);
     }
 
     private renderAutoState(): void {
@@ -1570,10 +1714,10 @@ export class Deck {
      * What a press just did, said right above the pads in the ruler's place for
      * a moment, so the answer lands where the hand is. Nothing else moves.
      */
-    private flashActivity(text: string): void {
+    private flashActivity(text: string, speak = true): void {
         this.flashEl.textContent = text;
         setData(this.panel, "flash", "true");
-        this.announce(text);
+        if (speak) this.announce(text);
         if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
         this.activityTimer = window.setTimeout(() => {
             this.activityTimer = null;
@@ -1713,12 +1857,13 @@ export class Deck {
     }
 
     /**
-     * One tick per real bar at its real time, every fourth taller, closing on the
-     * track's end. A track too long for that at two pixels a tick draws every
+     * One tick per real bar at its real time, a taller one on every phrase line
+     * (every N bars, the count auto chop cuts on), closing on the track's end. A track too long for that at two pixels a tick draws every
      * fourth bar instead, or every sixteenth, and the title says so.
      */
     private buildRuler(grid: Grid): void {
-        const key = `${grid.uri}:${grid.bars.length}`;
+        const phrase = Math.max(1, this.state.every);
+        const key = `${grid.uri}:${grid.bars.length}:${phrase}`;
         if (key === this.rulerKey) return;
         this.rulerKey = key;
         this.rulerBar = -2;
@@ -1729,7 +1874,7 @@ export class Deck {
         grid.bars.forEach((start, index) => {
             if (index % every !== 0) return;
             const x = Math.min(RULER_WIDTH - 0.5, Math.round((start / span) * (RULER_WIDTH - 1)) + 0.5);
-            d += `M${x} ${index % (every * 4) === 0 ? 1 : 7}V14`;
+            d += `M${x} ${index % (every * phrase) === 0 ? 1 : 7}V14`;
         });
         d += `M${RULER_WIDTH - 0.5} 1V14`;
         setAttr(this.rulerEl, "title", every > 1 ? `One tick for every ${every} bars on a track this long.` : "");
@@ -1756,7 +1901,7 @@ export class Deck {
         if (this.disposed) return;
         // Probe even when the panel is closed: if the helper starts or restarts,
         // the selected mood needs to reach it without waiting for a click.
-        void probeDsp();
+        void probeDsp(false, !this.panel.hidden);
 
         this.retryGrid();
         this.syncDspParams();
@@ -1768,6 +1913,8 @@ export class Deck {
             this.lastPlaying = playingNow;
             this.renderDsp();
         }
+        // Cheap and write-on-change, so nothing lit can outlive what is heard by more than a tick.
+        this.renderLit();
         this.updateSpin();
 
         if (this.panel.hidden) return;
@@ -1803,11 +1950,12 @@ export class Deck {
             else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
         }
         this.renderEvery();
-        // A running loop keeps its pad lit and counts down on it.
+        // A running loop keeps its pad lit and counts down on it, through the last pass.
         const left = loopRemaining();
+        const looping = isLooping();
         const loopPad = this.pads.find((pad) => pad.dataset.pad === "loop");
-        if (loopPad) setData(loopPad, "latched", left > 0 ? "true" : "false");
-        if (this.loopSub) setText(this.loopSub, left > 0 ? `${left} to go` : LOOP_SUB);
+        if (loopPad) setData(loopPad, "latched", looping ? "true" : "false");
+        if (this.loopSub) setText(this.loopSub, !looping ? LOOP_SUB : left > 0 ? `${left} to go` : "Last pass");
         // Off with nothing to count; it can still be switched off if it was on.
         const autoOff = !grid && !this.state.auto;
         setOff(this.switchEl, autoOff);
@@ -1854,6 +2002,7 @@ export class Deck {
         const grid = gridFor();
         if (!grid) return;
         this.renderBeat(grid);
+        this.renderEvery();
         this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
     }
 

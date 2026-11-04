@@ -23,24 +23,56 @@ self.onmessage = (event) => {
 };
 `;
 
+let fallback: number | null = null;
+/** When the worker last ticked; a worker that never does (blocked by policy) hands over to the main thread. */
+let lastTick = 0;
+
+function tickAll(now: number): void {
+    for (const tick of subscribers) {
+        try {
+            tick(now);
+        } catch {
+            /* one bad subscriber shouldn't stop the clock */
+        }
+    }
+}
+
+/** No worker (a locked-down client): a main-thread timer is slower when hidden, but it ticks. */
+function useMainThread(): void {
+    if (fallback !== null) return;
+    if (worker) {
+        worker.terminate();
+        worker = null;
+    }
+    if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+    }
+    fallback = window.setInterval(() => {
+        if (subscribers.size) tickAll(Date.now());
+    }, 40);
+}
+
+/** A worker that starts but never ticks is as good as none: a stop would never pause and a loop never jump. */
+function watch(): void {
+    const armedAt = Date.now();
+    window.setTimeout(() => {
+        if (worker && subscribers.size && lastTick < armedAt) useMainThread();
+    }, 1_000);
+}
+
 function boot(): void {
-    if (worker) return;
+    if (worker || fallback !== null) return;
     try {
         objectUrl = URL.createObjectURL(new Blob([SOURCE], { type: "text/javascript" }));
         worker = new Worker(objectUrl);
         worker.onmessage = (event) => {
-            const now = typeof event.data === "number" ? event.data : Date.now();
-            for (const tick of subscribers) {
-                try {
-                    tick(now);
-                } catch {
-                    /* one bad subscriber shouldn't stop the clock */
-                }
-            }
+            lastTick = Date.now();
+            tickAll(typeof event.data === "number" ? event.data : Date.now());
         };
-        worker.postMessage("start");
+        worker.onerror = () => useMainThread();
     } catch {
-        worker = null;
+        useMainThread();
     }
 }
 
@@ -48,7 +80,10 @@ export function subscribe(tick: Tick): () => void {
     boot();
     const wasIdle = subscribers.size === 0;
     subscribers.add(tick);
-    if (wasIdle && worker) worker.postMessage("start");
+    if (wasIdle && worker) {
+        worker.postMessage("start");
+        watch();
+    }
     return () => {
         subscribers.delete(tick);
         if (subscribers.size === 0 && worker) worker.postMessage("stop");
@@ -57,6 +92,9 @@ export function subscribe(tick: Tick): () => void {
 
 export function disposeClock(): void {
     subscribers.clear();
+    if (fallback !== null) window.clearInterval(fallback);
+    fallback = null;
+    lastTick = 0;
     if (worker) {
         worker.postMessage("stop");
         worker.terminate();

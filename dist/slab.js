@@ -15,30 +15,58 @@ self.onmessage = (event) => {
   }
 };
 `;
+  var fallback = null;
+  var lastTick = 0;
+  function tickAll(now) {
+    for (const tick of subscribers) {
+      try {
+        tick(now);
+      } catch {
+      }
+    }
+  }
+  function useMainThread() {
+    if (fallback !== null) return;
+    if (worker) {
+      worker.terminate();
+      worker = null;
+    }
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+    fallback = window.setInterval(() => {
+      if (subscribers.size) tickAll(Date.now());
+    }, 40);
+  }
+  function watch() {
+    const armedAt = Date.now();
+    window.setTimeout(() => {
+      if (worker && subscribers.size && lastTick < armedAt) useMainThread();
+    }, 1e3);
+  }
   function boot() {
-    if (worker) return;
+    if (worker || fallback !== null) return;
     try {
       objectUrl = URL.createObjectURL(new Blob([SOURCE], { type: "text/javascript" }));
       worker = new Worker(objectUrl);
       worker.onmessage = (event) => {
-        const now = typeof event.data === "number" ? event.data : Date.now();
-        for (const tick of subscribers) {
-          try {
-            tick(now);
-          } catch {
-          }
-        }
+        lastTick = Date.now();
+        tickAll(typeof event.data === "number" ? event.data : Date.now());
       };
-      worker.postMessage("start");
+      worker.onerror = () => useMainThread();
     } catch {
-      worker = null;
+      useMainThread();
     }
   }
   function subscribe(tick) {
     boot();
     const wasIdle = subscribers.size === 0;
     subscribers.add(tick);
-    if (wasIdle && worker) worker.postMessage("start");
+    if (wasIdle && worker) {
+      worker.postMessage("start");
+      watch();
+    }
     return () => {
       subscribers.delete(tick);
       if (subscribers.size === 0 && worker) worker.postMessage("stop");
@@ -46,6 +74,9 @@ self.onmessage = (event) => {
   }
   function disposeClock() {
     subscribers.clear();
+    if (fallback !== null) window.clearInterval(fallback);
+    fallback = null;
+    lastTick = 0;
     if (worker) {
       worker.postMessage("stop");
       worker.terminate();
@@ -139,7 +170,10 @@ self.onmessage = (event) => {
   function barLengthMs(grid, index) {
     const start = barStartMs(grid, index);
     const next = grid.bars[index + 1];
-    return next !== void 0 ? next - start : 2e3;
+    if (next !== void 0) return next - start;
+    const previous = grid.bars[index - 1];
+    if (previous !== void 0) return start - previous;
+    return Math.max(300, grid.durationMs - start);
   }
   function barCount(grid) {
     return grid.bars.length;
@@ -149,6 +183,10 @@ self.onmessage = (event) => {
   var listener = null;
   var busy = false;
   var MAX_CHOP_BARS = 4;
+  var padJumpAt = 0;
+  var PAD_JUMP_GRACE_MS = 1500;
+  var manualBar = -2;
+  var autoLastIndex = null;
   var autoUnsub = null;
   var autoEvery = 4;
   var autoMaxBar = -1;
@@ -170,7 +208,7 @@ self.onmessage = (event) => {
     } catch {
     }
   }
-  async function chopBars(bars) {
+  async function chopBars(bars, auto = false) {
     if (busy) return false;
     busy = true;
     try {
@@ -183,7 +221,10 @@ self.onmessage = (event) => {
       const back = index - span;
       const phase = (now - barStartMs(grid, index)) / barLengthMs(grid, index);
       seek(barStartMs(grid, back) + phase * barLengthMs(grid, back));
-      emit("chop", `Back ${span} bar${span === 1 ? "" : "s"}`);
+      if (auto) return true;
+      padJumpAt = Date.now();
+      manualBar = index;
+      emit("chop", `${span} bar${span === 1 ? "" : "s"} back`);
       return true;
     } finally {
       busy = false;
@@ -194,6 +235,9 @@ self.onmessage = (event) => {
     loopUnsub = null;
     loopLeft = 0;
   }
+  function isLooping() {
+    return loopUnsub !== null;
+  }
   function loopRemaining() {
     return loopUnsub ? loopLeft : 0;
   }
@@ -201,8 +245,9 @@ self.onmessage = (event) => {
   async function loopBars(times = 4) {
     const grid = await ensureGrid();
     if (!grid) return false;
+    const index = barIndexAt(grid, Spicetify.Player.getProgress());
+    if (index < 0) return false;
     cancelLoop();
-    const index = Math.max(0, barIndexAt(grid, Spicetify.Player.getProgress()));
     const start = barStartMs(grid, index);
     const length = barLengthMs(grid, index);
     if (length < 300) return false;
@@ -225,13 +270,15 @@ self.onmessage = (event) => {
         return;
       }
       if (at < end - LOOP_LEAD_MS) return;
-      seek(start);
-      armed = false;
-      loopLeft -= 1;
       if (loopLeft <= 0) {
         cancelLoop();
         emit("loop", "Loop done");
+        return;
       }
+      seek(start + Math.max(0, at - end));
+      armed = false;
+      loopLeft -= 1;
+      manualBar = index;
     });
     emit("loop", `Looping this bar ${total} times`);
     return true;
@@ -257,6 +304,13 @@ self.onmessage = (event) => {
     const duration = fade ? 420 : Math.max(0, options.pauseDelayMs ?? 0);
     const origin = Date.now();
     await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        unsub();
+        resolve();
+      };
       const unsub = subscribe(() => {
         const progress = duration === 0 ? 1 : Math.min(1, (Date.now() - origin) / duration);
         if (fade) {
@@ -265,11 +319,9 @@ self.onmessage = (event) => {
           } catch {
           }
         }
-        if (progress >= 1) {
-          unsub();
-          resolve();
-        }
+        if (progress >= 1) finish();
       });
+      window.setTimeout(finish, duration + 250);
     });
     try {
       Spicetify.Player.pause();
@@ -301,17 +353,29 @@ self.onmessage = (event) => {
       if (!grid) return;
       const index = barIndexAt(grid, Spicetify.Player.getProgress());
       if (index < 0) return;
-      if (autoBaseline || index < autoMaxBar - MAX_CHOP_BARS) {
+      const last = autoLastIndex;
+      autoLastIndex = index;
+      if (autoBaseline || last === null) {
         autoBaseline = false;
         autoMaxBar = index;
+        return;
+      }
+      if (index < last) {
+        const padJumped = Date.now() - padJumpAt < PAD_JUMP_GRACE_MS;
+        if (!padJumped && index < autoMaxBar - MAX_CHOP_BARS) autoMaxBar = index;
+        return;
+      }
+      if (index > last + 1) {
+        autoMaxBar = Math.max(autoMaxBar, index);
         return;
       }
       if (index <= autoMaxBar) return;
       autoMaxBar = index;
       if (Date.now() < autoCooldownUntil) return;
       if (index % autoEvery !== 0) return;
+      if (manualBar >= index - 1) return;
       autoCooldownUntil = Date.now() + 900;
-      void chopBars(1).then((did) => {
+      void chopBars(1, true).then((did) => {
         if (did) emit("auto", `Auto chop, every ${autoEvery} bar${autoEvery === 1 ? "" : "s"}`);
       });
     });
@@ -324,12 +388,14 @@ self.onmessage = (event) => {
   function stopAuto() {
     autoUnsub?.();
     autoUnsub = null;
+    autoLastIndex = null;
     autoMaxBar = -1;
     autoCooldownUntil = 0;
   }
   function resetForTrack() {
     cancelLoop();
     autoBaseline = true;
+    autoLastIndex = null;
     autoMaxBar = -1;
     autoCooldownUntil = 0;
   }
@@ -612,9 +678,9 @@ self.onmessage = (event) => {
       clearTimeout(timer);
     }
   }
-  async function probeDsp(force = false) {
+  async function probeDsp(force = false, eager = false) {
     const now = Date.now();
-    const every = status.linked || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
+    const every = status.linked || eager || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
     if (!force && now - lastProbe < every) return status;
     lastProbe = now;
     const payload = await request("/status");
@@ -663,7 +729,7 @@ self.onmessage = (event) => {
           misses = 0;
           publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body } });
         } else {
-          publish({ checked: true, linked: false });
+          void probeDsp(true);
         }
         for (const resolve of settle) resolve(Boolean(payload));
       }
@@ -775,7 +841,7 @@ self.onmessage = (event) => {
 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
   <circle class="slab-chip-tyre" cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
   <circle class="slab-chip-plain" cx="10" cy="10" r="6.4" stroke="currentColor" stroke-width="1"/>
-  <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="#F4F0E6" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
+  <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
   <g stroke="currentColor" stroke-width="1" stroke-linecap="round">${spokes}</g>
   <path d="M6.4 9.2H13.6V10.8H6.4Z" fill="currentColor"/>
   <circle cx="10" cy="10" r="1.3" fill="currentColor"/>
@@ -823,10 +889,10 @@ self.onmessage = (event) => {
     "s": { a: 42, l: "M0 -12L0 -12C0 -5.4 5.4 0 12 0L16 0C23.7 0 30 -6.3 30 -14L30 -21C30 -28.7 23.7 -35 16 -35L14 -35C6.3 -35 0 -41.3 0 -49L0 -56C0 -63.7 6.3 -70 14 -70L18 -70C24.6 -70 30 -64.6 30 -58L30 -58", d: "M14 0L12 0C5.4 0 0 -5.4 0 -12L0 -12M30 -58L30 -58C30 -64.6 24.6 -70 18 -70L14 -70C6.3 -70 0 -63.7 0 -56L0 -49C0 -41.3 6.3 -35 14 -35L16 -35C23.7 -35 30 -28.7 30 -21L30 -14C30 -6.3 23.7 0 16 0L14 0", i: [14, 0], o: [14, 0] },
     "t": { a: 38, l: "M0 -70L11 -70M23 -70L30 -70M14 -92L14 -10C14 -4.5 18.5 0 24 0L26 0", d: "M26 0L24 0C18.5 0 14 -4.5 14 -10L14 -70L0 -70M11 -70L23 -70M30 -70L14 -70L14 -92", i: [26, 0], o: [26, 0], s: [[14, -20]] },
     "v": { a: 44, l: "M0 -70L10.2 -5.1C10.7 -2.2 13.2 0 16.1 0L17.9 0C20.8 0 23.3 -2.2 23.8 -5.1L34 -70", d: "M17 0L16.1 0C13.2 0 10.7 -2.2 10.2 -5.1L0 -70M34 -70L23.8 -5.1C23.3 -2.2 20.8 0 17.9 0L17 0", i: [17, 0], o: [17, 0] },
-    "w": { a: 70, l: "M0 -70L5.5 -5.5C5.8 -2.4 8.4 0 11.5 0L13.3 0C16.1 0 18.5 -1.9 19.1 -4.5L24.2 -24.7C25.7 -30.8 34.3 -30.8 35.8 -24.7L40.9 -4.5C41.5 -1.9 43.9 0 46.7 0L48.5 0C51.6 0 54.2 -2.4 54.5 -5.5L60 -70", d: "M12 0L11.5 0C8.4 0 5.8 -2.4 5.5 -5.5L0 -70M60 -70L54.5 -5.5C54.2 -2.4 51.6 0 48.5 0L48 0", i: [12, 0], o: [48, 0] },
+    "w": { a: 70, l: "M0 -70L5.5 -5.5C5.8 -2.4 8.4 0 11.5 0L12.7 0C15.7 0 18.3 -2.2 18.7 -5.2L24 -46.8C25 -53.7 35 -53.7 36 -46.8L41.3 -5.2C41.7 -2.2 44.3 0 47.3 0L48.5 0C51.6 0 54.2 -2.4 54.5 -5.5L60 -70", d: "M12 0L11.5 0C8.4 0 5.8 -2.4 5.5 -5.5L0 -70M60 -70L54.5 -5.5C54.2 -2.4 51.6 0 48.5 0L48 0", i: [12, 0], o: [48, 0] },
     "C": { a: 52, l: "M40 0L21 0C9.4 0 0 -9.4 0 -21L0 -79C0 -90.6 9.4 -100 21 -100L40 -100", d: "M24 0L40 0M40 -100L21 -100C9.4 -100 0 -90.6 0 -79L0 -21C0 -9.4 9.4 0 21 0L24 0", i: [24, 0], o: [24, 0] },
     "F": { a: 46, l: "M0 0L0 -88C0 -94.6 5.4 -100 12 -100L38 -100M6 -54L30 -54", d: "M38 -100L12 -100C5.4 -100 0 -94.6 0 -88L0 -54L6 -54M30 -54L0 -54L0 0", i: [0, 0], o: [0, 0], s: [[0, -20]] },
-    "M": { a: 70, l: "M0 0L0 -94C0 -97.3 2.7 -100 6 -100L7.5 -100C10.1 -100 12.5 -98.2 13.2 -95.6L23.2 -60.4C24.9 -54.6 33.1 -54.6 34.8 -60.4L44.8 -95.6C45.5 -98.2 47.9 -100 50.5 -100L52 -100C55.3 -100 58 -97.3 58 -94L58 0", d: "", i: [0, 0], o: [58, 0], s: [[0, -20], [58, -20]] },
+    "M": { a: 70, l: "M0 0L0 -94C0 -97.3 2.7 -100 6 -100L7.1 -100C9.9 -100 12.4 -98 13 -95.2L23.1 -44.8C24.4 -38.4 33.6 -38.4 34.9 -44.8L45 -95.2C45.6 -98 48.1 -100 50.9 -100L52 -100C55.3 -100 58 -97.3 58 -94L58 0", d: "", i: [0, 0], o: [58, 0], s: [[0, -20], [58, -20]] },
     "R": { a: 54, l: "M0 0L0 -87C0 -94.2 5.8 -100 13 -100L20 -100C31 -100 40 -91 40 -80L40 -72C40 -61 31 -52 20 -52L6 -52M25.2 -46.4L44 0", d: "M6 -52L23 -52L25.2 -46.4", i: [0, 0], o: [44, 0], s: [[0, -20]] },
     "S": { a: 52, l: "M0 -16L0 -14C0 -6.3 6.3 0 14 0L22 0C31.9 0 40 -8.1 40 -18L40 -32C40 -41.9 31.9 -50 22 -50L18 -50C8.1 -50 0 -58.1 0 -68L0 -82C0 -91.9 8.1 -100 18 -100L26 -100C33.7 -100 40 -93.7 40 -86L40 -84", d: "M18 0L14 0C6.3 0 0 -6.3 0 -14L0 -16M40 -84L40 -86C40 -93.7 33.7 -100 26 -100L18 -100C8.1 -100 0 -91.9 0 -82L0 -68C0 -58.1 8.1 -50 18 -50L22 -50C31.9 -50 40 -41.9 40 -32L40 -18C40 -8.1 31.9 0 22 0L18 0", i: [18, 0], o: [18, 0] },
     "T": { a: 50, l: "M22 0L22 -94M0 -100L44 -100", d: "M22 -94L22 -100L0 -100M44 -100L22 -100L22 0", i: [22, 0], o: [22, 0], s: [[22, -20]] },
@@ -1203,7 +1269,7 @@ ${FONT_CSS}
   align-items: center;
   gap: 10px;
   height: 40px;
-  padding: 8px 0 0 12px;
+  padding: 8px 0 0 14px;
 }
 .slab-badge { flex: none; display: block; }
 .slab-tag {
@@ -1234,7 +1300,7 @@ ${FONT_CSS}
 }
 .slab-bay {
   position: relative;
-  padding: 8px 8px 4px;
+  padding: 8px 8px 6px;
   overflow: hidden;
   border-radius: 3px;
   background:
@@ -1257,57 +1323,66 @@ ${FONT_CSS}
 
 ${NEON_CSS}
 
-/* The sign stage holds its size in every state. */
-.slab-stage { height: 84px; }
+/*
+ * The sign stage holds its size in every state: the sign's board, then one line
+ * of subtitle, in flow, so larger text spacing pushes the panel down rather than
+ * pushing words into the glass. A two-line message gets the compact sign.
+ */
+.slab-stage { display: flex; flex-direction: column; min-height: 84px; }
 .slab-sign {
-  position: absolute;
-  left: 0;
-  top: 0;
+  position: relative;
+  flex: none;
   width: 360px;
-  height: 70px;
+  height: 66px;
 }
+.slab-panel[data-compact="true"] .slab-sign { height: 48px; }
 .slab-sub, .slab-dead {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
   text-align: center;
   line-height: 18px;
 }
 .slab-sub { color: var(--wall-soft); }
-/* On the dead glass, two lines at most however long the device is called. */
+/* On the dead glass: where it's playing on one line (the name is cut short to fit), what that means on the next. */
 .slab-dead {
   font-size: 14px;
   font-weight: 600;
   color: var(--wall);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
 }
-.slab-panel[data-primer="true"] .slab-sub { visibility: hidden; }
+.slab-dead[hidden] { display: none; }
+.slab-dead-where, .slab-dead-why { display: block; }
+/* The message takes the subtitle's line; with no message the line is the subtitle's. */
+.slab-panel[data-primer="true"] .slab-sub { display: none; }
 /* A short window gets the compact sign and one line under it. */
-.slab-panel[data-short="true"] .slab-stage { height: 70px; }
+.slab-panel[data-short="true"] .slab-stage { min-height: 70px; }
 .slab-panel[data-short="true"] .slab-sub { display: none; }
-.slab-panel[data-short="true"] .slab-dead { -webkit-line-clamp: 1; }
+.slab-panel[data-short="true"] .slab-mood { min-height: 34px; grid-template-rows: minmax(26px, auto); }
+.slab-panel[data-short="true"] .slab-mood-cents {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.slab-panel[data-short="true"] .slab-mood-curve { height: 26px; }
+.slab-panel[data-short="true"] .slab-sill-plate { min-height: 20px; }
 
 /* Pitch. */
 .slab-pitch-head {
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 42px;
+  min-height: 42px;
   margin-top: 4px;
 }
 .slab-pitch-words {
   flex: 1;
   min-width: 0;
+  padding-left: 3px;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 .slab-pitch-label { font-weight: 600; font-size: 14px; line-height: 17px; color: var(--wall-soft); }
-.slab-semi { color: var(--wall-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slab-semi { color: var(--wall-soft); }
 .slab-number-tube { flex: none; width: 118px; height: 42px; }
 .slab-nudges { flex: none; display: flex; gap: 4px; margin-left: 8px; }
 
@@ -1327,10 +1402,10 @@ ${NEON_CSS}
     #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
     #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
   --lit-rolls: repeating-linear-gradient(180deg,
-    color-mix(in srgb, var(--gas) 12%, #0D0304) 0, color-mix(in srgb, var(--gas) 12%, #0D0304) 1px,
-    color-mix(in srgb, var(--gas-glass) 78%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
-    color-mix(in srgb, var(--gas) 34%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 14%, #3A151B) calc(var(--roll) * 0.83),
-    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
+    #0A0306 0, #0A0306 1px,
+    color-mix(in srgb, var(--gas-glass) 72%, #4A1C22) 1px, color-mix(in srgb, var(--gas) 42%, #3A141A) calc(var(--roll) * 0.22),
+    color-mix(in srgb, var(--gas) 12%, #2A0C11) calc(var(--roll) * 0.5), #1C070B calc(var(--roll) * 0.83),
+    #130407 calc(var(--roll) * 0.94), #0A0306 var(--roll));
   position: relative;
   display: inline-flex;
   flex-direction: column;
@@ -1360,10 +1435,14 @@ ${NEON_CSS}
   background: var(--lit-rolls);
   transition: opacity 160ms ease-out;
 }
+/* With the gas out there's no light to catch: a latched press reads as pushed in, with a whitewall edge. */
 .slab-panel[data-gas="off"] .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
-    #121212 0, #121212 1px, #A9A9A6 1px, #8A8A88 calc(var(--roll) * 0.22),
-    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
-    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); }
+    #0E0E0E 0, #0E0E0E 1px, #5A5A58 1px, #4A4A49 calc(var(--roll) * 0.22),
+    #383837 calc(var(--roll) * 0.5), #2A2A29 calc(var(--roll) * 0.83),
+    #1E1E1D calc(var(--roll) * 0.94), #0E0E0E var(--roll)); }
+.slab-panel[data-gas="off"] .slab-press::after { box-shadow: inset 0 0 0 1px rgba(255, 243, 224, 0.7); }
+/* Auto chop latched with no beat grid is waiting, not cutting: pushed in, unlit. */
+.slab-panel[data-grid="false"] .slab-auto-press[aria-checked="true"]::after { opacity: 0; }
 .slab-press:hover:not([aria-disabled="true"])::before { opacity: 1; }
 .slab-press:active:not([aria-disabled="true"]),
 .slab-press[data-hit="true"]:not([aria-disabled="true"]),
@@ -1537,7 +1616,8 @@ ${NEON_CSS}
 /* The knock-off turns about the poke's tip, not the axle. */
 .slab-roll.slab-knock, .slab-spin.slab-knock { transform-origin: var(--slab-poke); }
 /* Thirty spokes on a 12\xB0 pitch strobe at speed; they fade and the knock-off carries the turn. */
-.slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.45; }
+.slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.65; }
+.slab-wheel[data-spin="on"] .slab-roll.slab-knock { opacity: 0.8; }
 .slab-range:disabled ~ .slab-wheel { filter: saturate(0.35) brightness(0.75); }
 /* Spinning, the well behind the faded spokes reads as blurred chrome, not a dark turbine. */
 .slab-wheel[data-spin="on"] .slab-well { fill: #5E666B; }
@@ -1583,10 +1663,10 @@ ${NEON_CSS}
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
-  grid-template-rows: 18px 16px;
+  grid-template-rows: minmax(18px, auto) minmax(16px, auto);
   column-gap: 6px;
   align-items: center;
-  height: 42px;
+  min-height: 42px;
   padding: 4px 8px 4px 14px;
   text-align: left;
   border-radius: 4px;
@@ -1603,9 +1683,8 @@ ${NEON_CSS}
   font-weight: 700;
   font-size: 14px;
   line-height: 17px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wider text spacing wraps a long name onto a second line; it's never cut. */
+  overflow-wrap: anywhere;
 }
 .slab-mood-curve { grid-column: 2; grid-row: 1 / 3; overflow: visible; color: var(--wall-soft); }
 .slab-mood-zero { fill: none; stroke: currentColor; stroke-opacity: 0.3; stroke-width: 1; }
@@ -1631,9 +1710,11 @@ ${NEON_CSS}
   column-gap: 4px;
   align-items: center;
   height: 32px;
+  padding-right: 10px;
 }
 .slab-bpm { display: inline-flex; align-items: baseline; gap: 4px; padding-left: 14px; white-space: nowrap; }
 .slab-bpm b { font: 700 26px/32px "SLAB Barlow Tall", "Barlow Condensed", "SLAB Barlow", "Bahnschrift Condensed", "Arial Narrow", sans-serif; }
+.slab-bpm small { font-size: 12px; font-weight: 500; }
 .slab-count { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 14px; }
 .slab-bar { white-space: nowrap; }
 .slab-lamps { display: inline-flex; gap: 3px; flex: none; }
@@ -1689,12 +1770,12 @@ ${NEON_CSS}
 /* Five pads; Stop, the one that halts the record, sits a hand's width apart. */
 .slab-pads {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr)) 4px minmax(0, 1fr);
   gap: 4px;
   margin-top: 8px;
 }
 .slab-pad { --roll: 27px; height: 54px; gap: 1px; }
-.slab-pad[data-pad="stop"] { margin-left: 8px; }
+.slab-pad[data-pad="stop"] { grid-column: 6; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
 .slab-pad small { font-size: 12px; line-height: 14px; color: var(--wall-soft); }
 /* The number key that plays it, small in the corner like a pad number on a sampler. */
@@ -1715,11 +1796,11 @@ ${NEON_CSS}
   height: 44px;
   padding-top: 4px;
 }
-.slab-auto-press { --roll: 30px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-auto-press { --roll: 30px; min-width: 104px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
 .slab-auto-on { display: none; }
 .slab-auto-press[aria-checked="true"] .slab-auto-on { display: inline; }
 .slab-stepper { display: flex; align-items: center; gap: 6px; }
-.slab-every { width: 140px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
+.slab-every { width: 150px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
 .slab-panel[data-auto="on"] .slab-every { color: var(--wall); }
 .slab-step { --roll: 30px; width: 34px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
 
@@ -1740,8 +1821,8 @@ ${NEON_CSS}
   background:
     repeating-linear-gradient(180deg, #F2F4F5 0, #F2F4F5 1px, #5C6064 1px, #5C6064 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px) left 0 top 4px / 100% 9px no-repeat,
     repeating-linear-gradient(180deg, #F2F4F5 0, #F2F4F5 1px, #5C6064 1px, #5C6064 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 3px) left 0 bottom 3px / 100% 9px no-repeat,
-    linear-gradient(180deg, #8A9096 0, #B9BEC2 45%, #7D8389 100%);
-  box-shadow: inset 0 2px 0 #F3F5F6, inset 0 3px 0 rgba(0, 0, 0, 0.3), inset 0 -2px 0 #5F6569;
+    linear-gradient(180deg, #7B8187 0, #A3A8AC 45%, #6F757B 100%);
+  box-shadow: inset 0 2px 0 #E4E7E9, inset 0 3px 0 rgba(0, 0, 0, 0.3), inset 0 -2px 0 #565C60;
 }
 
 /* When the car runs on behind the pinned plate, its edge fades into it. */
@@ -1765,20 +1846,21 @@ ${NEON_CSS}
   min-height: 38px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 3px 10px;
+  justify-content: flex-start;
+  padding: 3px 6px;
   border-radius: 2px;
-  background: linear-gradient(180deg, #A7ACB0, #B5BABE);
+  background: linear-gradient(180deg, #90969A, #9DA2A6);
   box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.35), inset 0 -1px 0 rgba(255, 255, 255, 0.35);
   font-weight: 600;
   color: #101114;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 /* With ModernEQ the plate keeps room for its row as well, again in every state. */
-.slab-sill[data-eq="on"] .slab-sill-plate { min-height: 64px; }
-.slab-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slab-sill[data-eq="on"] .slab-sill-plate { min-height: 62px; }
+/* Status wraps rather than being cut off; the plate grows to hold it. */
+.slab-status { overflow-wrap: anywhere; }
 .slab-status:empty { display: none; }
-.slab-eq { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 24px; margin-bottom: 2px; flex: none; }
+.slab-eq { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 22px; flex: none; }
 .slab-eq[hidden] { display: none; }
 .slab-eq-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A stamped metal key on the metal plate, not upholstery bolted to it. */
@@ -1795,6 +1877,8 @@ ${NEON_CSS}
   box-shadow: inset 0 1px 0 #FFFFFF, inset 0 0 0 1px rgba(0, 0, 0, 0.25), 0 1px 0 #5C6064, 0 2px 2px rgba(0, 0, 0, 0.25);
 }
 .slab-press.slab-eq-btn::after { display: none; }
+/* On the bright stainless a white ring vanishes; the plate gets a dark one. */
+.slab-sill button:focus-visible { outline-color: #101114; }
 
 /* Playbar chip. Same footprint as the client's own buttons, and its own active dot when on. */
 .slab-chip {
@@ -1840,6 +1924,28 @@ ${NEON_CSS}
   .slab-rail[data-rolling="true"] .slab-rail-run { transition: none; }
 }
 
+/*
+ * An engine without color-mix() would drop every gas mix: the lit tube would
+ * vanish and hits would lose their light. These are the same mixes worked out
+ * for the default argon, as plain colours.
+ */
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  .slab-panel { --gas-spill: rgba(62, 88, 255, 0.24); }
+  .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
+    #0A0306 0, #0A0306 1px, #8D93D0 1px, #403E8A calc(var(--roll) * 0.22),
+    #2F1730 calc(var(--roll) * 0.5), #1C070B calc(var(--roll) * 0.83),
+    #130407 calc(var(--roll) * 0.94), #0A0306 var(--roll)); }
+  .slab-bay::before { background: radial-gradient(72% 36% at 50% 20%, rgba(62, 88, 255, 0.24) 0, rgba(62, 88, 255, 0.08) 60%, rgba(62, 88, 255, 0) 100%); }
+  .slab-rail-tube {
+    background: linear-gradient(180deg, #2B3C8F 0, #4D6BFF 45%, #263680 100%);
+    box-shadow: 0 0 2px rgba(77, 107, 255, 0.6), 0 0 6px rgba(77, 107, 255, 0.24), 0 5px 5px rgba(0, 0, 0, 0.5);
+  }
+  .slab-rail-hot { box-shadow: 0 0 2px 1px #4D6BFF, 0 0 8px 2px rgba(77, 107, 255, 0.7), 0 0 20px 5px rgba(77, 107, 255, 0.28); }
+  .slab-panel[data-tube="idle"] .slab-rail-tube { background: linear-gradient(180deg, #424D7B, #596492 45%, #3B4673); }
+  .slab-panel[data-tube="idle"] .slab-rail-hot { background: linear-gradient(180deg, #9CA8D7, #AFBBE9); }
+  .slab-panel[data-tube="idle"] .slab-rail-run { background: #9CA8D7; }
+}
+
 /* Windows High Contrast and other forced palettes: state by outline, never by paint. */
 @media (forced-colors: active) {
   .slab-press, .slab-mood { border: 1px solid ButtonText; }
@@ -1852,7 +1958,10 @@ ${NEON_CSS}
   .slab-lamps i[data-on="true"] { background: Highlight; }
   .slab-rail-tube { background: CanvasText; }
   .slab-rail-hot, .slab-rail-run { background: Highlight; }
-  .slab-stripe { display: none; }
+  .slab-panel .slab-stripe { display: none; }
+  /* Neon becomes plain system-coloured line work: no glow, no shadow, readable on any palette. */
+  .slab-tube [data-l="glass"], .slab-tube [data-l="core"], .slab-tube [data-l="frost"], .slab-tube [data-l="frostHi"] { stroke: CanvasText; }
+  .slab-tube [data-l="bloom"], .slab-tube [data-l="halo"], .slab-tube-cast, .slab-tube [data-l="dark"] { display: none; }
 }
 `;
 
@@ -1927,8 +2036,8 @@ ${NEON_CSS}
   var EVERY_MAX = 16;
   var DEVICE_NAME_MAX = 56;
   var PANEL_MAX_PX = 680;
-  var MIN_ROOM_PX = 320;
-  var SHORT_SAVING_PX = 14;
+  var MIN_ROOM_PX = 160;
+  var SHORT_SAVING_PX = 56;
   var DEAD_LINE_PX = 18;
   var GRID_RETRY_MS = [5e3, 3e4, 12e4];
   var COMPACT_SIGN_HEIGHT = 50;
@@ -1950,10 +2059,10 @@ ${NEON_CSS}
       return null;
     }
   }
-  function deviceSentence(raw) {
+  function deviceSentence(raw, max = DEVICE_NAME_MAX) {
     const name = raw.trim().replace(/[.\s]+$/, "") || "another device";
-    if (name.length <= DEVICE_NAME_MAX) return `${name}.`;
-    const cut = name.slice(0, DEVICE_NAME_MAX);
+    if (name.length <= max) return `${name}.`;
+    const cut = name.slice(0, max);
     const word = cut.lastIndexOf(" ");
     return `${(word > 12 ? cut.slice(0, word) : cut).trimEnd()}\u2026`;
   }
@@ -1982,6 +2091,13 @@ ${NEON_CSS}
       return false;
     }
   }
+  var TRANSPORT = [
+    '[data-testid^="control-button-"]',
+    '[data-testid="playback-progressbar"]',
+    '[data-testid="volume-bar"]',
+    '[data-testid="volume-bar-toggle-mute-button"]',
+    ".player-controls"
+  ].join(", ");
   var KEYLESS_INPUTS = /* @__PURE__ */ new Set(["range", "checkbox", "radio", "button", "submit", "reset", "color", "file", "image"]);
   function isTypingTarget(target) {
     if (!(target instanceof HTMLElement)) return false;
@@ -2057,6 +2173,8 @@ ${NEON_CSS}
   var Deck = class {
     constructor(state) {
       this.moodButtons = /* @__PURE__ */ new Map();
+      /** The device Spotify is playing on, when it isn't this computer. */
+      this.deadRemote = null;
       this.moodClips = /* @__PURE__ */ new Map();
       this.moodFeet = /* @__PURE__ */ new Map();
       this.lamps = [];
@@ -2065,6 +2183,7 @@ ${NEON_CSS}
       this.pads = [];
       this.padTimers = /* @__PURE__ */ new Map();
       this.loopSub = null;
+      this.padDefs = /* @__PURE__ */ new Map();
       /** Stops any held-button repeat; run on destroy. */
       this.releases = [];
       this.sillEl = null;
@@ -2080,9 +2199,12 @@ ${NEON_CSS}
       /** Failed analysis fetches for the current track; each retry waits longer. */
       this.gridMisses = 0;
       this.announceTimer = null;
+      this.settleTimer = null;
       this.resizeFrame = null;
       this.lastPlaying = null;
       this.lampFrame = null;
+      /** Re-places the panel when its own height changes (the ModernEQ row, a short window). */
+      this.sizeWatch = null;
       this.lastDspSync = 0;
       this.pitchTimer = null;
       this.pendingPitch = null;
@@ -2095,6 +2217,12 @@ ${NEON_CSS}
       this.lastEqCheck = 0;
       this.lastRemote = null;
       this.onDocumentClick = (event) => this.handleOutside(event);
+      /** Where the last press began: a click is only "outside" if it started outside. */
+      this.pressedInside = false;
+      this.onPointerStart = (event) => {
+        const target = event.target;
+        this.pressedInside = Boolean(target && (this.panel.contains(target) || this.chip.contains(target)));
+      };
       this.onKey = (event) => this.handleKey(event);
       /** One reposition per frame, however fast the window is dragged. */
       this.onResize = () => {
@@ -2111,7 +2239,15 @@ ${NEON_CSS}
       this.signTube = new Tube("slab-sign-tube", SIGN_WIDTH, SIGN_HEIGHT);
       this.signEl = h("div", { class: "slab-sign", role: "img" }, this.signTube.node);
       this.subEl = h("p", { class: "slab-sub" });
-      this.deadEl = h("p", { class: "slab-dead", "aria-live": "polite" });
+      this.deadWhereEl = h("span", { class: "slab-dead-where" });
+      this.deadEl = h(
+        "p",
+        { class: "slab-dead" },
+        this.deadWhereEl,
+        " ",
+        h("span", { class: "slab-dead-why" }, "SLAB only reaches this computer.")
+      );
+      this.deadEl.hidden = true;
       this.numberTube = new Tube("slab-number-tube", NUMBER_WIDTH, NUMBER_HEIGHT);
       this.semiEl = h("span", { class: "slab-semi", id: "slab-semi" });
       this.nudgeDown = h("button", {
@@ -2228,19 +2364,25 @@ ${NEON_CSS}
       this.modernEq = modernEqPresent();
       this.panel = this.buildPanel();
       onChop((event) => {
-        this.flashActivity(event.label);
-        if (event.kind === "auto") this.hitPad(this.pads[0]);
+        const automatic = event.kind === "auto";
+        this.flashActivity(event.label, !automatic);
+        if (automatic) this.hitPad(this.pads[0]);
       });
     }
     mount() {
       this.injectStyles();
       this.mountChip();
       document.body.append(this.panel);
+      document.addEventListener("pointerdown", this.onPointerStart, true);
       document.addEventListener("click", this.onDocumentClick, true);
       document.addEventListener("contextmenu", this.onDocumentClick, true);
       document.addEventListener("keydown", this.onKey);
       window.addEventListener("resize", this.onResize);
       this.panel.addEventListener("scroll", this.onScroll, { passive: true });
+      if (typeof ResizeObserver === "function") {
+        this.sizeWatch = new ResizeObserver(() => this.onResize());
+        this.sizeWatch.observe(this.panel);
+      }
       if (this.state.open) this.open();
       else this.panel.hidden = true;
       this.renderMoodState();
@@ -2260,7 +2402,10 @@ ${NEON_CSS}
       void this.applyMood(this.state.moodId, false);
       void this.syncGrid();
       this.refresh();
-      void document.fonts?.ready.then(() => {
+      void Promise.all([
+        document.fonts?.load('600 14px "SLAB Barlow"'),
+        document.fonts?.load('500 12px "SLAB Barlow"')
+      ]).catch(() => void 0).then(() => {
         if (!this.disposed) this.renderSign();
       });
       this.refreshTimer = window.setInterval(() => this.refresh(), 100);
@@ -2274,6 +2419,7 @@ ${NEON_CSS}
       if (this.rollTimer !== null) window.clearTimeout(this.rollTimer);
       if (this.pitchTimer !== null) window.clearTimeout(this.pitchTimer);
       if (this.announceTimer !== null) window.clearTimeout(this.announceTimer);
+      if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
       if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
       for (const timer of this.padTimers.values()) window.clearTimeout(timer);
       this.padTimers.clear();
@@ -2285,11 +2431,14 @@ ${NEON_CSS}
       this.spinning = false;
       this.strikeAnimation?.cancel();
       this.strikeAnimation = null;
+      document.removeEventListener("pointerdown", this.onPointerStart, true);
       document.removeEventListener("click", this.onDocumentClick, true);
       document.removeEventListener("contextmenu", this.onDocumentClick, true);
       document.removeEventListener("keydown", this.onKey);
       window.removeEventListener("resize", this.onResize);
       this.panel.removeEventListener("scroll", this.onScroll);
+      this.sizeWatch?.disconnect();
+      this.sizeWatch = null;
       this.chip.remove();
       this.panel.remove();
       document.getElementById(STYLE_ID)?.remove();
@@ -2323,15 +2472,20 @@ ${NEON_CSS}
       const lyrics = document.querySelector('[data-testid="lyrics-button"]');
       const host = lyrics?.parentElement;
       if (lyrics && host) {
-        if (this.chip.nextElementSibling !== lyrics) host.insertBefore(this.chip, lyrics);
+        if (this.chip.parentElement !== host) host.insertBefore(this.chip, lyrics);
         return;
       }
       if (this.chip.isConnected) return;
       document.querySelector('[data-testid="now-playing-bar"]')?.append(this.chip);
     }
-    /** Spotify builds the playbar late and rebuilds it on some navigation, so keep re-homing the chip. */
+    /**
+     * Spotify builds the playbar late and rebuilds it on some navigation, so keep
+     * re-homing the chip, and place an open panel again once its anchor exists.
+     */
     ensureChip() {
+      const wasHome = this.chip.isConnected;
       this.mountChip();
+      if (!wasHome && this.chip.isConnected && !this.panel.hidden) this.position();
     }
     buildChip() {
       const chip = h("button", {
@@ -2503,22 +2657,30 @@ ${NEON_CSS}
           sub: LOOP_SUB,
           // A second press ends the loop early.
           run: () => {
-            if (loopRemaining() === 0) return loopBars(LOOP_TIMES);
+            if (!isLooping()) return loopBars(LOOP_TIMES);
             cancelLoop();
             this.flashActivity("Loop off");
             return true;
           },
-          miss: "This bar is too short to loop."
+          miss: "Nothing to loop here yet."
         },
         {
           id: "stop",
           label: "Stop",
           sub: "Tape stop",
           run: () => {
-            if (isStopping()) return false;
+            if (isStopping()) {
+              this.flashActivity("Already stopping");
+              return false;
+            }
+            if (!isPlaying()) {
+              this.flashActivity("Already stopped");
+              return false;
+            }
             const linked = dspStatus().linked;
             if (linked) void dspTapeStop();
-            return tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : void 0);
+            void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : void 0);
+            return true;
           }
         }
       ];
@@ -2532,6 +2694,7 @@ ${NEON_CSS}
         }, h("i", { class: "slab-key", "aria-hidden": "true" }, String(index + 1)), h("b", {}, def.label), sub);
         if (def.id === "loop") this.loopSub = sub;
         this.press(pad, () => this.firePad(pad, def));
+        this.padDefs.set(pad, def);
         this.pads.push(pad);
         padRow.append(pad);
       });
@@ -2559,8 +2722,12 @@ ${NEON_CSS}
       if (this.panel.hidden) return;
       const target = event.target;
       if (!target) return;
+      if (event.type === "click" && this.pressedInside) {
+        this.pressedInside = false;
+        return;
+      }
       if (this.panel.contains(target) || this.chip.contains(target)) return;
-      if (target instanceof Element && target.closest('[data-testid="now-playing-bar"]')) return;
+      if (event.type === "click" && target instanceof Element && target.closest(TRANSPORT)) return;
       this.close();
     }
     /** Everything Tab can land on in the panel, in order, skipping what is hidden or disabled. */
@@ -2590,15 +2757,31 @@ ${NEON_CSS}
         event.preventDefault();
         this.chip.focus({ preventScroll: true });
       } else if (!event.shiftKey && active === stops[stops.length - 1]) {
-        const next = this.chip.nextElementSibling;
+        const next = this.stopAfterChip();
+        if (!next) return;
         event.preventDefault();
-        if (next instanceof HTMLElement && next.tabIndex >= 0) next.focus({ preventScroll: true });
-        else this.chip.focus({ preventScroll: true });
+        next.focus({ preventScroll: true });
       }
+    }
+    /** The next thing Tab would reach after the chip in the page's own order, skipping the panel and anything disabled. */
+    stopAfterChip() {
+      const all = [...document.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")].filter(
+        (node) => node.tabIndex >= 0 && !node.hasAttribute("disabled") && !this.panel.contains(node) && node.getClientRects().length > 0
+      );
+      const at = all.indexOf(this.chip);
+      return at >= 0 ? all[at + 1] ?? null : null;
     }
     handleKey(event) {
       if (this.panel.hidden || event.defaultPrevented) return;
       const target = event.target;
+      if (event.key === "Tab" && event.shiftKey && target instanceof HTMLElement && target === this.stopAfterChip()) {
+        const stops = this.focusables();
+        if (stops.length) {
+          event.preventDefault();
+          stops[stops.length - 1].focus({ preventScroll: true });
+        }
+        return;
+      }
       const inPanel = Boolean(target && (this.panel.contains(target) || this.chip.contains(target)));
       if (event.key === "Escape") {
         if (inPanel || target === document.body || target === document.documentElement) this.close();
@@ -2610,7 +2793,9 @@ ${NEON_CSS}
       if (isTypingTarget(event.target)) return;
       event.preventDefault();
       if (event.repeat) return;
-      this.pads[index - 1].click();
+      const pad = this.pads[index - 1];
+      const def = this.padDefs.get(pad);
+      if (def) this.firePad(pad, def);
     }
     /**
      * Radiogroup keys: down and right go to the next mood, up and left to the one
@@ -2641,7 +2826,7 @@ ${NEON_CSS}
       }
       event.preventDefault();
       if (event.repeat || to === from) return;
-      void this.applyMood(order[to], true);
+      void this.applyMood(order[to], true, false);
       this.moodButtons.get(order[to])?.focus();
     }
     toggle(fromKeyboard = false) {
@@ -2658,7 +2843,10 @@ ${NEON_CSS}
       this.renderMoodState();
       this.refresh();
       void probeDsp(true);
-      if (fromKeyboard) this.moodButtons.get(moodById(this.state.moodId).id)?.focus();
+      if (fromKeyboard) {
+        if (!this.pitchInput.disabled) this.pitchInput.focus({ preventScroll: true });
+        else this.moodButtons.get(moodById(this.state.moodId).id)?.focus({ preventScroll: true });
+      }
     }
     close() {
       if (this.panel.contains(document.activeElement) && this.chip.isConnected) this.chip.focus({ preventScroll: true });
@@ -2713,7 +2901,7 @@ ${NEON_CSS}
       setData(this.panel, "more", hidden - this.panel.scrollTop > 2 ? "true" : "false");
       setData(this.panel, "above", this.panel.scrollTop > 2 ? "true" : "false");
     }
-    async applyMood(id, announce) {
+    async applyMood(id, announce, speak = true) {
       this.state.moodId = id;
       const mood = moodById(id);
       if (announce) this.state.pitch = mood.dsp.pitch;
@@ -2727,7 +2915,7 @@ ${NEON_CSS}
         else await applyCurve(mood.gains);
       }
       void sendDsp({ ...mood.dsp, pitch: this.state.pitch });
-      if (announce) this.flashActivity(mood.name);
+      if (announce) this.flashActivity(mood.name, speak);
     }
     /** The one flourish: a neon sign catching as the gas strikes. */
     strikeSign() {
@@ -2782,9 +2970,10 @@ ${NEON_CSS}
       this.rollTimer = null;
       delete this.railEl.dataset.rolling;
     }
-    /** Nudges and Normal, which arrive as one committed value. */
+    /** Nudges and Normal, which arrive as one committed value; the new pitch is said once the presses stop. */
     setPitch(cents, roll) {
       this.state.pitch = clampPitch(cents);
+      this.announceSettled(() => this.pitchInput.getAttribute("aria-valuetext") ?? "");
       this.renderPitch(roll);
       this.renderLit();
       this.pendingPitch = this.state.pitch;
@@ -2810,7 +2999,7 @@ ${NEON_CSS}
       const cents = this.state.pitch;
       const status2 = dspStatus();
       const linked = status2.linked;
-      const applied = linked && status2.tapping === true && status2.audio === true && !remoteDeviceName();
+      const applied = this.hearing().processing;
       if (this.pitchInput.value !== String(cents)) this.pitchInput.value = String(cents);
       if (!linked && document.activeElement === this.pitchInput) this.normalButton.focus();
       if (this.pitchInput.disabled === linked) this.pitchInput.disabled = !linked;
@@ -2864,7 +3053,7 @@ ${NEON_CSS}
      */
     updateSpin() {
       if (this.disposed) return;
-      const should = !this.panel.hidden && this.hearing().processing && !reducedMotion();
+      const should = !this.panel.hidden && this.hearing().shifting && !reducedMotion();
       if (should === this.spinning) return;
       this.spinning = should;
       setData(this.wheelEl, "spin", should ? "on" : "off");
@@ -2895,15 +3084,24 @@ ${NEON_CSS}
       else void this.restoreModernEqCurve();
       this.flashActivity(this.slabOwnsEq() ? "SLAB has the EQ" : "ModernEQ has the EQ");
     }
+    /** Places the panel again if it's open; its height changes with the ModernEQ row. */
+    reposition() {
+      if (!this.panel.hidden) this.position();
+    }
     /** With no ModernEQ the row goes and the sill's fixed height re-centres the rest. */
     renderEqNote() {
       if (!this.modernEq && this.state.eqOwner !== "modern") {
+        if (!this.eqNote.hidden && this.eqNote.contains(document.activeElement)) {
+          this.moodButtons.get(moodById(this.state.moodId).id)?.focus({ preventScroll: true });
+        }
         this.eqNote.hidden = true;
         if (this.sillEl) setData(this.sillEl, "eq", "off");
+        this.reposition();
         return;
       }
       this.eqNote.hidden = false;
       if (this.sillEl) setData(this.sillEl, "eq", "on");
+      this.reposition();
       const label = this.eqNoteButton.firstElementChild;
       if (this.slabOwnsEq()) {
         setText(this.eqNoteText, "SLAB has the EQ.");
@@ -2913,11 +3111,15 @@ ${NEON_CSS}
         setText(label, "Use SLAB EQ");
       }
     }
-    /** Hand the bands back with the curve ModernEQ last saved. */
+    /**
+     * Hand the bands back with the curve ModernEQ last saved. With no saved
+     * curve, put back the user's own, so SLAB's mood isn't left on the filters
+     * while the sill says SLAB isn't changing the sound.
+     */
     async restoreModernEqCurve() {
       const bands = modernEqBands();
-      if (!bands) return;
-      await applyCurveAtFrequencies(bands);
+      if (bands) await applyCurveAtFrequencies(bands);
+      else await restoreBaseline();
     }
     /** ModernEQ can appear after SLAB does; re-check slowly, not every tick. */
     refreshEqOwner() {
@@ -2932,18 +3134,18 @@ ${NEON_CSS}
       if (this.slabOwnsEq()) void applyCurve(moodById(this.state.moodId).gains);
       else void this.restoreModernEqCurve();
     }
-    /** The effects the helper is running: what it reports where it says, else what was sent. */
+    /**
+     * The effects the helper is running, from what SLAB sent it: the picked
+     * mood's parameters with the slider's pitch. What the helper reports lags a
+     * mood change by a probe, and syncDspParams() corrects any real drift.
+     */
     helperEffects() {
-      const reported = dspStatus().params ?? {};
       const sent = moodById(this.state.moodId).dsp;
-      const reverb = reported.reverb ?? sent.reverb;
-      const delay = reported.delayMix ?? sent.delayMix;
-      const lowpass = reported.lowpass ?? sent.lowpass;
       return [
         ...this.state.pitch !== 0 ? ["pitch"] : [],
-        ...reverb > 0 ? ["reverb"] : [],
-        ...delay > 0 ? ["delay"] : [],
-        ...lowpass < 2e4 ? ["low-pass"] : []
+        ...sent.reverb > 0 ? ["reverb"] : [],
+        ...sent.delayMix > 0 ? ["delay"] : [],
+        ...sent.lowpass < 2e4 ? ["low-pass"] : []
       ];
     }
     /**
@@ -2959,38 +3161,42 @@ ${NEON_CSS}
       const processing = !remote && status2.linked && status2.tapping === true && status2.audio === true && isPlaying();
       const eq = !remote && eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
       const helper = processing && this.helperEffects().length > 0;
-      return { remote, processing, audible: eq || helper };
+      return { remote, processing, shifting: processing && this.state.pitch !== 0, audible: isPlaying() && (eq || helper) };
     }
     /**
      * The sign and the chip are lit only while the mood can be heard. The pitch
-     * tube is lit while the helper is processing audio here, so the slider acts
-     * live, and sits idle while the helper is running with nothing coming through.
-     * The paint only goes when the sound has left the room.
+     * tube, its number and the wheel's spin say the same about pitch: lit and
+     * turning only while the helper is actually shifting it, warm idle glass
+     * while the helper is ready with nothing to shift. The paint only goes when
+     * the sound has left the room.
      */
     renderLit() {
-      const { remote, processing, audible } = this.hearing();
+      const { remote, shifting, audible } = this.hearing();
       const mood = moodById(this.state.moodId);
       setData(this.panel, "primer", remote ? "true" : "false");
       setData(this.panel, "gas", audible ? "on" : "off");
-      setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : processing ? "on" : "idle");
+      setData(this.panel, "tube", remote || !dspStatus().linked ? "off" : shifting ? "on" : "idle");
       setData(this.chip, "remote", remote ? "true" : "false");
       setData(this.chip, "on", audible ? "true" : "false");
       setData(this.panel, "eq", eqAvailable() && this.slabOwnsEq() ? "slab" : "other");
       setAttr(
         this.chip,
         "aria-label",
-        remote ? `SLAB playback moods. Spotify is playing on ${remote}, so SLAB isn\u2019t heard.` : audible ? `SLAB playback moods, ${mood.name} on` : mood.id === "flat" ? "SLAB playback moods, Flat" : `SLAB playback moods, ${mood.name} picked but not heard right now`
+        remote ? `SLAB playback moods. Spotify is playing on ${remote}, so SLAB isn\u2019t heard.` : audible ? `SLAB playback moods, ${mood.name}${this.state.pitch !== 0 ? `, ${formatSemitones(this.state.pitch)} ${this.state.pitch < 0 ? "down" : "up"}` : ""} on` : mood.id === "flat" ? "SLAB playback moods, Flat" : `SLAB playback moods, ${mood.name} picked but not heard right now`
       );
     }
     /** The panel states what is true now, including the cases where SLAB is doing nothing audible. */
     renderDsp() {
       const remote = remoteDeviceName();
       this.renderLit();
+      this.deadRemote = remote;
       if (remote) {
-        setText(this.deadEl, `Playing on ${deviceSentence(remote)} SLAB only reaches this computer.`);
+        setText(this.deadWhereEl, `Playing on ${deviceSentence(remote)}`);
         setAttr(this.deadEl, "title", `Playing on ${remote}. Moods, pitch and effects apply when Spotify plays here.`);
+        this.deadEl.hidden = false;
       } else {
-        setText(this.deadEl, "");
+        this.deadEl.hidden = true;
+        setText(this.deadWhereEl, "");
         this.deadEl.removeAttribute("title");
       }
       this.renderSign();
@@ -3052,10 +3258,19 @@ ${NEON_CSS}
       const { state, text, title } = this.helperLine();
       setText(this.helperEl, text);
       setAttr(this.helperEl, "title", title);
-      if (this.lastHelperState !== null && this.lastHelperState !== "checking" && this.lastHelperState !== state) {
+      const quiet = (name) => name === "live" || name === "paused" || name === "silent";
+      if (this.lastHelperState !== null && this.lastHelperState !== "checking" && this.lastHelperState !== state && !(quiet(this.lastHelperState) && quiet(state))) {
         this.announce(text);
       }
       this.lastHelperState = state;
+    }
+    /** For values a held button steps through: speak only the one it stops on, read when it stops. */
+    announceSettled(text) {
+      if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+      this.settleTimer = window.setTimeout(() => {
+        this.settleTimer = null;
+        this.announce(text());
+      }, 500);
     }
     /** Emptied first, so the same words twice (two chops in a row) are still spoken twice. */
     announce(text) {
@@ -3073,7 +3288,7 @@ ${NEON_CSS}
       const before = this.lastRemote;
       this.lastRemote = remote;
       this.renderDsp();
-      if (remote) this.announce(this.deadEl.textContent ?? "");
+      if (remote) this.announce(`Playing on ${deviceSentence(remote)} SLAB only reaches this computer.`);
       else if (before) this.announce("Spotify is playing on this computer again.");
     }
     renderMoodState() {
@@ -3095,13 +3310,32 @@ ${NEON_CSS}
       this.renderLit();
     }
     /**
+     * "Playing on …" keeps to its one line: a long device name is cut back a word
+     * at a time until it fits, so the line under it is never the one pushed out,
+     * at any text spacing. The full name stays in the title and the chip's name.
+     * A hidden panel measures nothing; opening it renders again.
+     */
+    fitDeadLine() {
+      const remote = this.deadRemote;
+      if (!remote || this.deadEl.hidden) return;
+      const where = this.deadWhereEl;
+      let max = DEVICE_NAME_MAX;
+      setText(where, `Playing on ${deviceSentence(remote, max)}`);
+      while (max > 8 && where.offsetHeight > DEAD_LINE_PX * 1.5) {
+        max -= 4;
+        setText(where, `Playing on ${deviceSentence(remote, max)}`);
+      }
+    }
+    /**
      * The tube keeps its gauge at any size; a message that wraps to two lines gets
      * the sign's lower part. Measured, not counted, so a fallback font or a narrow
      * name can't fool it. A hidden panel measures nothing, and opening it renders again.
      */
     renderSign() {
+      this.fitDeadLine();
       const mood = moodById(this.state.moodId);
-      const compact = this.panel.dataset.short === "true" || this.deadEl.textContent !== "" && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
+      const compact = this.panel.dataset.short === "true" || !this.deadEl.hidden && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
+      setData(this.panel, "compact", compact ? "true" : "false");
       this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
     }
     toggleAuto() {
@@ -3120,7 +3354,7 @@ ${NEON_CSS}
       this.state.every = next;
       saveState(this.state);
       this.renderAutoState();
-      this.announce(`Every ${next} bar${next === 1 ? "" : "s"}`);
+      this.announceSettled(() => `Every ${next} bar${next === 1 ? "" : "s"}`);
     }
     renderAutoState() {
       const every = this.state.every;
@@ -3143,10 +3377,10 @@ ${NEON_CSS}
      * What a press just did, said right above the pads in the ruler's place for
      * a moment, so the answer lands where the hand is. Nothing else moves.
      */
-    flashActivity(text) {
+    flashActivity(text, speak = true) {
       this.flashEl.textContent = text;
       setData(this.panel, "flash", "true");
-      this.announce(text);
+      if (speak) this.announce(text);
       if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
       this.activityTimer = window.setTimeout(() => {
         this.activityTimer = null;
@@ -3270,12 +3504,13 @@ ${NEON_CSS}
       if (wait !== void 0 && Date.now() - this.lastGridAttempt > wait) void this.syncGrid(true);
     }
     /**
-     * One tick per real bar at its real time, every fourth taller, closing on the
-     * track's end. A track too long for that at two pixels a tick draws every
+     * One tick per real bar at its real time, a taller one on every phrase line
+     * (every N bars, the count auto chop cuts on), closing on the track's end. A track too long for that at two pixels a tick draws every
      * fourth bar instead, or every sixteenth, and the title says so.
      */
     buildRuler(grid) {
-      const key = `${grid.uri}:${grid.bars.length}`;
+      const phrase = Math.max(1, this.state.every);
+      const key = `${grid.uri}:${grid.bars.length}:${phrase}`;
       if (key === this.rulerKey) return;
       this.rulerKey = key;
       this.rulerBar = -2;
@@ -3286,7 +3521,7 @@ ${NEON_CSS}
       grid.bars.forEach((start, index) => {
         if (index % every !== 0) return;
         const x = Math.min(RULER_WIDTH - 0.5, Math.round(start / span * (RULER_WIDTH - 1)) + 0.5);
-        d += `M${x} ${index % (every * 4) === 0 ? 1 : 7}V14`;
+        d += `M${x} ${index % (every * phrase) === 0 ? 1 : 7}V14`;
       });
       d += `M${RULER_WIDTH - 0.5} 1V14`;
       setAttr(this.rulerEl, "title", every > 1 ? `One tick for every ${every} bars on a track this long.` : "");
@@ -3308,7 +3543,7 @@ ${NEON_CSS}
     }
     refresh() {
       if (this.disposed) return;
-      void probeDsp();
+      void probeDsp(false, !this.panel.hidden);
       this.retryGrid();
       this.syncDspParams();
       this.refreshEqOwner();
@@ -3318,6 +3553,7 @@ ${NEON_CSS}
         this.lastPlaying = playingNow;
         this.renderDsp();
       }
+      this.renderLit();
       this.updateSpin();
       if (this.panel.hidden) return;
       this.renderHelperLine();
@@ -3349,9 +3585,10 @@ ${NEON_CSS}
       }
       this.renderEvery();
       const left = loopRemaining();
+      const looping = isLooping();
       const loopPad = this.pads.find((pad) => pad.dataset.pad === "loop");
-      if (loopPad) setData(loopPad, "latched", left > 0 ? "true" : "false");
-      if (this.loopSub) setText(this.loopSub, left > 0 ? `${left} to go` : LOOP_SUB);
+      if (loopPad) setData(loopPad, "latched", looping ? "true" : "false");
+      if (this.loopSub) setText(this.loopSub, !looping ? LOOP_SUB : left > 0 ? `${left} to go` : "Last pass");
       const autoOff = !grid && !this.state.auto;
       setOff(this.switchEl, autoOff);
       if (autoOff) setAttr(this.switchEl, "aria-describedby", "slab-nogrid");
@@ -3390,6 +3627,7 @@ ${NEON_CSS}
       const grid = gridFor();
       if (!grid) return;
       this.renderBeat(grid);
+      this.renderEvery();
       this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
     }
     /**

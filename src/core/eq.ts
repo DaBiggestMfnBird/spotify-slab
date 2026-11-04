@@ -39,9 +39,7 @@ export function eqAvailable(): boolean {
     return ready && filters.length > 0;
 }
 
-export function eqBandCount(): number {
-    return filters.length;
-}
+
 
 export async function initEq(): Promise<boolean> {
     const api = Spicetify.Platform.EqualizerAPI;
@@ -168,6 +166,4 @@ export function restoreBaseline(): Promise<void> {
     return chain;
 }
 
-export function currentFilterGains(): Record<string, number> {
-    return Object.fromEntries(filters.map((filter) => [filter.key, filter.gain]));
-}
+

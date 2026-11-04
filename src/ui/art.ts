@@ -116,7 +116,7 @@ function chipIcon(): string {
 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
   <circle class="slab-chip-tyre" cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
   <circle class="slab-chip-plain" cx="10" cy="10" r="6.4" stroke="currentColor" stroke-width="1"/>
-  <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="#F4F0E6" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
+  <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
   <g stroke="currentColor" stroke-width="1" stroke-linecap="round">${spokes}</g>
   <path d="M6.4 9.2H13.6V10.8H6.4Z" fill="currentColor"/>
   <circle cx="10" cy="10" r="1.3" fill="currentColor"/>

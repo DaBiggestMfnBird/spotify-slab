@@ -95,9 +95,10 @@ async function request(path: string, init?: RequestInit, timeout = 700): Promise
  * installed (every Windows and Linux client) it backs off, so the console isn't
  * filled with refused connections; opening the panel forces a fresh look.
  */
-export async function probeDsp(force = false): Promise<DspStatus> {
+export async function probeDsp(force = false, eager = false): Promise<DspStatus> {
     const now = Date.now();
-    const every = status.linked || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
+    // Someone looking at the panel may have just started the helper: keep looking quickly while it's open.
+    const every = status.linked || eager || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
     if (!force && now - lastProbe < every) return status;
     lastProbe = now;
 
@@ -166,7 +167,9 @@ async function drain(): Promise<void> {
                 misses = 0;
                 publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body } });
             } else {
-                publish({ checked: true, linked: false });
+                // One slow or dropped POST isn't a dead helper: don't disable the slider
+                // mid-drag on it. Ask /status straight away and let that decide.
+                void probeDsp(true);
             }
             for (const resolve of settle) resolve(Boolean(payload));
         }
@@ -185,6 +188,4 @@ export async function dspTapeStop(): Promise<boolean> {
     return Boolean(payload);
 }
 
-export async function resetDsp(): Promise<boolean> {
-    return (await request("/reset", { method: "POST" })) !== null;
-}
+
