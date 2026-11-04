@@ -68,6 +68,16 @@ ${FONT_CSS}
   appearance: none;
 }
 :where(.slab-panel) button[aria-disabled="true"] { cursor: not-allowed; }
+/*
+ * Spotify's own button rules, and some themes', put their font on every button
+ * and win over a zero-specificity reset, so a door name wraps and the panel
+ * outgrows its height. The lettering is part of the car: its buttons keep the
+ * panel's face and spacing (inherited, so a reader's own text spacing still applies).
+ */
+.slab-panel button {
+  font-family: inherit !important;
+  letter-spacing: inherit !important;
+}
 .slab-panel p { margin: 0; }
 .slab-panel svg { display: block; }
 /* An outline only, so a focused press keeps its bevel and a selected door its recess. */
