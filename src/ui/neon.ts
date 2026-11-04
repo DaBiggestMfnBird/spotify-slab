@@ -27,8 +27,8 @@ const SPACE_ADVANCE = 34;
 /** Under this many px apart, the two ends of a word share one boot. */
 const SHARED_BOOT = 8;
 const BOOT_LENGTH = 3.5;
-/** Half the length of a support clip, in px. */
-const CLIP = 3;
+/** Half the length of a support clip, in px: a band across the glass, not a stroke of the letter. */
+const CLIP = 2.3;
 
 function fmt(value: number): string {
     return String(Math.round(value * 10) / 10);
@@ -161,12 +161,11 @@ export const SIGN_HEIGHT = 70;
 /**
  * Every name gets its own fit. Scale is uniform, so a long name gives up height
  * rather than being squashed; `tracking` opens or closes its run and `margin`
- * keeps the glow clear of the trim. Flat is too short to hold the board on its
- * own, so it gets what its name says: a dead level run of tube either side.
+ * keeps the glow clear of the trim. Flat stands alone on bare board.
  */
-const SIGN_FIT: Record<string, { tracking: number; margin: number; level?: boolean }> = {
+const SIGN_FIT: Record<string, { tracking: number; margin: number }> = {
     sped: { tracking: 5, margin: 40 },
-    flat: { tracking: 6, margin: 20, level: true },
+    flat: { tracking: 6, margin: 20 },
     chopped: { tracking: 4, margin: 22 },
     slowed: { tracking: 3, margin: 20 },
     memphis: { tracking: 3, margin: 20 },
@@ -175,7 +174,6 @@ const SIGN_FIT: Record<string, { tracking: number; margin: number; level?: boole
 
 const CAP_HEIGHT = 100;
 const DESCENDER = 26;
-const LEVEL_GAP = 14;
 /** Space under the baseline for the jumps and the boots, including their round caps. */
 const UNDER = 9;
 /** Glow clearance: 12px of board, plus half the bloom. Margins never go under it. */
@@ -202,19 +200,7 @@ export function signLayout(id: string, name: string, height = SIGN_HEIGHT): Tube
     const dx = (SIGN_WIDTH - (right - left)) / 2 - left;
     const units = placeText(name, scale, fit.tracking, dx, baseline);
 
-    const layout = thread(units, baseline, 3);
-    if (fit.level) {
-        const y = fmt(baseline - 50 * scale);
-        const start = fmt(left + dx - LEVEL_GAP);
-        const end = fmt(right + dx + LEVEL_GAP);
-        layout.lit += `M${margin} ${y}H${start}M${end} ${y}H${SIGN_WIDTH - margin}`;
-        const rail = fmt(baseline + 3);
-        layout.dark += `M${margin} ${y}V${rail}M${start} ${y}V${rail}M${end} ${y}V${rail}M${SIGN_WIDTH - margin} ${y}V${rail}`;
-        layout.boots += `M${margin} ${rail}v${BOOT_LENGTH}M${start} ${rail}v${BOOT_LENGTH}M${end} ${rail}v${BOOT_LENGTH}M${SIGN_WIDTH - margin} ${rail}v${BOOT_LENGTH}`;
-        const mid = (a: number, b: number) => fmt((a + b) / 2);
-        layout.supports += `M${Number(mid(margin, Number(start))) - CLIP} ${y}h${CLIP * 2}M${Number(mid(Number(end), SIGN_WIDTH - margin)) - CLIP} ${y}h${CLIP * 2}`;
-    }
-    return layout;
+    return thread(units, baseline, 3);
 }
 
 /** The pitch number's drawing area, also matched in deck.ts. */

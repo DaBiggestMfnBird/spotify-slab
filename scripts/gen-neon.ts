@@ -15,6 +15,8 @@
  *   bowl of b, d, p) it stops one glass width short: the tube bends into the
  *   stem, it doesn't float off it.
  * - Where strokes truly cross (t, +, 4) the glass breaks once, on one side.
+ * - Supports clip on low down, on straight stems only: a clip across a bowl or
+ *   halfway up a stroke reads as part of the letter.
  * - A word's tube comes in and leaves on lit glass at the baseline, so the
  *   painted-out jumps that src/ui/neon.ts threads under the letters hide behind
  *   the glass instead of poking out of a corner.
@@ -59,7 +61,7 @@ const GLYPHS: Record<string, Skeleton> = {
     a: {
         advance: 46,
         walk: [lit([34, 0], [34, X, 13], [0, X, 17], [0, 0, 17], [28, 0])],
-        supports: [[34, 35]],
+        supports: [[34, 20]],
     },
     b: {
         advance: 46,
@@ -68,7 +70,7 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([0, CAP], [0, 0, 17], [34, 0, 17], [34, X, 17], [6, X]),
             dark([6, X], [34, X, 17], [34, 0, 17], [17, 0]),
         ],
-        supports: [[0, 55]],
+        supports: [[0, 22]],
     },
     c: {
         advance: 42,
@@ -77,7 +79,6 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([30, 0], [0, 0, 17], [0, X, 17], [30, X]),
             dark([30, X], [0, X, 17], [0, 0, 17], [17, 0]),
         ],
-        supports: [[0, 35]],
     },
     d: {
         advance: 46,
@@ -86,7 +87,7 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([34, CAP], [34, 0, 17], [0, 0, 17], [0, X, 17], [28, X]),
             dark([28, X], [0, X, 17], [0, 0, 17], [17, 0]),
         ],
-        supports: [[34, 55]],
+        supports: [[34, 22]],
     },
     e: {
         advance: 44,
@@ -94,7 +95,6 @@ const GLYPHS: Record<string, Skeleton> = {
             dark([17, 0], [0, 0, 17], [0, 36, 0], [6, 36]),
             lit([6, 36], [34, 36, 10], [34, X, 17], [0, X, 17], [0, 0, 17], [30, 0]),
         ],
-        supports: [[0, 50]],
     },
     h: {
         advance: 46,
@@ -104,7 +104,7 @@ const GLYPHS: Record<string, Skeleton> = {
             dark([0, 0], [0, X, 0], [6, X]),
             lit([6, X], [34, X, 17], [34, 0]),
         ],
-        supports: [[0, 40]],
+        supports: [[0, 20]],
     },
     i: {
         advance: 22,
@@ -114,12 +114,12 @@ const GLYPHS: Record<string, Skeleton> = {
             dark([0, 96], [0, X]),
             lit([0, X], [0, 0]),
         ],
-        supports: [[0, 35]],
+        supports: [[0, 20]],
     },
     l: {
         advance: 22,
         walk: [dark([0, 0], [0, CAP]), lit([0, CAP], [0, 0])],
-        supports: [[0, 50]],
+        supports: [[0, 20]],
     },
     m: {
         advance: 70,
@@ -128,12 +128,12 @@ const GLYPHS: Record<string, Skeleton> = {
             dark([29, 0], [29, X, 0], [35, X]),
             lit([35, X], [58, X, 14], [58, 0]),
         ],
-        supports: [[0, 35], [58, 35]],
+        supports: [[0, 20], [58, 20]],
     },
     n: {
         advance: 46,
         walk: [lit([0, 0], [0, X, 17], [34, X, 17], [34, 0])],
-        supports: [[0, 35]],
+        supports: [[0, 20]],
     },
     o: {
         advance: 46,
@@ -142,12 +142,11 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([0, 36], [0, 0, 17], [34, 0, 17], [34, X, 17], [0, X, 17], [0, 44]),
             dark([0, 44], [0, 0, 17], [17, 0]),
         ],
-        supports: [[34, 35]],
     },
     p: {
         advance: 46,
         walk: [lit([0, -26], [0, X, 17], [34, X, 17], [34, 0, 17], [6, 0])],
-        supports: [[0, 20]],
+        supports: [[0, -12]],
     },
     r: {
         advance: 38,
@@ -155,7 +154,7 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([0, 0], [0, X, 13], [28, X, 10], [28, 58]),
             dark([28, 58], [28, X, 10], [0, X, 13], [0, 0]),
         ],
-        supports: [[0, 35]],
+        supports: [[0, 20]],
     },
     s: {
         advance: 42,
@@ -176,7 +175,7 @@ const GLYPHS: Record<string, Skeleton> = {
             dark([30, X], [14, X, 0], [14, 92]),
             lit([14, 92], [14, 0, 10], [26, 0]),
         ],
-        supports: [[14, 40]],
+        supports: [[14, 20]],
     },
     v: {
         advance: 44,
@@ -202,7 +201,6 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([40, 0], [0, 0, 21], [0, CAP, 21], [40, CAP]),
             dark([40, CAP], [0, CAP, 21], [0, 0, 21], [24, 0]),
         ],
-        supports: [[0, 50]],
     },
     F: {
         advance: 46,
@@ -212,12 +210,12 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([6, 54], [30, 54]),
             dark([30, 54], [0, 54, 0], [0, 0]),
         ],
-        supports: [[0, 30]],
+        supports: [[0, 20]],
     },
     M: {
         advance: 70,
         walk: [lit([0, 0], [0, CAP, 6], [12, CAP, 6], [29, 40, 6], [46, CAP, 6], [58, CAP, 6], [58, 0])],
-        supports: [[0, 45], [58, 45]],
+        supports: [[0, 20], [58, 20]],
     },
     R: {
         advance: 54,
@@ -226,7 +224,7 @@ const GLYPHS: Record<string, Skeleton> = {
             dark([6, 52], [23, 52, 0], [25.2, 46.4]),
             lit([25.2, 46.4], [44, 0]),
         ],
-        supports: [[0, 30]],
+        supports: [[0, 20]],
     },
     S: {
         advance: 52,
@@ -244,7 +242,7 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([0, CAP], [44, CAP]),
             dark([44, CAP], [22, CAP, 0], [22, 0]),
         ],
-        supports: [[22, 45]],
+        supports: [[22, 20]],
     },
     U: {
         advance: 56,
@@ -253,7 +251,7 @@ const GLYPHS: Record<string, Skeleton> = {
             lit([0, CAP], [0, 0, 22], [44, 0, 22], [44, CAP]),
             dark([44, CAP], [44, 0, 22], [22, 0]),
         ],
-        supports: [[0, 60], [44, 60]],
+        supports: [[0, 30], [44, 30]],
     },
     // The vertical stays whole; the bar runs into it on the left and breaks once on the right.
     "+": {

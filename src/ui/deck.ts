@@ -225,9 +225,13 @@ function pinstripe(id: string): string {
 </svg>`;
 }
 
-/** Display order only: highest landing pitch first, so position means something. */
+/**
+ * Display order only: lowest landing pitch first, reading the same way as the
+ * rail under the sign, so a screw tool opens on Screwed and position means
+ * something. Of the two at 0, Flat sits next to Sped Up, at the end.
+ */
 const MOODS_BY_PITCH = [...MOODS].sort(
-    (a, b) => b.dsp.pitch - a.dsp.pitch || Number(b.id === "flat") - Number(a.id === "flat"),
+    (a, b) => a.dsp.pitch - b.dsp.pitch || Number(a.id === "flat") - Number(b.id === "flat"),
 );
 
 interface SpeedInfo {

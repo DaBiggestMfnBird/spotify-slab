@@ -35,7 +35,7 @@ The slider's position is saved. A relaunch restores the mood and the slider wher
 | **Slowed + Reverb** | The shape a record takes when it's dragged: low-mids swell, presence drops, the top turns to air. |
 | **Screwed** | Screw's tonal signature — sub and low-mid forward, everything above 2k pulled back, like a gray tape played in a trunk. |
 | **Chopped** | Dry and forward, presence up. The cut has to land, so the top stays alive. |
-| **Memphis Tape** | 400–1k pushed until it honks, top rolled off, bottom loose. Cassette dub. |
+| **Memphis Tape** | 400–1k pushed until it honks, highs cut, bottom loose. Cassette dub. |
 | **Sped Up** | The other direction: thin low end, bright presence and air. |
 | **Flat** | Restores the curve your equalizer had when SLAB first loaded. |
 

@@ -50,7 +50,7 @@ export const WHEEL_STATIC = `
   <circle r="17.6" fill="none" stroke="#F4F0E6" stroke-width="1.45"/>
   <circle r="16.15" fill="none" stroke="#E2B53A" stroke-width=".85"/>
   <circle r="13.3" fill="none" stroke="url(#slab-chrome-rim)" stroke-width="1.8"/>
-  <circle r="12.4" fill="#121416"/>
+  <circle class="slab-well" r="12.4" fill="#121416"/>
 </svg>`;
 
 /**
@@ -114,7 +114,7 @@ function chipIcon(): string {
     for (let i = 0; i < 10; i++) spokes += `<path d="M${polar(5.0, i * 36 + 18, 10, 10)}L${polar(2.2, i * 36 + 18, 10, 10)}"/>`;
     return `
 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-  <circle cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
+  <circle class="slab-chip-tyre" cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
   <circle class="slab-chip-plain" cx="10" cy="10" r="6.4" stroke="currentColor" stroke-width="1"/>
   <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="#F4F0E6" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
   <g stroke="currentColor" stroke-width="1" stroke-linecap="round">${spokes}</g>

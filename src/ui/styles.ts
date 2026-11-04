@@ -31,24 +31,6 @@ ${FONT_CSS}
   /* Gold, for the Vogue line and the pinstripe. Never a state colour. */
   --gold: #D4A24C;
   --gold-bright: #F0C46A;
-  /*
-   * Tuck and roll, rolled horizontally: seam, lit lip, padded crest, fall-off
-   * into the next seam. --roll is set per control so the rolls divide it
-   * evenly and a seam never runs through a line of type: a pad gets two rolls
-   * with the seam between its name and its sub-label, a small button one.
-   */
-  --rolls: repeating-linear-gradient(180deg,
-    #0D0304 0, #0D0304 1px, #6E3139 1px, #6A2D35 calc(var(--roll) * 0.22),
-    #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
-    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
-  /* The same rolls with the sign's gas falling on them: the gas mixed into the oxblood, never laid over it. */
-  --lit-rolls: repeating-linear-gradient(180deg,
-    #0B0820 0, #0B0820 1px,
-    color-mix(in srgb, var(--gas) 62%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
-    color-mix(in srgb, var(--gas) 52%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 42%, #3A151B) calc(var(--roll) * 0.83),
-    color-mix(in srgb, var(--gas) 26%, #22080C) calc(var(--roll) * 0.94), #0B0820 var(--roll));
-  --lit-edge: var(--gas-glass);
-  --roll: 18px;
   position: fixed;
   z-index: 2147483000;
   width: 400px;
@@ -71,10 +53,6 @@ ${FONT_CSS}
 }
 .slab-panel::-webkit-scrollbar { display: none; }
 .slab-panel[hidden] { display: none; }
-.slab-panel[data-gas="off"] { --lit-rolls: repeating-linear-gradient(180deg,
-    #121212 0, #121212 1px, #8A8A88 1px, #7E7E7C calc(var(--roll) * 0.22),
-    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
-    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); --lit-edge: var(--wall); }
 .slab-panel *, .slab-panel *::before, .slab-panel *::after { box-sizing: border-box; }
 :where(.slab-panel) button {
   font: inherit;
@@ -146,6 +124,7 @@ ${FONT_CSS}
   border-radius: inherit;
   background:
     linear-gradient(90deg, rgba(16, 0, 5, 0.72) 0, rgba(16, 0, 5, 0.32) 6px, rgba(16, 0, 5, 0) 14px, rgba(16, 0, 5, 0) calc(100% - 14px), rgba(16, 0, 5, 0.32) calc(100% - 6px), rgba(16, 0, 5, 0.72) 100%),
+    radial-gradient(90% 18% at 50% 64%, rgba(200, 18, 42, 0.42), rgba(200, 18, 42, 0) 100%),
     linear-gradient(180deg, #E8202C 0, #B20E27 3px, #860A20 12px, #6E0719 30px, #640618 46%, #520514 74%, #3A030E 100%);
   box-shadow: inset 0 0 0 1px rgba(28, 0, 6, 0.55);
 }
@@ -324,9 +303,24 @@ ${NEON_CSS}
 
 /*
  * One press material: tuck and roll in the interior oxblood, on real travel.
- * A hit lights the rolls with the sign's gas; disabled rolls go dull and flat.
+ * Rolled horizontally: seam, lip, padded crest, fall-off into the next seam.
+ * The gradients live here, on the press, because --roll is set per control so
+ * the rolls divide it evenly and a seam never runs through a line of type: a
+ * pad gets two rolls with the seam between its name and its sub-label, a small
+ * button one. A hit lets the sign's gas catch the top of each roll; with the
+ * gas out it catches plain light. Disabled rolls go dull and flat.
  */
 .slab-press {
+  --roll: 18px;
+  --rolls: repeating-linear-gradient(180deg,
+    #0D0304 0, #0D0304 1px, #6E3139 1px, #6A2D35 calc(var(--roll) * 0.22),
+    #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
+    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
+  --lit-rolls: repeating-linear-gradient(180deg,
+    color-mix(in srgb, var(--gas) 12%, #0D0304) 0, color-mix(in srgb, var(--gas) 12%, #0D0304) 1px,
+    color-mix(in srgb, var(--gas-glass) 78%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
+    color-mix(in srgb, var(--gas) 34%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 14%, #3A151B) calc(var(--roll) * 0.83),
+    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
   position: relative;
   display: inline-flex;
   flex-direction: column;
@@ -354,9 +348,12 @@ ${NEON_CSS}
 }
 .slab-press::after {
   background: var(--lit-rolls);
-  box-shadow: inset 0 0 0 1.5px var(--lit-edge);
   transition: opacity 160ms ease-out;
 }
+.slab-panel[data-gas="off"] .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
+    #121212 0, #121212 1px, #A9A9A6 1px, #8A8A88 calc(var(--roll) * 0.22),
+    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
+    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); }
 .slab-press:hover:not([aria-disabled="true"])::before { opacity: 1; }
 .slab-press:active:not([aria-disabled="true"]),
 .slab-press[data-hit="true"]:not([aria-disabled="true"]),
@@ -411,11 +408,11 @@ ${NEON_CSS}
 .slab-rail-hot-up { transform-origin: 0 50%; }
 .slab-rail-hot-down { transform-origin: 100% 50%; }
 .slab-panel[data-tube="idle"] .slab-rail-tube {
-  background: linear-gradient(180deg, #4E5A79, #6A779A 45%, #414C69);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gas) 28%, #3E4148), color-mix(in srgb, var(--gas) 28%, #5E6168) 45%, color-mix(in srgb, var(--gas) 28%, #34373D));
   box-shadow: 0 5px 5px rgba(0, 0, 0, 0.55);
 }
 .slab-panel[data-tube="idle"] .slab-rail-hot {
-  background: linear-gradient(180deg, #A9B4D6, #C8D0EA);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gas-glass) 55%, #9A9EA6), color-mix(in srgb, var(--gas-glass) 55%, #C4C8CE));
   box-shadow: none;
 }
 .slab-panel[data-tube="off"] .slab-rail-tube {
@@ -441,7 +438,7 @@ ${NEON_CSS}
 }
 .slab-clip[data-lit="true"] {
   background: linear-gradient(180deg, #FFFFFF, #E6E9EB 45%, #B9C0C5 55%, #FFFFFF);
-  box-shadow: 0 0 0 1px var(--gold), 0 2px 2px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 1px var(--wall), 0 2px 2px rgba(0, 0, 0, 0.6);
 }
 
 /* The scale, in the band under the tyre, above the wheel in the stack. Flat marks, no glow. */
@@ -467,7 +464,7 @@ ${NEON_CSS}
   background: var(--gas-glass);
   transform: scaleX(0);
 }
-.slab-panel[data-tube="idle"] .slab-rail-run { background: #A9B4D6; }
+.slab-panel[data-tube="idle"] .slab-rail-run { background: color-mix(in srgb, var(--gas-glass) 55%, #9A9EA6); }
 .slab-panel[data-tube="off"] .slab-rail-run { background: var(--wall); }
 .slab-clip-foot {
   position: absolute;
@@ -483,7 +480,7 @@ ${NEON_CSS}
   width: 7px;
   height: 10px;
   margin-left: -3.5px;
-  background: var(--gold-bright);
+  background: var(--wall);
   box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.8);
 }
 
@@ -531,7 +528,9 @@ ${NEON_CSS}
 .slab-roll.slab-knock, .slab-spin.slab-knock { transform-origin: var(--slab-poke); }
 /* Thirty spokes on a 12° pitch strobe at speed; they fade and the knock-off carries the turn. */
 .slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.45; }
-.slab-range:disabled ~ .slab-wheel { opacity: 0.6; }
+.slab-range:disabled ~ .slab-wheel { filter: saturate(0.35) brightness(0.75); }
+/* Spinning, the well behind the faded spokes reads as blurred chrome, not a dark turbine. */
+.slab-wheel[data-spin="on"] .slab-well { fill: #5E666B; }
 /* Follows the tyre, so it can't reach the controls around the rail. */
 .slab-range:focus-visible ~ .slab-wheel::after {
   content: "";
@@ -807,6 +806,7 @@ ${NEON_CSS}
 .slab-chip[data-on="true"] { color: var(--spice-text, #fff); }
 .slab-chip[data-on="true"] .slab-chip-vogue { display: inline; }
 .slab-chip[data-on="true"] .slab-chip-plain { display: none; }
+.slab-chip[data-on="true"] .slab-chip-tyre { stroke: #6E6E6E; }
 .slab-chip[data-on="true"]::after {
   content: "";
   position: absolute;

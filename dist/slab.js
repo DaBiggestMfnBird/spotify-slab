@@ -355,7 +355,7 @@ self.onmessage = (event) => {
     {
       id: "slowed",
       name: "Slowed + Reverb",
-      sub: "tape drowned in the room",
+      sub: "slowed, big room, highs off",
       gains: [3.5, 2, 0.8, -0.6, -2.6, -4.2],
       dsp: { ...dry, pitch: -320, reverb: 34, reverbPreset: "largeHall2", lowpass: 11e3 },
       note: "The highs come off first when a record is dragged. Presence drops, the low-mids swell, the top turns to air, and the helper adds the room."
@@ -371,7 +371,7 @@ self.onmessage = (event) => {
     {
       id: "chopped",
       name: "Chopped",
-      sub: "dry, bright, cuts",
+      sub: "dry and forward so the chops land",
       gains: [2.2, 1, -0.2, 1.4, 3, 1.2],
       dsp: { ...dry, reverbPreset: "smallRoom" },
       note: "Chopped records stay dry and forward. The cut has to land, so the presence band comes up instead of down."
@@ -379,7 +379,7 @@ self.onmessage = (event) => {
     {
       id: "memphis",
       name: "Memphis Tape",
-      sub: "midrange honk, hiss on top",
+      sub: "midrange honk, highs cut",
       gains: [1.4, 0.8, 3, 2.2, -1, -5],
       dsp: { ...dry, pitch: -160, reverb: 10, reverbPreset: "plate", lowpass: 6500 },
       note: "Cassette dub: 400-1k pushed until it honks, top rolled off, bottom kept loose."
@@ -390,7 +390,7 @@ self.onmessage = (event) => {
       sub: "nightcore bright, thin low end",
       gains: [-1.2, -0.2, -0.6, 1, 2.4, 3.6],
       dsp: { ...dry, pitch: 400 },
-      note: "The other direction. Low end leans out, presence and air come up, the whole thing gets lighter."
+      note: "The other direction. Low end thins out, presence and air come up, the whole thing gets lighter."
     },
     {
       id: "flat",
@@ -732,7 +732,7 @@ self.onmessage = (event) => {
   <circle r="17.6" fill="none" stroke="#F4F0E6" stroke-width="1.45"/>
   <circle r="16.15" fill="none" stroke="#E2B53A" stroke-width=".85"/>
   <circle r="13.3" fill="none" stroke="url(#slab-chrome-rim)" stroke-width="1.8"/>
-  <circle r="12.4" fill="#121416"/>
+  <circle class="slab-well" r="12.4" fill="#121416"/>
 </svg>`;
   function wheelSpokes() {
     let spokes = "";
@@ -773,7 +773,7 @@ self.onmessage = (event) => {
     for (let i = 0; i < 10; i++) spokes += `<path d="M${polar(5, i * 36 + 18, 10, 10)}L${polar(2.2, i * 36 + 18, 10, 10)}"/>`;
     return `
 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-  <circle cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
+  <circle class="slab-chip-tyre" cx="10" cy="10" r="8.7" stroke="currentColor" stroke-width="1.8"/>
   <circle class="slab-chip-plain" cx="10" cy="10" r="6.4" stroke="currentColor" stroke-width="1"/>
   <g class="slab-chip-vogue"><circle cx="10" cy="10" r="7" stroke="#F4F0E6" stroke-width="1.3"/><circle cx="10" cy="10" r="5.9" stroke="#E2B53A" stroke-width=".8"/></g>
   <g stroke="currentColor" stroke-width="1" stroke-linecap="round">${spokes}</g>
@@ -807,30 +807,30 @@ self.onmessage = (event) => {
     "7": { a: 46, l: "M0 -90L30.2 -90C34.1 -90 37 -86.3 36 -82.5L14 0", d: "", i: [0, -90], o: [14, 0] },
     "8": { a: 48, l: "M38 -27L38 -29C38 -39.5 29.5 -48 19 -48L19 -48C8.5 -48 0 -39.5 0 -29L0 -19C0 -8.5 8.5 0 19 0L19 0C29.5 0 38 -8.5 38 -19L38 -21M3 -72L3 -74C3 -82.8 10.2 -90 19 -90L19 -90C27.8 -90 35 -82.8 35 -74L35 -66C35 -57.2 27.8 -50 19 -50L19 -50C10.2 -50 3 -57.2 3 -66L3 -66", d: "", i: [38, -27], o: [3, -66] },
     "9": { a: 48, l: "M0 -18L0 -16C0 -7.2 7.2 0 16 0L19 0C29.5 0 38 -8.5 38 -19L38 -71C38 -81.5 29.5 -90 19 -90L19 -90C8.5 -90 0 -81.5 0 -71L0 -56C0 -47.2 7.2 -40 16 -40L30 -40", d: "", i: [0, -18], o: [30, -40] },
-    "a": { a: 46, l: "M34 0L34 -57C34 -64.2 28.2 -70 21 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L28 0", d: "", i: [34, 0], o: [28, 0], s: [[34, -35]] },
-    "b": { a: 46, l: "M0 -100L0 -17C0 -7.6 7.6 0 17 0L17 0C26.4 0 34 -7.6 34 -17L34 -53C34 -62.4 26.4 -70 17 -70L6 -70", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -100M6 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 -17C34 -7.6 26.4 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[0, -55]] },
-    "c": { a: 42, l: "M30 0L17 0C7.6 0 0 -7.6 0 -17L0 -53C0 -62.4 7.6 -70 17 -70L30 -70", d: "M17 0L30 0M30 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[0, -35]] },
-    "d": { a: 46, l: "M34 -100L34 -17C34 -7.6 26.4 0 17 0L17 0C7.6 0 0 -7.6 0 -17L0 -53C0 -62.4 7.6 -70 17 -70L28 -70", d: "M17 0L17 0C26.4 0 34 -7.6 34 -17L34 -100M28 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[34, -55]] },
-    "e": { a: 44, l: "M6 -36L24 -36C29.5 -36 34 -40.5 34 -46L34 -53C34 -62.4 26.4 -70 17 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L30 0", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -36L6 -36", i: [17, 0], o: [30, 0], s: [[0, -50]] },
-    "h": { a: 46, l: "M0 -100L0 0M6 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 0", d: "M0 0L0 -100M0 0L0 -70L6 -70", i: [0, 0], o: [34, 0], s: [[0, -40]] },
-    "i": { a: 22, l: "M0 -84L0 -96M0 -70L0 0", d: "M0 0L0 -84M0 -96L0 -70", i: [0, 0], o: [0, 0], s: [[0, -35]] },
-    "l": { a: 22, l: "M0 -100L0 0", d: "M0 0L0 -100", i: [0, 0], o: [0, 0], s: [[0, -50]] },
-    "m": { a: 70, l: "M0 0L0 -56C0 -63.7 6.3 -70 14 -70L15 -70C22.7 -70 29 -63.7 29 -56L29 0M35 -70L44 -70C51.7 -70 58 -63.7 58 -56L58 0", d: "M29 0L29 -70L35 -70", i: [0, 0], o: [58, 0], s: [[0, -35], [58, -35]] },
-    "n": { a: 46, l: "M0 0L0 -53C0 -62.4 7.6 -70 17 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 0", d: "", i: [0, 0], o: [34, 0], s: [[0, -35]] },
-    "o": { a: 46, l: "M0 -36L0 -17C0 -7.6 7.6 0 17 0L17 0C26.4 0 34 -7.6 34 -17L34 -53C34 -62.4 26.4 -70 17 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -44", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -36M0 -44L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[34, -35]] },
-    "p": { a: 46, l: "M0 26L0 -53C0 -62.4 7.6 -70 17 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 -17C34 -7.6 26.4 0 17 0L6 0", d: "", i: [0, 26], o: [6, 0], s: [[0, -20]] },
-    "r": { a: 38, l: "M0 0L0 -57C0 -64.2 5.8 -70 13 -70L18 -70C23.5 -70 28 -65.5 28 -60L28 -58", d: "M28 -58L28 -60C28 -65.5 23.5 -70 18 -70L13 -70C5.8 -70 0 -64.2 0 -57L0 0", i: [0, 0], o: [0, 0], s: [[0, -35]] },
+    "a": { a: 46, l: "M34 0L34 -57C34 -64.2 28.2 -70 21 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L28 0", d: "", i: [34, 0], o: [28, 0], s: [[34, -20]] },
+    "b": { a: 46, l: "M0 -100L0 -17C0 -7.6 7.6 0 17 0L17 0C26.4 0 34 -7.6 34 -17L34 -53C34 -62.4 26.4 -70 17 -70L6 -70", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -100M6 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 -17C34 -7.6 26.4 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[0, -22]] },
+    "c": { a: 42, l: "M30 0L17 0C7.6 0 0 -7.6 0 -17L0 -53C0 -62.4 7.6 -70 17 -70L30 -70", d: "M17 0L30 0M30 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0] },
+    "d": { a: 46, l: "M34 -100L34 -17C34 -7.6 26.4 0 17 0L17 0C7.6 0 0 -7.6 0 -17L0 -53C0 -62.4 7.6 -70 17 -70L28 -70", d: "M17 0L17 0C26.4 0 34 -7.6 34 -17L34 -100M28 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0], s: [[34, -22]] },
+    "e": { a: 44, l: "M6 -36L24 -36C29.5 -36 34 -40.5 34 -46L34 -53C34 -62.4 26.4 -70 17 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -17C0 -7.6 7.6 0 17 0L30 0", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -36L6 -36", i: [17, 0], o: [30, 0] },
+    "h": { a: 46, l: "M0 -100L0 0M6 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 0", d: "M0 0L0 -100M0 0L0 -70L6 -70", i: [0, 0], o: [34, 0], s: [[0, -20]] },
+    "i": { a: 22, l: "M0 -84L0 -96M0 -70L0 0", d: "M0 0L0 -84M0 -96L0 -70", i: [0, 0], o: [0, 0], s: [[0, -20]] },
+    "l": { a: 22, l: "M0 -100L0 0", d: "M0 0L0 -100", i: [0, 0], o: [0, 0], s: [[0, -20]] },
+    "m": { a: 70, l: "M0 0L0 -56C0 -63.7 6.3 -70 14 -70L15 -70C22.7 -70 29 -63.7 29 -56L29 0M35 -70L44 -70C51.7 -70 58 -63.7 58 -56L58 0", d: "M29 0L29 -70L35 -70", i: [0, 0], o: [58, 0], s: [[0, -20], [58, -20]] },
+    "n": { a: 46, l: "M0 0L0 -53C0 -62.4 7.6 -70 17 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 0", d: "", i: [0, 0], o: [34, 0], s: [[0, -20]] },
+    "o": { a: 46, l: "M0 -36L0 -17C0 -7.6 7.6 0 17 0L17 0C26.4 0 34 -7.6 34 -17L34 -53C34 -62.4 26.4 -70 17 -70L17 -70C7.6 -70 0 -62.4 0 -53L0 -44", d: "M17 0L17 0C7.6 0 0 -7.6 0 -17L0 -36M0 -44L0 -17C0 -7.6 7.6 0 17 0L17 0", i: [17, 0], o: [17, 0] },
+    "p": { a: 46, l: "M0 26L0 -53C0 -62.4 7.6 -70 17 -70L17 -70C26.4 -70 34 -62.4 34 -53L34 -17C34 -7.6 26.4 0 17 0L6 0", d: "", i: [0, 26], o: [6, 0], s: [[0, 12]] },
+    "r": { a: 38, l: "M0 0L0 -57C0 -64.2 5.8 -70 13 -70L18 -70C23.5 -70 28 -65.5 28 -60L28 -58", d: "M28 -58L28 -60C28 -65.5 23.5 -70 18 -70L13 -70C5.8 -70 0 -64.2 0 -57L0 0", i: [0, 0], o: [0, 0], s: [[0, -20]] },
     "s": { a: 42, l: "M0 -12L0 -12C0 -5.4 5.4 0 12 0L16 0C23.7 0 30 -6.3 30 -14L30 -21C30 -28.7 23.7 -35 16 -35L14 -35C6.3 -35 0 -41.3 0 -49L0 -56C0 -63.7 6.3 -70 14 -70L18 -70C24.6 -70 30 -64.6 30 -58L30 -58", d: "M14 0L12 0C5.4 0 0 -5.4 0 -12L0 -12M30 -58L30 -58C30 -64.6 24.6 -70 18 -70L14 -70C6.3 -70 0 -63.7 0 -56L0 -49C0 -41.3 6.3 -35 14 -35L16 -35C23.7 -35 30 -28.7 30 -21L30 -14C30 -6.3 23.7 0 16 0L14 0", i: [14, 0], o: [14, 0] },
-    "t": { a: 38, l: "M0 -70L11 -70M23 -70L30 -70M14 -92L14 -10C14 -4.5 18.5 0 24 0L26 0", d: "M26 0L24 0C18.5 0 14 -4.5 14 -10L14 -70L0 -70M11 -70L23 -70M30 -70L14 -70L14 -92", i: [26, 0], o: [26, 0], s: [[14, -40]] },
+    "t": { a: 38, l: "M0 -70L11 -70M23 -70L30 -70M14 -92L14 -10C14 -4.5 18.5 0 24 0L26 0", d: "M26 0L24 0C18.5 0 14 -4.5 14 -10L14 -70L0 -70M11 -70L23 -70M30 -70L14 -70L14 -92", i: [26, 0], o: [26, 0], s: [[14, -20]] },
     "v": { a: 44, l: "M0 -70L10.2 -5.1C10.7 -2.2 13.2 0 16.1 0L17.9 0C20.8 0 23.3 -2.2 23.8 -5.1L34 -70", d: "M17 0L16.1 0C13.2 0 10.7 -2.2 10.2 -5.1L0 -70M34 -70L23.8 -5.1C23.3 -2.2 20.8 0 17.9 0L17 0", i: [17, 0], o: [17, 0] },
     "w": { a: 70, l: "M0 -70L5.5 -5.5C5.8 -2.4 8.4 0 11.5 0L13.3 0C16.1 0 18.5 -1.9 19.1 -4.5L24.2 -24.7C25.7 -30.8 34.3 -30.8 35.8 -24.7L40.9 -4.5C41.5 -1.9 43.9 0 46.7 0L48.5 0C51.6 0 54.2 -2.4 54.5 -5.5L60 -70", d: "M12 0L11.5 0C8.4 0 5.8 -2.4 5.5 -5.5L0 -70M60 -70L54.5 -5.5C54.2 -2.4 51.6 0 48.5 0L48 0", i: [12, 0], o: [48, 0] },
-    "C": { a: 52, l: "M40 0L21 0C9.4 0 0 -9.4 0 -21L0 -79C0 -90.6 9.4 -100 21 -100L40 -100", d: "M24 0L40 0M40 -100L21 -100C9.4 -100 0 -90.6 0 -79L0 -21C0 -9.4 9.4 0 21 0L24 0", i: [24, 0], o: [24, 0], s: [[0, -50]] },
-    "F": { a: 46, l: "M0 0L0 -88C0 -94.6 5.4 -100 12 -100L38 -100M6 -54L30 -54", d: "M38 -100L12 -100C5.4 -100 0 -94.6 0 -88L0 -54L6 -54M30 -54L0 -54L0 0", i: [0, 0], o: [0, 0], s: [[0, -30]] },
-    "M": { a: 70, l: "M0 0L0 -94C0 -97.3 2.7 -100 6 -100L7.5 -100C10.1 -100 12.5 -98.2 13.2 -95.6L23.2 -60.4C24.9 -54.6 33.1 -54.6 34.8 -60.4L44.8 -95.6C45.5 -98.2 47.9 -100 50.5 -100L52 -100C55.3 -100 58 -97.3 58 -94L58 0", d: "", i: [0, 0], o: [58, 0], s: [[0, -45], [58, -45]] },
-    "R": { a: 54, l: "M0 0L0 -87C0 -94.2 5.8 -100 13 -100L20 -100C31 -100 40 -91 40 -80L40 -72C40 -61 31 -52 20 -52L6 -52M25.2 -46.4L44 0", d: "M6 -52L23 -52L25.2 -46.4", i: [0, 0], o: [44, 0], s: [[0, -30]] },
+    "C": { a: 52, l: "M40 0L21 0C9.4 0 0 -9.4 0 -21L0 -79C0 -90.6 9.4 -100 21 -100L40 -100", d: "M24 0L40 0M40 -100L21 -100C9.4 -100 0 -90.6 0 -79L0 -21C0 -9.4 9.4 0 21 0L24 0", i: [24, 0], o: [24, 0] },
+    "F": { a: 46, l: "M0 0L0 -88C0 -94.6 5.4 -100 12 -100L38 -100M6 -54L30 -54", d: "M38 -100L12 -100C5.4 -100 0 -94.6 0 -88L0 -54L6 -54M30 -54L0 -54L0 0", i: [0, 0], o: [0, 0], s: [[0, -20]] },
+    "M": { a: 70, l: "M0 0L0 -94C0 -97.3 2.7 -100 6 -100L7.5 -100C10.1 -100 12.5 -98.2 13.2 -95.6L23.2 -60.4C24.9 -54.6 33.1 -54.6 34.8 -60.4L44.8 -95.6C45.5 -98.2 47.9 -100 50.5 -100L52 -100C55.3 -100 58 -97.3 58 -94L58 0", d: "", i: [0, 0], o: [58, 0], s: [[0, -20], [58, -20]] },
+    "R": { a: 54, l: "M0 0L0 -87C0 -94.2 5.8 -100 13 -100L20 -100C31 -100 40 -91 40 -80L40 -72C40 -61 31 -52 20 -52L6 -52M25.2 -46.4L44 0", d: "M6 -52L23 -52L25.2 -46.4", i: [0, 0], o: [44, 0], s: [[0, -20]] },
     "S": { a: 52, l: "M0 -16L0 -14C0 -6.3 6.3 0 14 0L22 0C31.9 0 40 -8.1 40 -18L40 -32C40 -41.9 31.9 -50 22 -50L18 -50C8.1 -50 0 -58.1 0 -68L0 -82C0 -91.9 8.1 -100 18 -100L26 -100C33.7 -100 40 -93.7 40 -86L40 -84", d: "M18 0L14 0C6.3 0 0 -6.3 0 -14L0 -16M40 -84L40 -86C40 -93.7 33.7 -100 26 -100L18 -100C8.1 -100 0 -91.9 0 -82L0 -68C0 -58.1 8.1 -50 18 -50L22 -50C31.9 -50 40 -41.9 40 -32L40 -18C40 -8.1 31.9 0 22 0L18 0", i: [18, 0], o: [18, 0] },
-    "T": { a: 50, l: "M22 0L22 -94M0 -100L44 -100", d: "M22 -94L22 -100L0 -100M44 -100L22 -100L22 0", i: [22, 0], o: [22, 0], s: [[22, -45]] },
-    "U": { a: 56, l: "M0 -100L0 -22C0 -9.8 9.8 0 22 0L22 0C34.2 0 44 -9.8 44 -22L44 -100", d: "M22 0L22 0C9.8 0 0 -9.8 0 -22L0 -100M44 -100L44 -22C44 -9.8 34.2 0 22 0L22 0", i: [22, 0], o: [22, 0], s: [[0, -60], [44, -60]] },
+    "T": { a: 50, l: "M22 0L22 -94M0 -100L44 -100", d: "M22 -94L22 -100L0 -100M44 -100L22 -100L22 0", i: [22, 0], o: [22, 0], s: [[22, -20]] },
+    "U": { a: 56, l: "M0 -100L0 -22C0 -9.8 9.8 0 22 0L22 0C34.2 0 44 -9.8 44 -22L44 -100", d: "M22 0L22 0C9.8 0 0 -9.8 0 -22L0 -100M44 -100L44 -22C44 -9.8 34.2 0 22 0L22 0", i: [22, 0], o: [22, 0], s: [[0, -30], [44, -30]] },
     "+": { a: 48, l: "M19 -20L19 -70M0 -45L16 -45M27 -45L38 -45", d: "M19 -70L19 -45L0 -45M16 -45L27 -45", i: [19, -20], o: [38, -45], f: true },
     "\u2212": { a: 42, l: "M0 -45L30 -45", d: "", i: [0, -45], o: [30, -45] }
   };
@@ -840,7 +840,7 @@ self.onmessage = (event) => {
   var SPACE_ADVANCE = 34;
   var SHARED_BOOT = 8;
   var BOOT_LENGTH = 3.5;
-  var CLIP = 3;
+  var CLIP = 2.3;
   function fmt2(value) {
     return String(Math.round(value * 10) / 10);
   }
@@ -940,7 +940,7 @@ self.onmessage = (event) => {
   var SIGN_HEIGHT = 70;
   var SIGN_FIT = {
     sped: { tracking: 5, margin: 40 },
-    flat: { tracking: 6, margin: 20, level: true },
+    flat: { tracking: 6, margin: 20 },
     chopped: { tracking: 4, margin: 22 },
     slowed: { tracking: 3, margin: 20 },
     memphis: { tracking: 3, margin: 20 },
@@ -948,7 +948,6 @@ self.onmessage = (event) => {
   };
   var CAP_HEIGHT = 100;
   var DESCENDER = 26;
-  var LEVEL_GAP = 14;
   var UNDER = 9;
   var MIN_MARGIN = 19;
   function signLayout(id, name, height = SIGN_HEIGHT) {
@@ -967,19 +966,7 @@ self.onmessage = (event) => {
     const [left, right] = inkBounds(placeText(name, scale, fit.tracking, 0, baseline2));
     const dx = (SIGN_WIDTH - (right - left)) / 2 - left;
     const units = placeText(name, scale, fit.tracking, dx, baseline2);
-    const layout = thread(units, baseline2, 3);
-    if (fit.level) {
-      const y = fmt2(baseline2 - 50 * scale);
-      const start = fmt2(left + dx - LEVEL_GAP);
-      const end = fmt2(right + dx + LEVEL_GAP);
-      layout.lit += `M${margin} ${y}H${start}M${end} ${y}H${SIGN_WIDTH - margin}`;
-      const rail = fmt2(baseline2 + 3);
-      layout.dark += `M${margin} ${y}V${rail}M${start} ${y}V${rail}M${end} ${y}V${rail}M${SIGN_WIDTH - margin} ${y}V${rail}`;
-      layout.boots += `M${margin} ${rail}v${BOOT_LENGTH}M${start} ${rail}v${BOOT_LENGTH}M${end} ${rail}v${BOOT_LENGTH}M${SIGN_WIDTH - margin} ${rail}v${BOOT_LENGTH}`;
-      const mid = (a, b) => fmt2((a + b) / 2);
-      layout.supports += `M${Number(mid(margin, Number(start))) - CLIP} ${y}h${CLIP * 2}M${Number(mid(Number(end), SIGN_WIDTH - margin)) - CLIP} ${y}h${CLIP * 2}`;
-    }
-    return layout;
+    return thread(units, baseline2, 3);
   }
   var NUMBER_WIDTH = 118;
   var NUMBER_HEIGHT = 42;
@@ -1016,9 +1003,9 @@ self.onmessage = (event) => {
 .slab-tube [data-l="core"] { stroke: var(--gas-core); stroke-width: 1.2; }
 .slab-tube-gas { will-change: opacity; }
 /* Tube supports: small chrome clips across straight glass, seated on the board by their own shadow. */
-.slab-tube [data-l="clipShadow"] { stroke: #000; stroke-width: 2.6; stroke-linecap: butt; opacity: 0.55; transform: translate(0.8px, 1.4px); }
-.slab-tube [data-l="clip"] { stroke: #B9C0C5; stroke-width: 2.2; stroke-linecap: butt; }
-.slab-tube [data-l="clipHi"] { stroke: #F4F6F7; stroke-width: 0.7; stroke-linecap: butt; transform: translateY(-0.6px); }
+.slab-tube [data-l="clipShadow"] { stroke: #000; stroke-width: 2; stroke-linecap: butt; opacity: 0.55; transform: translate(0.7px, 1.2px); }
+.slab-tube [data-l="clip"] { stroke: #B9C0C5; stroke-width: 1.6; stroke-linecap: butt; }
+.slab-tube [data-l="clipHi"] { stroke: #F4F6F7; stroke-width: 0.5; stroke-linecap: butt; transform: translateY(-0.45px); }
 
 .slab-panel[data-gas="off"] .slab-sign-tube .slab-tube-gas { visibility: hidden; }
 .slab-panel[data-tube="off"] .slab-number-tube .slab-tube-gas { visibility: hidden; }
@@ -1054,24 +1041,6 @@ ${FONT_CSS}
   /* Gold, for the Vogue line and the pinstripe. Never a state colour. */
   --gold: #D4A24C;
   --gold-bright: #F0C46A;
-  /*
-   * Tuck and roll, rolled horizontally: seam, lit lip, padded crest, fall-off
-   * into the next seam. --roll is set per control so the rolls divide it
-   * evenly and a seam never runs through a line of type: a pad gets two rolls
-   * with the seam between its name and its sub-label, a small button one.
-   */
-  --rolls: repeating-linear-gradient(180deg,
-    #0D0304 0, #0D0304 1px, #6E3139 1px, #6A2D35 calc(var(--roll) * 0.22),
-    #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
-    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
-  /* The same rolls with the sign's gas falling on them: the gas mixed into the oxblood, never laid over it. */
-  --lit-rolls: repeating-linear-gradient(180deg,
-    #0B0820 0, #0B0820 1px,
-    color-mix(in srgb, var(--gas) 62%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
-    color-mix(in srgb, var(--gas) 52%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 42%, #3A151B) calc(var(--roll) * 0.83),
-    color-mix(in srgb, var(--gas) 26%, #22080C) calc(var(--roll) * 0.94), #0B0820 var(--roll));
-  --lit-edge: var(--gas-glass);
-  --roll: 18px;
   position: fixed;
   z-index: 2147483000;
   width: 400px;
@@ -1094,10 +1063,6 @@ ${FONT_CSS}
 }
 .slab-panel::-webkit-scrollbar { display: none; }
 .slab-panel[hidden] { display: none; }
-.slab-panel[data-gas="off"] { --lit-rolls: repeating-linear-gradient(180deg,
-    #121212 0, #121212 1px, #8A8A88 1px, #7E7E7C calc(var(--roll) * 0.22),
-    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
-    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); --lit-edge: var(--wall); }
 .slab-panel *, .slab-panel *::before, .slab-panel *::after { box-sizing: border-box; }
 :where(.slab-panel) button {
   font: inherit;
@@ -1169,6 +1134,7 @@ ${FONT_CSS}
   border-radius: inherit;
   background:
     linear-gradient(90deg, rgba(16, 0, 5, 0.72) 0, rgba(16, 0, 5, 0.32) 6px, rgba(16, 0, 5, 0) 14px, rgba(16, 0, 5, 0) calc(100% - 14px), rgba(16, 0, 5, 0.32) calc(100% - 6px), rgba(16, 0, 5, 0.72) 100%),
+    radial-gradient(90% 18% at 50% 64%, rgba(200, 18, 42, 0.42), rgba(200, 18, 42, 0) 100%),
     linear-gradient(180deg, #E8202C 0, #B20E27 3px, #860A20 12px, #6E0719 30px, #640618 46%, #520514 74%, #3A030E 100%);
   box-shadow: inset 0 0 0 1px rgba(28, 0, 6, 0.55);
 }
@@ -1347,9 +1313,24 @@ ${NEON_CSS}
 
 /*
  * One press material: tuck and roll in the interior oxblood, on real travel.
- * A hit lights the rolls with the sign's gas; disabled rolls go dull and flat.
+ * Rolled horizontally: seam, lip, padded crest, fall-off into the next seam.
+ * The gradients live here, on the press, because --roll is set per control so
+ * the rolls divide it evenly and a seam never runs through a line of type: a
+ * pad gets two rolls with the seam between its name and its sub-label, a small
+ * button one. A hit lets the sign's gas catch the top of each roll; with the
+ * gas out it catches plain light. Disabled rolls go dull and flat.
  */
 .slab-press {
+  --roll: 18px;
+  --rolls: repeating-linear-gradient(180deg,
+    #0D0304 0, #0D0304 1px, #6E3139 1px, #6A2D35 calc(var(--roll) * 0.22),
+    #55232A calc(var(--roll) * 0.5), #3A151B calc(var(--roll) * 0.83),
+    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
+  --lit-rolls: repeating-linear-gradient(180deg,
+    color-mix(in srgb, var(--gas) 12%, #0D0304) 0, color-mix(in srgb, var(--gas) 12%, #0D0304) 1px,
+    color-mix(in srgb, var(--gas-glass) 78%, #6E3139) 1px, color-mix(in srgb, var(--gas) 58%, #6A2D35) calc(var(--roll) * 0.22),
+    color-mix(in srgb, var(--gas) 34%, #55232A) calc(var(--roll) * 0.5), color-mix(in srgb, var(--gas) 14%, #3A151B) calc(var(--roll) * 0.83),
+    #22080C calc(var(--roll) * 0.94), #0D0304 var(--roll));
   position: relative;
   display: inline-flex;
   flex-direction: column;
@@ -1377,9 +1358,12 @@ ${NEON_CSS}
 }
 .slab-press::after {
   background: var(--lit-rolls);
-  box-shadow: inset 0 0 0 1.5px var(--lit-edge);
   transition: opacity 160ms ease-out;
 }
+.slab-panel[data-gas="off"] .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
+    #121212 0, #121212 1px, #A9A9A6 1px, #8A8A88 calc(var(--roll) * 0.22),
+    #666664 calc(var(--roll) * 0.5), #4A4A49 calc(var(--roll) * 0.83),
+    #2E2E2D calc(var(--roll) * 0.94), #121212 var(--roll)); }
 .slab-press:hover:not([aria-disabled="true"])::before { opacity: 1; }
 .slab-press:active:not([aria-disabled="true"]),
 .slab-press[data-hit="true"]:not([aria-disabled="true"]),
@@ -1434,11 +1418,11 @@ ${NEON_CSS}
 .slab-rail-hot-up { transform-origin: 0 50%; }
 .slab-rail-hot-down { transform-origin: 100% 50%; }
 .slab-panel[data-tube="idle"] .slab-rail-tube {
-  background: linear-gradient(180deg, #4E5A79, #6A779A 45%, #414C69);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gas) 28%, #3E4148), color-mix(in srgb, var(--gas) 28%, #5E6168) 45%, color-mix(in srgb, var(--gas) 28%, #34373D));
   box-shadow: 0 5px 5px rgba(0, 0, 0, 0.55);
 }
 .slab-panel[data-tube="idle"] .slab-rail-hot {
-  background: linear-gradient(180deg, #A9B4D6, #C8D0EA);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gas-glass) 55%, #9A9EA6), color-mix(in srgb, var(--gas-glass) 55%, #C4C8CE));
   box-shadow: none;
 }
 .slab-panel[data-tube="off"] .slab-rail-tube {
@@ -1464,7 +1448,7 @@ ${NEON_CSS}
 }
 .slab-clip[data-lit="true"] {
   background: linear-gradient(180deg, #FFFFFF, #E6E9EB 45%, #B9C0C5 55%, #FFFFFF);
-  box-shadow: 0 0 0 1px var(--gold), 0 2px 2px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 1px var(--wall), 0 2px 2px rgba(0, 0, 0, 0.6);
 }
 
 /* The scale, in the band under the tyre, above the wheel in the stack. Flat marks, no glow. */
@@ -1490,7 +1474,7 @@ ${NEON_CSS}
   background: var(--gas-glass);
   transform: scaleX(0);
 }
-.slab-panel[data-tube="idle"] .slab-rail-run { background: #A9B4D6; }
+.slab-panel[data-tube="idle"] .slab-rail-run { background: color-mix(in srgb, var(--gas-glass) 55%, #9A9EA6); }
 .slab-panel[data-tube="off"] .slab-rail-run { background: var(--wall); }
 .slab-clip-foot {
   position: absolute;
@@ -1506,7 +1490,7 @@ ${NEON_CSS}
   width: 7px;
   height: 10px;
   margin-left: -3.5px;
-  background: var(--gold-bright);
+  background: var(--wall);
   box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.8);
 }
 
@@ -1554,7 +1538,9 @@ ${NEON_CSS}
 .slab-roll.slab-knock, .slab-spin.slab-knock { transform-origin: var(--slab-poke); }
 /* Thirty spokes on a 12\xB0 pitch strobe at speed; they fade and the knock-off carries the turn. */
 .slab-wheel[data-spin="on"] .slab-roll:not(.slab-knock) { opacity: 0.45; }
-.slab-range:disabled ~ .slab-wheel { opacity: 0.6; }
+.slab-range:disabled ~ .slab-wheel { filter: saturate(0.35) brightness(0.75); }
+/* Spinning, the well behind the faded spokes reads as blurred chrome, not a dark turbine. */
+.slab-wheel[data-spin="on"] .slab-well { fill: #5E666B; }
 /* Follows the tyre, so it can't reach the controls around the rail. */
 .slab-range:focus-visible ~ .slab-wheel::after {
   content: "";
@@ -1830,6 +1816,7 @@ ${NEON_CSS}
 .slab-chip[data-on="true"] { color: var(--spice-text, #fff); }
 .slab-chip[data-on="true"] .slab-chip-vogue { display: inline; }
 .slab-chip[data-on="true"] .slab-chip-plain { display: none; }
+.slab-chip[data-on="true"] .slab-chip-tyre { stroke: #6E6E6E; }
 .slab-chip[data-on="true"]::after {
   content: "";
   position: absolute;
@@ -2062,7 +2049,7 @@ ${NEON_CSS}
 </svg>`;
   }
   var MOODS_BY_PITCH = [...MOODS].sort(
-    (a, b) => b.dsp.pitch - a.dsp.pitch || Number(b.id === "flat") - Number(a.id === "flat")
+    (a, b) => a.dsp.pitch - b.dsp.pitch || Number(a.id === "flat") - Number(b.id === "flat")
   );
   var NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
   var LOOP_TIMES = 4;

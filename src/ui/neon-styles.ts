@@ -23,9 +23,9 @@ export const NEON_CSS = `
 .slab-tube [data-l="core"] { stroke: var(--gas-core); stroke-width: 1.2; }
 .slab-tube-gas { will-change: opacity; }
 /* Tube supports: small chrome clips across straight glass, seated on the board by their own shadow. */
-.slab-tube [data-l="clipShadow"] { stroke: #000; stroke-width: 2.6; stroke-linecap: butt; opacity: 0.55; transform: translate(0.8px, 1.4px); }
-.slab-tube [data-l="clip"] { stroke: #B9C0C5; stroke-width: 2.2; stroke-linecap: butt; }
-.slab-tube [data-l="clipHi"] { stroke: #F4F6F7; stroke-width: 0.7; stroke-linecap: butt; transform: translateY(-0.6px); }
+.slab-tube [data-l="clipShadow"] { stroke: #000; stroke-width: 2; stroke-linecap: butt; opacity: 0.55; transform: translate(0.7px, 1.2px); }
+.slab-tube [data-l="clip"] { stroke: #B9C0C5; stroke-width: 1.6; stroke-linecap: butt; }
+.slab-tube [data-l="clipHi"] { stroke: #F4F6F7; stroke-width: 0.5; stroke-linecap: butt; transform: translateY(-0.45px); }
 
 .slab-panel[data-gas="off"] .slab-sign-tube .slab-tube-gas { visibility: hidden; }
 .slab-panel[data-tube="off"] .slab-number-tube .slab-tube-gas { visibility: hidden; }
