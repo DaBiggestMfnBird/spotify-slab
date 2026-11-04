@@ -1643,8 +1643,9 @@ ${NEON_CSS}
 
 .slab-scale { position: relative; height: 28px; margin-left: 7px; }
 .slab-scale > * { position: absolute; top: 1px; transform: translateX(-50%); }
-.slab-scale-end { line-height: 28px; white-space: nowrap; color: var(--wall-soft); }
-.slab-normal { --roll: 28px; width: 58px; height: 28px; font-weight: 600; }
+.slab-scale-end { line-height: 26px; white-space: nowrap; color: var(--wall-soft); }
+/* Two pixels of board between the key and the welt, so its shadow never lands on the piping. */
+.slab-normal { --roll: 26px; width: 58px; height: 26px; font-weight: 600; }
 .slab-scale .slab-normal:active:not([aria-disabled="true"]) { transform: translate(-50%, 2px); }
 
 /*
@@ -1751,7 +1752,8 @@ ${NEON_CSS}
 .slab-nogrid,
 .slab-flash {
   position: absolute;
-  inset: 0 10px;
+  /* On the readout's text line, with the BPM above it. */
+  inset: 0 10px 0 14px;
   display: none;
   line-height: 16px;
   white-space: nowrap;
