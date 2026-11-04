@@ -29,6 +29,8 @@ let padJumpAt = 0;
 const PAD_JUMP_GRACE_MS = 1500;
 /** The bar the last hand-made cut (a pad or a loop jump) left from; auto chop counts it as that line's cut. */
 let manualBar = -2;
+/** A loop on the last bar jumps back this long before the track ends, so the player doesn't advance first. */
+const TRACK_END_MARGIN_MS = 150;
 /** The bar auto chop saw on its last tick, to tell a jump from steady play. */
 let autoLastIndex: number | null = null;
 
@@ -129,7 +131,10 @@ export async function loopBars(times = 4): Promise<boolean> {
     cancelLoop();
 
     const start = barStartMs(grid, index);
-    const length = barLengthMs(grid, index);
+    // The last bar can run past the end of the track; a loop there repeats what's left of it,
+    // so the jump comes before Spotify moves on to the next track.
+    const trackLeft = (grid.durationMs || Number.POSITIVE_INFINITY) - TRACK_END_MARGIN_MS - start;
+    const length = Math.min(barLengthMs(grid, index), trackLeft);
     if (length < 300) return false;
 
     const end = start + length;
@@ -160,7 +165,9 @@ export async function loopBars(times = 4): Promise<boolean> {
         }
 
         // A late tick has already run past the line; carry the overshoot so the loop stays in time.
-        seek(start + Math.max(0, at - end));
+        // A stalled clock can be late by most of a bar: carry at most a beat's worth, so the jump
+        // lands early enough in the bar for the loop to arm again rather than quietly die.
+        seek(start + Math.min(Math.max(0, at - end), length / 4));
         armed = false;
         loopLeft -= 1;
         manualBar = index;
@@ -183,7 +190,14 @@ export function isStopping(): boolean {
     return stopping !== null;
 }
 
-export function tapeStop(options: { fade?: boolean; pauseDelayMs?: number } = {}): Promise<boolean> {
+export interface TapeStopOptions {
+    /** Asks the helper to ramp the audio itself; resolves true only if it did. */
+    spinDown?: () => Promise<boolean>;
+    /** How long the helper's ramp takes to bottom out, so the pause doesn't clip it. */
+    spinDownMs?: number;
+}
+
+export function tapeStop(options: TapeStopOptions = {}): Promise<boolean> {
     // One stop at a time. A second press during the fade would read the faded
     // volume as its starting point and leave the player turned down for good.
     if (stopping) return stopping;
@@ -193,18 +207,20 @@ export function tapeStop(options: { fade?: boolean; pauseDelayMs?: number } = {}
     return stopping;
 }
 
-async function runTapeStop(options: { fade?: boolean; pauseDelayMs?: number }): Promise<boolean> {
+async function runTapeStop(options: TapeStopOptions): Promise<boolean> {
     if (!Spicetify.Player.isPlaying()) {
         emit("stop", "Already stopped");
         return false;
     }
 
-    // With the DSP helper linked the spin-down is real audio, so fading the
-    // player on top of it would hide the effect. In that case hold the volume
-    // and just wait for the ramp before pausing.
-    const fade = options.fade !== false;
+    // When the helper ramps the audio, the spin-down is real, and fading the
+    // player on top of it would hide the effect: hold the volume and pause when
+    // the ramp bottoms out. When it can't (nothing tapped, or no answer), the
+    // fader does the stop, so a stop is never a hard cut.
+    const spun = options.spinDown ? await options.spinDown() : false;
+    const fade = !spun;
     const startVolume = Spicetify.Player.getVolume();
-    const duration = fade ? 420 : Math.max(0, options.pauseDelayMs ?? 0);
+    const duration = fade ? 420 : Math.max(0, options.spinDownMs ?? 0);
     const origin = Date.now();
 
     await new Promise<void>((resolve) => {
@@ -334,6 +350,9 @@ function stopAuto(): void {
 
 export function resetForTrack(): void {
     cancelLoop();
+    // A cut on the last track says nothing about this one's bars.
+    manualBar = -2;
+    padJumpAt = 0;
     autoBaseline = true;
     autoLastIndex = null;
     autoMaxBar = -1;

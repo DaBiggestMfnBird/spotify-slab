@@ -15,8 +15,11 @@ self.onmessage = (event) => {
   }
 };
 `;
-  var fallback = null;
+  var mode = null;
+  var mainTimer = null;
+  var watchdog = null;
   var lastTick = 0;
+  var WORKER_SILENT_MS = 3e3;
   function tickAll(now) {
     for (const tick of subscribers) {
       try {
@@ -25,8 +28,20 @@ self.onmessage = (event) => {
       }
     }
   }
+  function startMainTimer() {
+    if (mainTimer === null) mainTimer = window.setInterval(() => tickAll(Date.now()), 40);
+  }
+  function stopTimers() {
+    if (mainTimer !== null) window.clearInterval(mainTimer);
+    if (watchdog !== null) window.clearInterval(watchdog);
+    mainTimer = null;
+    watchdog = null;
+  }
   function useMainThread() {
-    if (fallback !== null) return;
+    if (mode === "main") return;
+    mode = "main";
+    if (watchdog !== null) window.clearInterval(watchdog);
+    watchdog = null;
     if (worker) {
       worker.terminate();
       worker = null;
@@ -35,21 +50,21 @@ self.onmessage = (event) => {
       URL.revokeObjectURL(objectUrl);
       objectUrl = null;
     }
-    fallback = window.setInterval(() => {
-      if (subscribers.size) tickAll(Date.now());
-    }, 40);
+    if (subscribers.size) startMainTimer();
   }
-  function watch() {
+  function watchWorker() {
+    if (watchdog !== null) return;
     const armedAt = Date.now();
-    window.setTimeout(() => {
-      if (worker && subscribers.size && lastTick < armedAt) useMainThread();
+    watchdog = window.setInterval(() => {
+      if (mode === "worker" && subscribers.size && Date.now() - Math.max(lastTick, armedAt) > WORKER_SILENT_MS) useMainThread();
     }, 1e3);
   }
   function boot() {
-    if (worker || fallback !== null) return;
+    if (mode) return;
     try {
       objectUrl = URL.createObjectURL(new Blob([SOURCE], { type: "text/javascript" }));
       worker = new Worker(objectUrl);
+      mode = "worker";
       worker.onmessage = (event) => {
         lastTick = Date.now();
         tickAll(typeof event.data === "number" ? event.data : Date.now());
@@ -63,19 +78,24 @@ self.onmessage = (event) => {
     boot();
     const wasIdle = subscribers.size === 0;
     subscribers.add(tick);
-    if (wasIdle && worker) {
-      worker.postMessage("start");
-      watch();
+    if (wasIdle) {
+      if (mode === "worker" && worker) {
+        worker.postMessage("start");
+        watchWorker();
+      } else {
+        startMainTimer();
+      }
     }
     return () => {
-      subscribers.delete(tick);
-      if (subscribers.size === 0 && worker) worker.postMessage("stop");
+      if (!subscribers.delete(tick) || subscribers.size > 0) return;
+      stopTimers();
+      if (worker) worker.postMessage("stop");
     };
   }
   function disposeClock() {
     subscribers.clear();
-    if (fallback !== null) window.clearInterval(fallback);
-    fallback = null;
+    stopTimers();
+    mode = null;
     lastTick = 0;
     if (worker) {
       worker.postMessage("stop");
@@ -109,7 +129,10 @@ self.onmessage = (event) => {
     if (!target) return null;
     if (!target.startsWith("spotify:track:")) return null;
     const cached = cache.get(target);
-    if (cached) return cached;
+    if (cached) {
+      remember(target, cached);
+      return cached;
+    }
     const running2 = inflight.get(target);
     if (running2) return running2;
     const request2 = (async () => {
@@ -186,6 +209,7 @@ self.onmessage = (event) => {
   var padJumpAt = 0;
   var PAD_JUMP_GRACE_MS = 1500;
   var manualBar = -2;
+  var TRACK_END_MARGIN_MS = 150;
   var autoLastIndex = null;
   var autoUnsub = null;
   var autoEvery = 4;
@@ -249,7 +273,8 @@ self.onmessage = (event) => {
     if (index < 0) return false;
     cancelLoop();
     const start = barStartMs(grid, index);
-    const length = barLengthMs(grid, index);
+    const trackLeft = (grid.durationMs || Number.POSITIVE_INFINITY) - TRACK_END_MARGIN_MS - start;
+    const length = Math.min(barLengthMs(grid, index), trackLeft);
     if (length < 300) return false;
     const end = start + length;
     const total = Math.max(1, Math.round(times));
@@ -275,7 +300,7 @@ self.onmessage = (event) => {
         emit("loop", "Loop done");
         return;
       }
-      seek(start + Math.max(0, at - end));
+      seek(start + Math.min(Math.max(0, at - end), length / 4));
       armed = false;
       loopLeft -= 1;
       manualBar = index;
@@ -299,9 +324,10 @@ self.onmessage = (event) => {
       emit("stop", "Already stopped");
       return false;
     }
-    const fade = options.fade !== false;
+    const spun = options.spinDown ? await options.spinDown() : false;
+    const fade = !spun;
     const startVolume = Spicetify.Player.getVolume();
-    const duration = fade ? 420 : Math.max(0, options.pauseDelayMs ?? 0);
+    const duration = fade ? 420 : Math.max(0, options.spinDownMs ?? 0);
     const origin = Date.now();
     await new Promise((resolve) => {
       let done = false;
@@ -394,6 +420,8 @@ self.onmessage = (event) => {
   }
   function resetForTrack() {
     cancelLoop();
+    manualBar = -2;
+    padJumpAt = 0;
     autoBaseline = true;
     autoLastIndex = null;
     autoMaxBar = -1;
@@ -644,6 +672,8 @@ self.onmessage = (event) => {
   var status = { checked: false, linked: false };
   var lastProbe = 0;
   var misses = 0;
+  var probeSeq = 0;
+  var paramsSeq = 0;
   var listeners = /* @__PURE__ */ new Set();
   var PROBE_LINKED_MS = 4e3;
   var PROBE_ABSENT_MS = 3e4;
@@ -683,7 +713,10 @@ self.onmessage = (event) => {
     const every = status.linked || eager || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
     if (!force && now - lastProbe < every) return status;
     lastProbe = now;
+    const seq = ++probeSeq;
+    const paramsAtStart = paramsSeq;
     const payload = await request("/status");
+    if (seq !== probeSeq) return status;
     if (payload?.ok) {
       misses = 0;
       publish({
@@ -695,7 +728,8 @@ self.onmessage = (event) => {
         version: payload.version,
         sampleRate: payload.sampleRate,
         latencyMs: payload.latencyMs,
-        params: payload.params
+        // Params the helper accepted after this probe went out are newer than what it reported.
+        params: paramsSeq === paramsAtStart ? payload.params : status.params
       });
     } else {
       misses += 1;
@@ -727,7 +761,9 @@ self.onmessage = (event) => {
         });
         if (payload) {
           misses = 0;
-          publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body } });
+          paramsSeq += 1;
+          const applied = payload.params;
+          publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body, ...applied } });
         } else {
           void probeDsp(true);
         }
@@ -738,11 +774,16 @@ self.onmessage = (event) => {
     }
   }
   async function dspTapeStop() {
-    const payload = await request("/tapstop", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 })
-    });
+    const payload = await request(
+      "/tapstop",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 })
+      },
+      // On loopback the answer is near-instant; don't hold the stop up waiting on a stuck helper.
+      300
+    );
     return Boolean(payload);
   }
 
@@ -1110,6 +1151,8 @@ ${FONT_CSS}
   position: fixed;
   z-index: 2147483000;
   width: 400px;
+  /* A narrow window scales the whole car from its top-left corner (see position()). */
+  transform-origin: 0 0;
   max-height: min(680px, calc(100vh - 16px));
   box-sizing: border-box;
   overflow: hidden auto;
@@ -2038,6 +2081,7 @@ ${NEON_CSS}
   var EVERY_MAX = 16;
   var DEVICE_NAME_MAX = 56;
   var PANEL_MAX_PX = 680;
+  var PANEL_WIDTH_PX = 400;
   var MIN_ROOM_PX = 160;
   var SHORT_SAVING_PX = 56;
   var DEAD_LINE_PX = 18;
@@ -2425,7 +2469,7 @@ ${NEON_CSS}
       if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
       for (const timer of this.padTimers.values()) window.clearTimeout(timer);
       this.padTimers.clear();
-      for (const release of this.releases) release();
+      for (const release2 of this.releases) release2();
       if (this.lampFrame !== null) window.cancelAnimationFrame(this.lampFrame);
       this.lampFrame = null;
       for (const animation of this.spinAnimations) animation.cancel();
@@ -2679,9 +2723,7 @@ ${NEON_CSS}
               this.flashActivity("Already stopped");
               return false;
             }
-            const linked = dspStatus().linked;
-            if (linked) void dspTapeStop();
-            void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : void 0);
+            void tapeStop(dspStatus().linked ? { spinDown: dspTapeStop, spinDownMs: 470 } : {});
             return true;
           }
         }
@@ -2724,7 +2766,7 @@ ${NEON_CSS}
       if (this.panel.hidden) return;
       const target = event.target;
       if (!target) return;
-      if (event.type === "click" && this.pressedInside) {
+      if (event.type === "click" && event.detail > 0 && this.pressedInside) {
         this.pressedInside = false;
         return;
       }
@@ -2868,23 +2910,27 @@ ${NEON_CSS}
       const bar = document.querySelector('[data-testid="now-playing-bar"]')?.getBoundingClientRect();
       const ceiling = Math.min(rect.top, bar && bar.height > 0 && bar.top > 0 ? bar.top : rect.top) - 8;
       const room = ceiling - 8;
+      const fit = Math.min(1, Math.max(0.5, (window.innerWidth - 16) / PANEL_WIDTH_PX));
+      if (fit < 1) this.panel.style.setProperty("scale", String(Math.floor(fit * 1e3) / 1e3));
+      else this.panel.style.removeProperty("scale");
+      const layoutRoom = room / fit;
       const wasShort = this.panel.dataset.short === "true";
       const natural = this.panel.scrollHeight + (wasShort ? SHORT_SAVING_PX : 0);
-      const short = room < Math.min(PANEL_MAX_PX, natural);
+      const short = layoutRoom < Math.min(PANEL_MAX_PX, natural);
       if (short !== wasShort) {
         setData(this.panel, "short", String(short));
         this.renderSign();
       }
-      const width = this.panel.offsetWidth || 400;
+      const width = (this.panel.offsetWidth || PANEL_WIDTH_PX) * fit;
       const maxLeft = Math.max(8, window.innerWidth - width - 8);
       let left = Math.max(8, Math.min(maxLeft, rect.right - width));
       let top;
       if (room >= MIN_ROOM_PX) {
-        this.panel.style.maxHeight = `${Math.min(PANEL_MAX_PX, room)}px`;
-        top = ceiling - this.panel.offsetHeight;
+        this.panel.style.maxHeight = `${Math.min(PANEL_MAX_PX, layoutRoom)}px`;
+        top = ceiling - this.panel.offsetHeight * fit;
       } else {
         this.panel.style.maxHeight = "";
-        const height = this.panel.offsetHeight || PANEL_MAX_PX;
+        const height = (this.panel.offsetHeight || PANEL_MAX_PX) * fit;
         const maxTop = Math.max(8, window.innerHeight - height - 8);
         top = rect.bottom + 10;
         if (top > maxTop) {
@@ -3137,17 +3183,27 @@ ${NEON_CSS}
       else void this.restoreModernEqCurve();
     }
     /**
-     * The effects the helper is running, from what SLAB sent it: the picked
-     * mood's parameters with the slider's pitch. What the helper reports lags a
-     * mood change by a probe, and syncDspParams() corrects any real drift.
+     * The parameters the helper is running: what it has confirmed, by answering
+     * a POST or in its own status, so a POST that didn't land never shows as
+     * playing. Fields a helper doesn't report fall back to what SLAB sent;
+     * syncDspParams() gets the panel's values through when they drift.
      */
+    helperParams() {
+      const sent = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+      const got = dspStatus().params ?? {};
+      const pick = (key) => {
+        const value = got[key];
+        return typeof value === "number" && Number.isFinite(value) ? value : sent[key];
+      };
+      return { pitch: pick("pitch"), reverb: pick("reverb"), delayMix: pick("delayMix"), lowpass: pick("lowpass") };
+    }
     helperEffects() {
-      const sent = moodById(this.state.moodId).dsp;
+      const running2 = this.helperParams();
       return [
-        ...this.state.pitch !== 0 ? ["pitch"] : [],
-        ...sent.reverb > 0 ? ["reverb"] : [],
-        ...sent.delayMix > 0 ? ["delay"] : [],
-        ...sent.lowpass < 2e4 ? ["low-pass"] : []
+        ...Math.abs(running2.pitch) >= 1 ? ["pitch"] : [],
+        ...running2.reverb > 0 ? ["reverb"] : [],
+        ...running2.delayMix > 0 ? ["delay"] : [],
+        ...running2.lowpass < 2e4 ? ["low-pass"] : []
       ];
     }
     /**
@@ -3163,7 +3219,8 @@ ${NEON_CSS}
       const processing = !remote && status2.linked && status2.tapping === true && status2.audio === true && isPlaying();
       const eq = !remote && eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
       const helper = processing && this.helperEffects().length > 0;
-      return { remote, processing, shifting: processing && this.state.pitch !== 0, audible: isPlaying() && (eq || helper) };
+      const shifting = processing && Math.abs(this.helperParams().pitch) >= 1;
+      return { remote, processing, shifting, audible: isPlaying() && (eq || helper) };
     }
     /**
      * The sign and the chip are lit only while the mood can be heard. The pitch
@@ -3399,13 +3456,13 @@ ${NEON_CSS}
     press(button, action, repeat = false) {
       let downAt = 0;
       let holdTimer = null;
-      const release = () => {
+      const release2 = () => {
         if (holdTimer !== null) window.clearTimeout(holdTimer);
         holdTimer = null;
       };
       const hold = (event, delay) => {
         holdTimer = window.setTimeout(() => {
-          if (isOff(button)) return release();
+          if (isOff(button)) return release2();
           action(event);
           hold(event, 70);
         }, delay);
@@ -3416,11 +3473,11 @@ ${NEON_CSS}
         downAt = Date.now();
         action(event);
         if (repeat) {
-          release();
+          release2();
           hold(event, 420);
         }
       });
-      for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, release);
+      for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, release2);
       button.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
@@ -3435,7 +3492,7 @@ ${NEON_CSS}
         event.stopPropagation();
         if (event.detail === 0 && Date.now() - downAt > 400) action(event);
       });
-      this.releases.push(release);
+      this.releases.push(release2);
     }
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     firePad(pad, def) {
@@ -3523,7 +3580,7 @@ ${NEON_CSS}
       grid.bars.forEach((start, index) => {
         if (index % every !== 0) return;
         const x = Math.min(RULER_WIDTH - 0.5, Math.round(start / span * (RULER_WIDTH - 1)) + 0.5);
-        d += `M${x} ${index % (every * phrase) === 0 ? 1 : 7}V14`;
+        d += `M${x} ${index % phrase === 0 ? 1 : 7}V14`;
       });
       d += `M${RULER_WIDTH - 0.5} 1V14`;
       setAttr(this.rulerEl, "title", every > 1 ? `One tick for every ${every} bars on a track this long.` : "");
@@ -3691,12 +3748,16 @@ ${NEON_CSS}
     }
     return false;
   }
+  function release(claim) {
+    if (window.__slabClaim === claim) window.__slabClaim = void 0;
+  }
   async function boot2(claim) {
     const player = await waitFor(
       () => typeof Spicetify !== "undefined" && Spicetify.Player ? Spicetify.Player : null
     );
     if (!player) {
       console.warn(LOG, "player never appeared, giving up");
+      release(claim);
       return;
     }
     const eqApi = await waitFor(() => Spicetify.Platform.EqualizerAPI ?? null, 1e4);
@@ -3742,6 +3803,9 @@ ${NEON_CSS}
       running?.destroy?.();
     } catch {
     }
-    void boot2(claim).catch((error) => console.error(LOG, "boot failed", error));
+    void boot2(claim).catch((error) => {
+      release(claim);
+      console.error(LOG, "boot failed", error);
+    });
   }
 })();

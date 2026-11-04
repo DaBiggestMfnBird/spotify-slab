@@ -34,6 +34,8 @@ ${FONT_CSS}
   position: fixed;
   z-index: 2147483000;
   width: 400px;
+  /* A narrow window scales the whole car from its top-left corner (see position()). */
+  transform-origin: 0 0;
   max-height: min(680px, calc(100vh - 16px));
   box-sizing: border-box;
   overflow: hidden auto;

@@ -51,6 +51,8 @@ const EVERY_MAX = 16;
 const DEVICE_NAME_MAX = 56;
 /** The tallest the panel gets, and the least room above the playbar worth opening into. */
 const PANEL_MAX_PX = 680;
+/** The car's width. A window narrower than this, as when the client is zoomed right in, gets the whole car scaled to fit. */
+const PANEL_WIDTH_PX = 400;
 const MIN_ROOM_PX = 160;
 /** What short mode saves (sign 14, doors 3 x 8, sill 18); keep in step with the data-short rules in styles.ts. */
 const SHORT_SAVING_PX = 56;
@@ -878,12 +880,11 @@ export class Deck {
                         this.flashActivity("Already stopped");
                         return false;
                     }
-                    const linked = dspStatus().linked;
-                    if (linked) void dspTapeStop();
                     // 380 ms down + 70 ms hold in the helper; pause right after
-                    // the ramp bottoms out so the effect is not clipped. The pad
-                    // lights now, as the stop starts, not when it's over.
-                    void tapeStop(linked ? { fade: false, pauseDelayMs: 470 } : undefined);
+                    // the ramp bottoms out so the effect is not clipped. If the
+                    // helper can't ramp, the fader does the stop. The pad lights
+                    // now, as the stop starts, not when it's over.
+                    void tapeStop(dspStatus().linked ? { spinDown: dspTapeStop, spinDownMs: 470 } : {});
                     return true;
                 },
             },
@@ -935,7 +936,9 @@ export class Deck {
         if (this.panel.hidden) return;
         const target = event.target as Node | null;
         if (!target) return;
-        if (event.type === "click" && this.pressedInside) {
+        // A pointer click that began inside (a press slid off the panel) isn't outside. A keyboard
+        // click (detail 0) had no press, so a flag left by a press that never clicked can't swallow it.
+        if (event.type === "click" && event.detail > 0 && this.pressedInside) {
             this.pressedInside = false;
             return;
         }
@@ -1104,29 +1107,37 @@ export class Deck {
         const ceiling = Math.min(rect.top, bar && bar.height > 0 && bar.top > 0 ? bar.top : rect.top) - 8;
         const room = ceiling - 8;
 
+        // Scaled down whole, never cut: at a narrow width the right-hand pads,
+        // Stop and the close button would otherwise sit off the screen.
+        const fit = Math.min(1, Math.max(0.5, (window.innerWidth - 16) / PANEL_WIDTH_PX));
+        if (fit < 1) this.panel.style.setProperty("scale", String(Math.floor(fit * 1000) / 1000));
+        else this.panel.style.removeProperty("scale");
+        // Heights below are the panel's own, before the scale; the room is the window's.
+        const layoutRoom = room / fit;
+
         // A window with less room than the whole car gets the compact sign and
         // scrolls behind the pinned sill. The saving is added back before
         // comparing, so the choice can't flip-flop between the two layouts.
         const wasShort = this.panel.dataset.short === "true";
         const natural = this.panel.scrollHeight + (wasShort ? SHORT_SAVING_PX : 0);
-        const short = room < Math.min(PANEL_MAX_PX, natural);
+        const short = layoutRoom < Math.min(PANEL_MAX_PX, natural);
         if (short !== wasShort) {
             setData(this.panel, "short", String(short));
             this.renderSign();
         }
 
-        const width = this.panel.offsetWidth || 400;
+        const width = (this.panel.offsetWidth || PANEL_WIDTH_PX) * fit;
         const maxLeft = Math.max(8, window.innerWidth - width - 8);
         let left = Math.max(8, Math.min(maxLeft, rect.right - width));
         let top: number;
         if (room >= MIN_ROOM_PX) {
             // Above the playbar, never over it: after a tape stop the next move is Spotify's play button.
-            this.panel.style.maxHeight = `${Math.min(PANEL_MAX_PX, room)}px`;
-            top = ceiling - this.panel.offsetHeight;
+            this.panel.style.maxHeight = `${Math.min(PANEL_MAX_PX, layoutRoom)}px`;
+            top = ceiling - this.panel.offsetHeight * fit;
         } else {
             // No real room above: below the chip, then beside it, so it never covers the chip.
             this.panel.style.maxHeight = "";
-            const height = this.panel.offsetHeight || PANEL_MAX_PX;
+            const height = (this.panel.offsetHeight || PANEL_MAX_PX) * fit;
             const maxTop = Math.max(8, window.innerHeight - height - 8);
             top = rect.bottom + 10;
             if (top > maxTop) {
@@ -1430,17 +1441,28 @@ export class Deck {
     }
 
     /**
-     * The effects the helper is running, from what SLAB sent it: the picked
-     * mood's parameters with the slider's pitch. What the helper reports lags a
-     * mood change by a probe, and syncDspParams() corrects any real drift.
+     * The parameters the helper is running: what it has confirmed, by answering
+     * a POST or in its own status, so a POST that didn't land never shows as
+     * playing. Fields a helper doesn't report fall back to what SLAB sent;
+     * syncDspParams() gets the panel's values through when they drift.
      */
+    private helperParams(): { pitch: number; reverb: number; delayMix: number; lowpass: number } {
+        const sent = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+        const got = dspStatus().params ?? {};
+        const pick = (key: "pitch" | "reverb" | "delayMix" | "lowpass"): number => {
+            const value = got[key];
+            return typeof value === "number" && Number.isFinite(value) ? value : sent[key];
+        };
+        return { pitch: pick("pitch"), reverb: pick("reverb"), delayMix: pick("delayMix"), lowpass: pick("lowpass") };
+    }
+
     private helperEffects(): string[] {
-        const sent = moodById(this.state.moodId).dsp;
+        const running = this.helperParams();
         return [
-            ...(this.state.pitch !== 0 ? ["pitch"] : []),
-            ...(sent.reverb > 0 ? ["reverb"] : []),
-            ...(sent.delayMix > 0 ? ["delay"] : []),
-            ...(sent.lowpass < 20_000 ? ["low-pass"] : []),
+            ...(Math.abs(running.pitch) >= 1 ? ["pitch"] : []),
+            ...(running.reverb > 0 ? ["reverb"] : []),
+            ...(running.delayMix > 0 ? ["delay"] : []),
+            ...(running.lowpass < 20_000 ? ["low-pass"] : []),
         ];
     }
 
@@ -1459,7 +1481,8 @@ export class Deck {
         const eq = !remote && eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
         const helper = processing && this.helperEffects().length > 0;
         // Paused, nothing is heard, whatever the EQ is set to.
-        return { remote, processing, shifting: processing && this.state.pitch !== 0, audible: isPlaying() && (eq || helper) };
+        const shifting = processing && Math.abs(this.helperParams().pitch) >= 1;
+        return { remote, processing, shifting, audible: isPlaying() && (eq || helper) };
     }
 
     /**
@@ -1874,7 +1897,7 @@ export class Deck {
         grid.bars.forEach((start, index) => {
             if (index % every !== 0) return;
             const x = Math.min(RULER_WIDTH - 0.5, Math.round((start / span) * (RULER_WIDTH - 1)) + 0.5);
-            d += `M${x} ${index % (every * phrase) === 0 ? 1 : 7}V14`;
+            d += `M${x} ${index % phrase === 0 ? 1 : 7}V14`;
         });
         d += `M${RULER_WIDTH - 0.5} 1V14`;
         setAttr(this.rulerEl, "title", every > 1 ? `One tick for every ${every} bars on a track this long.` : "");

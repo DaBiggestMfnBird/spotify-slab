@@ -38,12 +38,18 @@ function isNewer(a: string, b: string): boolean {
     return false;
 }
 
+/** A copy that gives up hands the claim back, so a later copy of the same version can still load. */
+function release(claim: BootClaim): void {
+    if (window.__slabClaim === claim) window.__slabClaim = undefined;
+}
+
 async function boot(claim: BootClaim): Promise<void> {
     const player = await waitFor(() =>
         typeof Spicetify !== "undefined" && Spicetify.Player ? Spicetify.Player : null,
     );
     if (!player) {
         console.warn(LOG, "player never appeared, giving up");
+        release(claim);
         return;
     }
 
@@ -106,5 +112,8 @@ if (rival && !isNewer(VERSION, rival)) {
     } catch {
         /* ignore */
     }
-    void boot(claim).catch((error) => console.error(LOG, "boot failed", error));
+    void boot(claim).catch((error) => {
+        release(claim);
+        console.error(LOG, "boot failed", error);
+    });
 }

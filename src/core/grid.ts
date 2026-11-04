@@ -32,7 +32,11 @@ export async function loadGrid(uri?: string): Promise<Grid | null> {
     if (!target.startsWith("spotify:track:")) return null;
 
     const cached = cache.get(target);
-    if (cached) return cached;
+    if (cached) {
+        // A replayed track is recent again, so it isn't the next one pushed out.
+        remember(target, cached);
+        return cached;
+    }
 
     const running = inflight.get(target);
     if (running) return running;

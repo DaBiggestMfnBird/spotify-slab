@@ -23,9 +23,14 @@ self.onmessage = (event) => {
 };
 `;
 
-let fallback: number | null = null;
-/** When the worker last ticked; a worker that never does (blocked by policy) hands over to the main thread. */
+/** Where the ticks come from: a worker, or (when one can't run) a main-thread timer. */
+let mode: "worker" | "main" | null = null;
+let mainTimer: number | null = null;
+let watchdog: number | null = null;
+/** When the worker last ticked. */
 let lastTick = 0;
+/** A worker silent this long while something listens has died; the main thread takes over. */
+const WORKER_SILENT_MS = 3_000;
 
 function tickAll(now: number): void {
     for (const tick of subscribers) {
@@ -37,9 +42,23 @@ function tickAll(now: number): void {
     }
 }
 
-/** No worker (a locked-down client): a main-thread timer is slower when hidden, but it ticks. */
+function startMainTimer(): void {
+    if (mainTimer === null) mainTimer = window.setInterval(() => tickAll(Date.now()), 40);
+}
+
+function stopTimers(): void {
+    if (mainTimer !== null) window.clearInterval(mainTimer);
+    if (watchdog !== null) window.clearInterval(watchdog);
+    mainTimer = null;
+    watchdog = null;
+}
+
+/** No worker (a locked-down client), or one that stopped ticking: a main-thread timer is slower when hidden, but it ticks. */
 function useMainThread(): void {
-    if (fallback !== null) return;
+    if (mode === "main") return;
+    mode = "main";
+    if (watchdog !== null) window.clearInterval(watchdog);
+    watchdog = null;
     if (worker) {
         worker.terminate();
         worker = null;
@@ -48,24 +67,28 @@ function useMainThread(): void {
         URL.revokeObjectURL(objectUrl);
         objectUrl = null;
     }
-    fallback = window.setInterval(() => {
-        if (subscribers.size) tickAll(Date.now());
-    }, 40);
+    if (subscribers.size) startMainTimer();
 }
 
-/** A worker that starts but never ticks is as good as none: a stop would never pause and a loop never jump. */
-function watch(): void {
+/**
+ * For as long as anything listens, not just at the start: a worker that ticks
+ * and then goes quiet would otherwise leave a loop latched and auto chop dead
+ * while the record plays on.
+ */
+function watchWorker(): void {
+    if (watchdog !== null) return;
     const armedAt = Date.now();
-    window.setTimeout(() => {
-        if (worker && subscribers.size && lastTick < armedAt) useMainThread();
+    watchdog = window.setInterval(() => {
+        if (mode === "worker" && subscribers.size && Date.now() - Math.max(lastTick, armedAt) > WORKER_SILENT_MS) useMainThread();
     }, 1_000);
 }
 
 function boot(): void {
-    if (worker || fallback !== null) return;
+    if (mode) return;
     try {
         objectUrl = URL.createObjectURL(new Blob([SOURCE], { type: "text/javascript" }));
         worker = new Worker(objectUrl);
+        mode = "worker";
         worker.onmessage = (event) => {
             lastTick = Date.now();
             tickAll(typeof event.data === "number" ? event.data : Date.now());
@@ -80,20 +103,26 @@ export function subscribe(tick: Tick): () => void {
     boot();
     const wasIdle = subscribers.size === 0;
     subscribers.add(tick);
-    if (wasIdle && worker) {
-        worker.postMessage("start");
-        watch();
+    if (wasIdle) {
+        if (mode === "worker" && worker) {
+            worker.postMessage("start");
+            watchWorker();
+        } else {
+            startMainTimer();
+        }
     }
     return () => {
-        subscribers.delete(tick);
-        if (subscribers.size === 0 && worker) worker.postMessage("stop");
+        if (!subscribers.delete(tick) || subscribers.size > 0) return;
+        // Nothing is listening: no timer runs on either thread until something does.
+        stopTimers();
+        if (worker) worker.postMessage("stop");
     };
 }
 
 export function disposeClock(): void {
     subscribers.clear();
-    if (fallback !== null) window.clearInterval(fallback);
-    fallback = null;
+    stopTimers();
+    mode = null;
     lastTick = 0;
     if (worker) {
         worker.postMessage("stop");

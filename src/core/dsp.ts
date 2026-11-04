@@ -44,6 +44,10 @@ export interface DspStatus {
 let status: DspStatus = { checked: false, linked: false };
 let lastProbe = 0;
 let misses = 0;
+/** Each probe's number: when probes overlap, only the newest one's answer is published. */
+let probeSeq = 0;
+/** Bumped by every accepted POST, so a probe that started before it can't put older params back. */
+let paramsSeq = 0;
 const listeners = new Set<(status: DspStatus) => void>();
 
 /** Linked: every 4 s. Absent: the same for the first few tries, then every 30 s. */
@@ -101,6 +105,8 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
     const every = status.linked || eager || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
     if (!force && now - lastProbe < every) return status;
     lastProbe = now;
+    const seq = ++probeSeq;
+    const paramsAtStart = paramsSeq;
 
     const payload = (await request("/status")) as
         | {
@@ -114,6 +120,8 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
           }
         | null;
 
+    // A newer probe started while this one was out; its answer is the one that counts.
+    if (seq !== probeSeq) return status;
     if (payload?.ok) {
         misses = 0;
         publish({
@@ -125,7 +133,8 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
             version: payload.version,
             sampleRate: payload.sampleRate,
             latencyMs: payload.latencyMs,
-            params: payload.params,
+            // Params the helper accepted after this probe went out are newer than what it reported.
+            params: paramsSeq === paramsAtStart ? payload.params : status.params,
         });
     } else {
         misses += 1;
@@ -165,7 +174,10 @@ async function drain(): Promise<void> {
             });
             if (payload) {
                 misses = 0;
-                publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body } });
+                paramsSeq += 1;
+                // The helper answers with what it applied; an older one that doesn't is taken at its word.
+                const applied = (payload as { params?: Partial<DspParams> }).params;
+                publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body, ...applied } });
             } else {
                 // One slow or dropped POST isn't a dead helper: don't disable the slider
                 // mid-drag on it. Ask /status straight away and let that decide.
@@ -179,12 +191,18 @@ async function drain(): Promise<void> {
 }
 
 /** Real tape-stop: the helper ramps its time-stretcher down and back up. */
+/** True only when the helper ramped the audio; it answers 503 when it has nothing tapped. */
 export async function dspTapeStop(): Promise<boolean> {
-    const payload = await request("/tapstop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 }),
-    });
+    const payload = await request(
+        "/tapstop",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 }),
+        },
+        // On loopback the answer is near-instant; don't hold the stop up waiting on a stuck helper.
+        300,
+    );
     return Boolean(payload);
 }
 
