@@ -1,7 +1,7 @@
 [
   {
     "name": "SLAB",
-    "description": "Third Coast playback moods: six EQ curves, beat-synced chop pads, a real tape stop and an honest speed readout. On macOS, the free SLAB helper adds true pitch, reverb and delay.",
+    "description": "Third Coast playback moods: six EQ curves from Screwed to Sped Up, chop and loop pads that cut on the bar line, auto chop on the phrase, a real tape stop, and a panel that only lights up when the mood can be heard. On macOS, the free SLAB helper adds true pitch, reverb and delay.",
     "preview": "preview.png",
     "main": "dist/slab.js",
     "readme": "README.md",
