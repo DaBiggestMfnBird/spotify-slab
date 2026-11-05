@@ -16,6 +16,8 @@ import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } fro
 import {
     barCount,
     barIndexAt,
+    barLengthMs,
+    barStartMs,
     beatIndexAt,
     gridFor,
     loadGrid,
@@ -25,6 +27,8 @@ import { MOODS, curvePath, moodById } from "../core/moods";
 import { clampPitch, saveState } from "../core/state";
 import type { Grid, SlabState } from "../types";
 import {
+    BIG_WHEEL,
+    BIG_WHEEL_BOX,
     CHIP_ICON,
     CLOSE_ICON,
     POKE_X,
@@ -37,11 +41,12 @@ import {
     WHEEL_SIZE,
     WHEEL_SPOKES,
     WHEEL_STATIC,
+    bigWheelRingPath,
 } from "./art";
 import { NUMBER_HEIGHT, NUMBER_WIDTH, SIGN_HEIGHT, SIGN_WIDTH, numberLayout, signLayout } from "./neon";
 import { CSS, STYLE_ID } from "./styles";
 import { Tube } from "./tube";
-import { EMBLEM } from "./badge";
+import { NAMEPLATE_HEIGHT, NAMEPLATE_WIDTH, nameplateTubePath } from "./badge";
 
 type Props = Record<string, unknown>;
 
@@ -68,6 +73,7 @@ const SPIN_MS = 1600;
 /** Keep in step with the transition in styles.ts. */
 const ROLL_MS = 640;
 const TAGLINE = "Slow, loud and bangin’";
+const CHIP_TITLE = "SLAB, Third Coast playback moods";
 
 /** Pixels per cent. The track is laid out so 100 cents is exactly 12 px. */
 const PX_PER_CENT = 12 / 100;
@@ -164,6 +170,37 @@ function isPlaying(): boolean {
     } catch {
         return false;
     }
+}
+
+/**
+ * Holds a looping animation (one iteration = 1000 ms of its own time) on a
+ * phase of a period: a small error is closed by riding its speed up to 6%, a
+ * big one, or a stopped animation, is set straight.
+ */
+function steer(animation: Animation, phase: number, periodMs: number, settling = false): boolean {
+    const rate = 1000 / periodMs;
+    const want = ((phase % 1) + 1) % 1;
+    // The page's animation clock only moves between frames; after a busy stretch
+    // it still reads the last frame's time while the compositor has moved on.
+    const timeline = Number(document.timeline?.currentTime ?? performance.now());
+    const since = Math.max(0, performance.now() - timeline);
+    const time = Number(animation.currentTime ?? 0) + (animation.playState === "running" ? since * animation.playbackRate : 0);
+    let error = want - (((time % 1000) + 1000) % 1000) / 1000;
+    error -= Math.round(error);
+    // Just after it starts, the first positions Spotify hands over can be a
+    // quarter of a second stale, so it may set itself straight once more.
+    const snapAt = settling ? 0.012 : 0.12;
+    if (animation.playState !== "running" || Math.abs(error) > snapAt) {
+        const started = animation.playState !== "running";
+        animation.currentTime = want * 1000 - (started ? 0 : since * rate);
+        animation.playbackRate = rate;
+        animation.play();
+        return started;
+    }
+    const ride = rate * (1 + Math.max(-0.06, Math.min(0.06, error * 1.6)));
+    if (typeof animation.updatePlaybackRate === "function") animation.updatePlaybackRate(ride);
+    else animation.playbackRate = ride;
+    return false;
 }
 
 function progressMs(): number {
@@ -276,6 +313,12 @@ export class Deck {
 
     private tagEl: HTMLSpanElement;
     private signTube: Tube;
+    /** The nameplate, bent in neon. */
+    private logoTube: Tube;
+    /** The big wheel on the board behind the slider, and the neon ring round it. */
+    private bigWheelEl: HTMLDivElement;
+    private bigTurnEl: HTMLDivElement;
+    private ringTube: Tube;
     private signEl: HTMLDivElement;
     private subEl: HTMLParagraphElement;
     private deadEl: HTMLParagraphElement;
@@ -359,6 +402,14 @@ export class Deck {
     private renderedCents: number | null = null;
     /** Spokes and knock-off spin as one; two animations on one clock. */
     private spinAnimations: Animation[] = [];
+    /** The big wheel's turn and its ring's beat kick, run by the compositor and steered from the beat clock. */
+    private wheelTurn: Animation | null = null;
+    private ringKick: Animation | null = null;
+    /** A smooth playhead for the wheel: Spotify's position reaches the page in steps and with jitter. */
+    private wheelClock: { pos: number; at: number; raw: number } | null = null;
+    private lastWheelSteer = 0;
+    /** When the wheel last started turning; for a moment after, it may still set itself straight. */
+    private wheelStartedAt = 0;
     private strikeAnimation: Animation | null = null;
     private spinning = false;
     private modernEq = false;
@@ -388,6 +439,12 @@ export class Deck {
 
         this.tagEl = h("span", { class: "slab-tag" }, TAGLINE);
         this.signTube = new Tube("slab-sign-tube", SIGN_WIDTH, SIGN_HEIGHT);
+        this.logoTube = new Tube("slab-logo-tube", NAMEPLATE_WIDTH, NAMEPLATE_HEIGHT);
+        this.logoTube.set({ lit: nameplateTubePath(), dark: "", boots: "", supports: "" });
+        this.ringTube = new Tube("slab-ring-tube", BIG_WHEEL_BOX, BIG_WHEEL_BOX);
+        this.ringTube.set({ lit: bigWheelRingPath(), dark: "", boots: "", supports: "" });
+        this.bigTurnEl = h("div", { class: "slab-bigwheel-turnwrap", html: BIG_WHEEL.turn });
+        this.bigWheelEl = h("div", { class: "slab-bigwheel", "aria-hidden": "true", html: BIG_WHEEL.base }, this.bigTurnEl, this.ringTube.node);
         this.signEl = h("div", { class: "slab-sign", role: "img" }, this.signTube.node);
         this.subEl = h("p", { class: "slab-sub" });
         // Where it's playing, then what that means, each on its own line, so the second is never the one cut.
@@ -677,7 +734,7 @@ export class Deck {
             type: "button",
             "aria-label": "SLAB playback moods",
             "aria-expanded": "false",
-            title: "SLAB, Third Coast playback moods",
+            title: CHIP_TITLE,
             onclick: (event: MouseEvent) => {
                 event.stopPropagation();
                 // A keyboard press arrives as a click with no pointer detail.
@@ -783,7 +840,7 @@ export class Deck {
             onclick: () => this.close(),
         });
 
-        const head = h("div", { class: "slab-head" }, h("span", { html: EMBLEM, class: "slab-badge" }), this.tagEl, close);
+        const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, close);
 
         const scale = h(
             "div",
@@ -807,7 +864,7 @@ export class Deck {
             h("div", { class: "slab-nudges" }, this.nudgeDown, this.nudgeUp),
         );
 
-        const bay = h("div", { class: "slab-bay" }, stage, pitchHead, this.railEl, scale);
+        const bay = h("div", { class: "slab-bay" }, this.bigWheelEl, stage, pitchHead, this.railEl, scale);
         const trim = h("div", { class: "slab-trim" }, bay);
 
         const moodGrid = h("div", {
@@ -1073,6 +1130,8 @@ export class Deck {
         this.state.open = true;
         saveState(this.state);
         this.chip.setAttribute("aria-expanded", "true");
+        // The chip's tooltip explains a closed panel; over an open one it only covers the readout.
+        this.chip.removeAttribute("title");
         this.position();
         this.renderMoodState();
         this.refresh();
@@ -1092,6 +1151,7 @@ export class Deck {
         this.state.open = false;
         saveState(this.state);
         this.chip.setAttribute("aria-expanded", "false");
+        this.chip.setAttribute("title", CHIP_TITLE);
         this.updateSpin();
     }
 
@@ -1148,7 +1208,80 @@ export class Deck {
         }
         this.panel.style.left = `${Math.round(left)}px`;
         this.panel.style.top = `${Math.round(Math.max(8, top))}px`;
+        this.placeBigWheel();
         this.renderScrollCue();
+    }
+
+    /** The big wheel's hub sits on Normal, the middle of the slider, wherever the layout puts it. */
+    private placeBigWheel(): void {
+        const rail = this.railEl;
+        if (!rail.offsetParent) return;
+        const x = rail.offsetLeft + railX(0);
+        const y = rail.offsetTop + rail.offsetHeight / 2;
+        this.bigWheelEl.style.left = `${Math.round(x - BIG_WHEEL_BOX / 2)}px`;
+        this.bigWheelEl.style.top = `${Math.round(y - BIG_WHEEL_BOX / 2)}px`;
+    }
+
+    /**
+     * The big wheel turns once a bar and its ring kicks on every beat. Both run
+     * as compositor animations, so a busy page can't make them stutter, and the
+     * beat clock only steers them: it reads the playhead, works out where the
+     * wheel should be, and nudges its speed a few percent to close any gap, the
+     * way a DJ rides a turntable's pitch to hold a mix. Only a real jump (a seek,
+     * a new track) snaps it. Chops and loops jump whole bars, so the phase they
+     * land on is the phase the wheel already has.
+     */
+    private turnBigWheel(grid: Grid, raw: number): void {
+        if (reducedMotion()) {
+            this.stopBigWheel();
+            return;
+        }
+        const t = performance.now();
+        // Follow the playhead through its steps and jitter; a jump of more than a
+        // third of a second is the record actually moving.
+        const clock = this.wheelClock;
+        if (!clock || Math.abs(raw - (clock.pos + (t - clock.at))) > 320) {
+            this.wheelClock = { pos: raw, at: t, raw };
+        } else if (raw !== clock.raw) {
+            const predicted = clock.pos + (t - clock.at);
+            this.wheelClock = { pos: predicted + (raw - predicted) * 0.2, at: t, raw };
+        }
+        const steering = this.wheelTurn?.playState === "running" && this.ringKick?.playState === "running";
+        if (steering && t - this.lastWheelSteer < 180) return;
+        this.lastWheelSteer = t;
+
+        const pos = (this.wheelClock as { pos: number; at: number }).pos + (t - (this.wheelClock as { at: number }).at);
+        const bar = barIndexAt(grid, pos);
+        if (bar < 0) return;
+        const barLength = barLengthMs(grid, bar);
+        if (!(barLength > 0)) return;
+        this.wheelTurn ??= this.bigTurnEl.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
+            duration: 1000,
+            iterations: Infinity,
+            easing: "linear",
+        });
+        this.ringKick ??= this.ringTube.gas.animate(
+            [
+                { opacity: 0.9, easing: "cubic-bezier(0.15, 0.7, 0.3, 1)" },
+                { opacity: 0.28, offset: 0.8 },
+                { opacity: 0.28 },
+            ],
+            { duration: 1000, iterations: Infinity },
+        );
+        const settling = t - this.wheelStartedAt < 1200;
+        if (steer(this.wheelTurn, (pos - barStartMs(grid, bar)) / barLength, barLength, settling)) this.wheelStartedAt = t;
+        const beat = beatIndexAt(grid, pos);
+        const beatStart = grid.beats[beat];
+        if (beatStart === undefined) return;
+        const beatLength = (grid.beats[beat + 1] ?? beatStart + barLength / Math.max(1, grid.timeSignature || 4)) - beatStart;
+        if (beatLength > 0) steer(this.ringKick, (pos - beatStart) / beatLength, beatLength, settling);
+    }
+
+    /** Paused, closed or no beat: the wheel stops where it is, and picks the beat up again on play. */
+    private stopBigWheel(): void {
+        this.wheelTurn?.pause();
+        this.ringKick?.pause();
+        this.wheelClock = null;
     }
 
     /** Only when a short window has hidden part of the panel. Writes only on change. */
@@ -1691,6 +1824,8 @@ export class Deck {
             (!this.deadEl.hidden && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5);
         setData(this.panel, "compact", compact ? "true" : "false");
         this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
+        // A compact sign moves the slider up, and the wheel's hub with it.
+        this.placeBigWheel();
     }
 
     private toggleAuto(): void {
@@ -1939,6 +2074,7 @@ export class Deck {
         // Cheap and write-on-change, so nothing lit can outlive what is heard by more than a tick.
         this.renderLit();
         this.updateSpin();
+        if (!playingNow || this.panel.hidden) this.stopBigWheel();
 
         if (this.panel.hidden) return;
 
@@ -2004,6 +2140,7 @@ export class Deck {
         this.renderLamps(beatInBar);
         setAttr(this.lampsEl, "aria-label", `Beat ${beatInBar + 1} of ${beatsPerBar}`);
 
+        this.turnBigWheel(grid, progress);
         this.buildRuler(grid);
         if (bar !== this.rulerBar) {
             this.rulerBar = bar;
@@ -2021,9 +2158,15 @@ export class Deck {
      */
     private tickBeat(): void {
         this.lampFrame = null;
-        if (this.disposed || this.panel.hidden || !isPlaying()) return;
+        if (this.disposed || this.panel.hidden || !isPlaying()) {
+            this.stopBigWheel();
+            return;
+        }
         const grid = gridFor();
-        if (!grid) return;
+        if (!grid) {
+            this.stopBigWheel();
+            return;
+        }
         this.renderBeat(grid);
         this.renderEvery();
         this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
