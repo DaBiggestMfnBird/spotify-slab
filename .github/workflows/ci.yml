@@ -1,0 +1,35 @@
+name: CI
+
+# The helper only builds on macOS (Core Audio process taps, AVFoundation), so it
+# gets a Mac runner; the extension is checked on Linux. The committed bundle in
+# dist/ must be exactly what the sources build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  helper:
+    name: Helper (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Build
+        run: swift build -c release --package-path dsp
+      - name: Test
+        run: swift test --package-path dsp
+
+  extension:
+    name: Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - name: dist/slab.js matches the sources
+        run: git diff --exit-code -- dist/slab.js
