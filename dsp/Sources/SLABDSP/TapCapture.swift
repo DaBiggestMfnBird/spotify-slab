@@ -1,4 +1,5 @@
 import Foundation
+import SLABCore
 import CoreAudio
 import AVFoundation
 
@@ -41,12 +42,12 @@ final class TapCapture {
     private(set) var ioCallbacks = 0
 
     private var ioProcID: AudioDeviceIOProcID?
-    private let ring: StereoRing
+    private let ring: Deck
     private let lock = NSLock()
     private var scratchL: [Float] = []
     private var scratchR: [Float] = []
 
-    init(ring: StereoRing) {
+    init(ring: Deck) {
         self.ring = ring
     }
 

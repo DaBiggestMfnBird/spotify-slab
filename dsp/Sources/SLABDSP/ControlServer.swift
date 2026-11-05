@@ -200,6 +200,7 @@ final class ControlServer {
         case 400: return "Bad Request"
         case 403: return "Forbidden"
         case 404: return "Not Found"
+        case 409: return "Conflict"
         case 503: return "Service Unavailable"
         default: return "OK"
         }
@@ -226,9 +227,19 @@ final class ControlServer {
         case .failed(let reason): payload["error"] = reason
         case .waitingForProcess: break
         }
+        // What this helper can do beyond 0.3.0: SLAB only sends /jump to a helper that says so.
+        payload["features"] = ["jump"]
         if let graph {
             payload["latencyMs"] = (graph.latencyMs * 10).rounded() / 10
             payload["droppedFrames"] = graph.droppedFrames
+            payload["detached"] = graph.deck.isDetached
+            if let gap = graph.deck.seekGapMs { payload["seekGapMs"] = (gap * 10).rounded() / 10 }
+            // How chops have gone: jumped, found Spotify again, or gave up waiting and went live.
+            payload["chops"] = [
+                "jumps": graph.deck.jumps,
+                "realigned": graph.deck.realignments,
+                "wentLive": graph.deck.fallbacks,
+            ]
         }
         if let sampleRate = supervisor.sampleRate { payload["sampleRate"] = sampleRate }
         if let capture = supervisor.capture { payload["callbacks"] = capture.ioCallbacks }
@@ -276,6 +287,31 @@ final class ControlServer {
             let up = (object["upMs"] as? NSNumber)?.intValue ?? 260
             graph.tapeStop(downMs: down, holdMs: hold, upMs: up)
             return (200, ["ok": true])
+
+        case ("POST", "/jump"):
+            // A chop, done here so it is instant: the output jumps back in memory now, and SLAB
+            // seeks Spotify behind it. Times in ms; seekAheadMs is how far past the jump target
+            // SLAB is about to seek Spotify, availableMs how much song SLAB knows is behind it.
+            guard let graph = supervisor.graph, let rate = supervisor.sampleRate else {
+                return (503, ["ok": false, "error": "not tapping"])
+            }
+            guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+                  let back = (object["backMs"] as? NSNumber)?.doubleValue else {
+                return (400, ["ok": false, "error": "bad json"])
+            }
+            let frames = { (ms: Double) in Int((ms * rate / 1000).rounded()) }
+            let delay = (object["inMs"] as? NSNumber)?.doubleValue ?? 0
+            let ahead = (object["seekAheadMs"] as? NSNumber)?.doubleValue ?? 0
+            let available = (object["availableMs"] as? NSNumber)?.doubleValue ?? back
+            do {
+                try graph.deck.scheduleJump(
+                    backFrames: frames(back), inFrames: frames(delay),
+                    seekAheadFrames: frames(ahead), availableFrames: frames(available)
+                )
+                return (200, ["ok": true])
+            } catch {
+                return (409, ["ok": false, "error": "\(error)"])
+            }
 
         case ("POST", "/quit"):
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [onQuit] in
