@@ -255,6 +255,50 @@ final class DeckTests: XCTestCase {
         XCTAssertNil(rig.seam(from: index + fade, playing: target + fade), "a seam after the chop")
     }
 
+    func testABackspinRunsBackThenLandsOnTheBeat() throws {
+        let rig = Rig()
+        rig.run(rig.ms(4_000))
+        let bar = rig.ms(1_667)
+        let turn = rig.ms(400)
+        let start = rig.deck.head
+        let index = rig.heard.count
+        // A bar back, less the spin: the record lands where it would have been a bar ago.
+        try rig.deck.scheduleSpin(backFrames: bar - turn, spinFrames: turn, seekAheadFrames: rig.ms(250), availableFrames: rig.ms(4_000))
+        rig.run(turn / 2)
+        let midway = try XCTUnwrap(rig.deck.spinPosition, "still turning")
+        XCTAssertLessThan(midway, Double(start) - Double(turn) * 0.5, "half way through it has run well back")
+        // It sounds: the record is being dragged, not stopped.
+        let spun = rig.heard[(index + turn / 4)..<(index + turn / 2)]
+        XCTAssertGreaterThan(spun.map { $0 * $0 }.reduce(0, +) / Float(spun.count), 0.01)
+        rig.run(turn - turn / 2 + rig.ms(200))
+        XCTAssertNil(rig.deck.spinPosition)
+        // Landed: from the end of the spin on, the song from a bar back, exactly.
+        let fade = rig.deck.fadeFrames
+        XCTAssertNil(rig.seam(from: index + turn + fade, playing: start + turn - bar + fade))
+        XCTAssertTrue(rig.deck.isDetached, "waiting for Spotify, as after a chop")
+        XCTAssertEqual(rig.deck.jumps, 1)
+    }
+
+    func testABackspinThenSpotifyRealignsLikeAChop() throws {
+        let rig = Rig()
+        rig.run(rig.ms(4_000))
+        let bar = rig.ms(1_667)
+        let turn = rig.ms(400)
+        let ahead = rig.ms(250)
+        let start = rig.deck.head
+        let index = rig.heard.count
+        try rig.deck.scheduleSpin(backFrames: bar - turn, spinFrames: turn, seekAheadFrames: ahead, availableFrames: rig.ms(4_000))
+        rig.run(turn)
+        // SLAB sends Spotify past where it landed as the spin ends.
+        let landed = start + turn - bar
+        rig.seek(to: landed + ahead, lateMs: 20, gapMs: 200)
+        rig.run(rig.ms(1_500), realigning: true)
+        XCTAssertFalse(rig.deck.isDetached)
+        XCTAssertEqual(rig.deck.fallbacks, 0)
+        let fade = rig.deck.fadeFrames
+        XCTAssertNil(rig.seam(from: index + turn + fade, playing: landed + fade), "a seam after the landing")
+    }
+
     func testChopsAgainBeforeSpotifyIsBack() throws {
         let rig = Rig()
         rig.run(rig.ms(6_000))

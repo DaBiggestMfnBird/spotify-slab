@@ -9,11 +9,13 @@ import {
     needlePosition,
     onChop,
     resetForTrack,
+    runLineBack,
     setAuto,
+    spinBack,
     tapeStop,
     watchNeedle,
 } from "../core/chops";
-import { dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
+import { canHold, dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
 import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } from "../core/eq";
 import {
     barCount,
@@ -21,12 +23,16 @@ import {
     barLengthMs,
     barStartMs,
     beatIndexAt,
+    beatLengthMs,
     gridFor,
     loadGrid,
 } from "../core/grid";
+import { type HoldName, onHoldChange, press as pressHold, release as releaseHold, releaseAll } from "../core/holds";
+import { type Artist, currentArtist, forget, keep, keptFor } from "../core/keep";
+import { loadLines } from "../core/lyrics";
 import { modernEqBands, modernEqPresent } from "../core/moderneq";
-import { MOODS, curvePath, moodById } from "../core/moods";
-import { clampPitch, saveState } from "../core/state";
+import { MINE_ID, MOODS, curvePath, mineMood, moodById, setMine } from "../core/moods";
+import { SCREW_MAX, SCREW_MIN, clampPitch, saveState } from "../core/state";
 import type { Grid, SlabState } from "../types";
 import {
     BIG_WHEEL,
@@ -267,14 +273,51 @@ function isOff(button: HTMLButtonElement): boolean {
  */
 function pinstripe(id: string): string {
     const fade = `slab-stripe-${id}`;
-    return `<svg class="slab-stripe" viewBox="0 0 188 42" width="188" height="42" aria-hidden="true" focusable="false">
+    return `<svg class="slab-stripe" viewBox="0 0 188 ${DOOR_HEIGHT}" width="188" height="${DOOR_HEIGHT}" aria-hidden="true" focusable="false">
   <defs><linearGradient id="${fade}" gradientUnits="userSpaceOnUse" x1="120" y1="0" x2="78" y2="0">
     <stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/>
   </linearGradient></defs>
-  <path d="M120 4.5H11Q4.5 4.5 4.5 11V29" fill="none" stroke="url(#${fade})" stroke-width="1"/>
-  <path d="M108 6.5H11.5Q6.5 6.5 6.5 11.5V25.5" fill="none" stroke="url(#${fade})" stroke-width=".5"/>
-  <path d="M4.5 28.5L6.1 32.2L4.5 37L2.9 32.2Z" fill="currentColor"/>
+  <path d="M120 4.5H11Q4.5 4.5 4.5 11V24" fill="none" stroke="url(#${fade})" stroke-width="1"/>
+  <path d="M108 6.5H11.5Q6.5 6.5 6.5 11.5V21" fill="none" stroke="url(#${fade})" stroke-width=".5"/>
+  <path d="M4.5 23.5L6.1 27.2L4.5 32L2.9 27.2Z" fill="currentColor"/>
 </svg>`;
+}
+
+/**
+ * The Keep door's lock: a chrome knob in the sill, the kind an old Cadillac door has. Up, the
+ * door is open to any mood; pushed down, this artist's mood is locked in.
+ */
+const LOCK_KNOB = `<svg viewBox="0 0 22 30" width="22" height="30" focusable="false">
+  <defs>
+    <linearGradient id="slab-lock-chrome" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#5E5956"/><stop offset=".34" stop-color="#F6F2EE"/>
+      <stop offset=".62" stop-color="#B7B1AC"/><stop offset="1" stop-color="#4B4643"/>
+    </linearGradient>
+    <clipPath id="slab-lock-hole"><rect x="0" y="0" width="22" height="25"/></clipPath>
+  </defs>
+  <ellipse cx="11" cy="25" rx="7.2" ry="2.4" fill="#120104"/>
+  <g clip-path="url(#slab-lock-hole)"><g class="slab-lock-pin">
+    <rect x="7.2" y="5" width="7.6" height="24" rx="3.8" fill="url(#slab-lock-chrome)" stroke="rgba(0,0,0,.5)" stroke-width=".6"/>
+    <path d="M9 7.6Q11 6.4 13 7.6" fill="none" stroke="#FFFFFF" stroke-opacity=".7" stroke-width=".8" stroke-linecap="round"/>
+  </g></g>
+  <path d="M3.4 25a7.6 2.6 0 0 0 15.2 0" fill="none" stroke="url(#slab-lock-chrome)" stroke-width="1.7"/>
+</svg>`;
+
+/** Each door's height: four rows of them now, Mine and Keep on the last. */
+const DOOR_HEIGHT = 36;
+/** The sparkline's drawing box on a door. */
+const CURVE_WIDTH = 58;
+const CURVE_HEIGHT = 28;
+
+/** Hold Mine this long to keep what you hear over what's in it. */
+const MINE_HOLD_MS = 650;
+
+/** The little curve on a door: the actual EQ the mood applies. */
+function doorCurve(gains: number[]): string {
+    return `<svg class="slab-mood-curve" viewBox="0 0 ${CURVE_WIDTH} ${CURVE_HEIGHT}" width="${CURVE_WIDTH}" height="${CURVE_HEIGHT}" aria-hidden="true" focusable="false">
+          <path class="slab-mood-zero" d="M0 ${CURVE_HEIGHT / 2}H${CURVE_WIDTH}"/>
+          <path class="slab-mood-line" d="${curvePath(gains, CURVE_WIDTH, CURVE_HEIGHT)}"/>
+        </svg>`;
 }
 
 /**
@@ -291,15 +334,27 @@ interface SpeedInfo {
     hint: string;
 }
 
+type Bank = "chop" | "screw";
+
 interface PadDef {
     id: string;
     label: string;
     sub: string;
+    /** The number key that plays it, and the bank it sits in. */
+    key: string;
+    bank: Bank;
     /** Resolves false when the edit couldn't happen; the pad then stays dark. */
     run: () => boolean | Promise<boolean>;
     /** Said when `run` comes back false. */
     miss?: string;
+    /** A held pad: `run` puts it down, this lets it up. */
+    release?: () => void;
+    /** It needs the helper, and does nothing without it. */
+    needsHelper?: boolean;
 }
+
+/** Said when a pad that needs the helper is pressed without one. */
+const NEEDS_HELPER = "That pad needs SLAB DSP running on this Mac.";
 
 /** Said once, under the readout, whenever a track has no beat grid. */
 const NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
@@ -365,6 +420,20 @@ export class Deck {
     private padTimers = new Map<HTMLButtonElement, number>();
     private loopSub: HTMLElement | null = null;
     private padDefs = new Map<HTMLButtonElement, PadDef>();
+    /** Pads by the number key that plays them, 1 through 0. */
+    private padByKey = new Map<string, HTMLButtonElement>();
+    /** Held pads by the key or pointer holding them down, so the right up lets the right one go. */
+    private heldBy = new Map<string, HTMLButtonElement>();
+    private bankButtons = new Map<Bank, HTMLButtonElement>();
+    private depthEl: HTMLSpanElement;
+    private depthDown: HTMLButtonElement;
+    private depthUp: HTMLButtonElement;
+    private mineButton: HTMLButtonElement | null = null;
+    private keepButton: HTMLButtonElement;
+    private keepNameEl: HTMLSpanElement;
+    private keepSubEl: HTMLSpanElement;
+    /** The artist the Keep door last showed, so it is drawn again only when that changes. */
+    private keepShown: string | null = null;
     /** Stops any held-button repeat; run on destroy. */
     private releases: (() => void)[] = [];
     private switchEl: HTMLButtonElement;
@@ -538,8 +607,8 @@ export class Deck {
         this.rulerClip = this.rulerEl.querySelector(".slab-ruler-clip") as HTMLDivElement;
         this.noGridEl = h("p", { class: "slab-nogrid", id: "slab-nogrid" });
 
-        // A latching press, in the same tuck and roll as the pads: it stays down
-        // and lit while auto chop runs, and says so in words.
+        // A latching press, in the same tuck and roll as the pads: it stays pushed
+        // in and lit while auto chop runs, and the countdown beside it says so in words.
         this.switchEl = h("button", {
             class: "slab-press slab-auto-press",
             type: "button",
@@ -547,8 +616,8 @@ export class Deck {
             "aria-checked": String(state.auto),
             "aria-label": "Auto chop",
             onclick: () => this.toggleAuto(),
-        }, h("span", {}, "Auto chop", h("span", { class: "slab-auto-on" }, " on")));
-        this.everyEl = h("span", { class: "slab-every" });
+        }, h("span", {}, "Auto chop"));
+        this.everyEl = h("span", { class: "slab-every" }, h("span", { class: "slab-every-n" }), h("span", { class: "slab-every-next" }));
         this.everyDown = h("button", {
             class: "slab-press slab-step",
             type: "button",
@@ -565,6 +634,36 @@ export class Deck {
         this.press(this.everyUp, () => {
             if (!isOff(this.everyUp)) this.setEvery(this.state.every + 1);
         }, true);
+
+        // How far the Screw pad rides the pitch down.
+        this.depthEl = h("span", { class: "slab-every slab-depth-words" });
+        this.depthDown = h("button", {
+            class: "slab-press slab-step",
+            type: "button",
+            "aria-label": "Screw rides less far down",
+        }, h("span", {}, "−"));
+        this.depthUp = h("button", {
+            class: "slab-press slab-step",
+            type: "button",
+            "aria-label": "Screw rides further down",
+        }, h("span", {}, "+"));
+        this.press(this.depthDown, () => {
+            if (!isOff(this.depthDown)) this.setScrewDepth(this.state.screwDepth - 1);
+        }, true);
+        this.press(this.depthUp, () => {
+            if (!isOff(this.depthUp)) this.setScrewDepth(this.state.screwDepth + 1);
+        }, true);
+
+        // The last door: keep this mood for whoever is playing, and it comes on with them.
+        this.keepNameEl = h("span", { class: "slab-mood-name" });
+        this.keepSubEl = h("span", { class: "slab-mood-cents" });
+        this.keepButton = h("button", {
+            class: "slab-mood slab-keep",
+            type: "button",
+            "aria-pressed": "false",
+            onclick: () => this.toggleKeep(),
+        }, this.keepNameEl, this.keepSubEl, h("span", { class: "slab-lock", "aria-hidden": "true", html: LOCK_KNOB }));
+        this.keepButton.insertAdjacentHTML("afterbegin", pinstripe("keep"));
 
         this.eqNoteText = h("span", { class: "slab-eq-text" });
         this.eqNoteButton = h("button", {
@@ -601,6 +700,15 @@ export class Deck {
         // The panel sits above Spotify's own menus, so opening one closes it.
         document.addEventListener("contextmenu", this.onDocumentClick, true);
         document.addEventListener("keydown", this.onKey);
+        document.addEventListener("keyup", this.onKeyUp);
+        // Keys and pointers that come up while the window is away never say so: let every hold go.
+        window.addEventListener("blur", this.onBlur);
+        document.addEventListener("visibilitychange", this.onVisibility);
+        onHoldChange((held) => {
+            for (const pad of this.pads) {
+                if (pad.dataset.hold === "true") setData(pad, "latched", held.has(pad.dataset.pad as HoldName) ? "true" : "false");
+            }
+        });
         window.addEventListener("resize", this.onResize);
         this.panel.addEventListener("scroll", this.onScroll, { passive: true });
         if (typeof ResizeObserver === "function") {
@@ -613,6 +721,9 @@ export class Deck {
 
         this.renderMoodState();
         this.renderAutoState();
+        this.renderBank();
+        this.renderDepth();
+        this.renderKeep();
         this.renderPitch();
         this.renderEqNote();
         // Yielding is not the same as doing nothing: ModernEQ only writes its
@@ -632,7 +743,10 @@ export class Deck {
         });
         void probeDsp(true);
         void this.applyMood(this.state.moodId, false);
+        // Whoever is playing at boot gets their kept mood too, without a word about it.
+        this.applyKept(false);
         void this.syncGrid();
+        void loadLines();
         this.refresh();
         // Measurements taken before the embedded faces arrive are in the fallback
         // font, and nothing asks for them until text is drawn, so ask now.
@@ -672,6 +786,11 @@ export class Deck {
         document.removeEventListener("click", this.onDocumentClick, true);
         document.removeEventListener("contextmenu", this.onDocumentClick, true);
         document.removeEventListener("keydown", this.onKey);
+        document.removeEventListener("keyup", this.onKeyUp);
+        window.removeEventListener("blur", this.onBlur);
+        document.removeEventListener("visibilitychange", this.onVisibility);
+        this.releaseHolds();
+        onHoldChange(null);
         window.removeEventListener("resize", this.onResize);
         this.panel.removeEventListener("scroll", this.onScroll);
         this.sizeWatch?.disconnect();
@@ -690,6 +809,10 @@ export class Deck {
         this.lastGridUri = null;
         this.gridMisses = 0;
         void this.syncGrid();
+        // Fetched now so the Line pad has the words the first time it's hit.
+        void loadLines();
+        this.keepShown = null;
+        this.applyKept(true);
         this.refresh();
     }
 
@@ -889,13 +1012,26 @@ export class Deck {
             button.innerHTML = `${pinstripe(mood.id)}
         <span class="slab-mood-name">${mood.name}</span>
         <span class="slab-mood-cents">${formatCents(mood.dsp.pitch)}<span class="slab-sr"> cents</span></span>
-        <svg class="slab-mood-curve" viewBox="0 0 58 32" width="58" height="32" aria-hidden="true" focusable="false">
-          <path class="slab-mood-zero" d="M0 16H58"/>
-          <path class="slab-mood-line" d="${curvePath(mood.gains, 58, 32)}"/>
-        </svg>`;
+        ${doorCurve(mood.gains)}`;
             this.moodButtons.set(mood.id, button);
             moodGrid.append(button);
         }
+        // Mine: tap to keep the sound you're hearing, tap again to bring it back, hold to keep a new one over it.
+        const mine = h("button", {
+            class: "slab-mood slab-mine",
+            type: "button",
+            role: "radio",
+            "data-mood": MINE_ID,
+            "aria-checked": "false",
+            tabindex: "-1",
+        });
+        this.mineButton = mine;
+        this.moodButtons.set(MINE_ID, mine);
+        this.wireMine(mine);
+        moodGrid.append(mine);
+        this.renderMine();
+        // Keep is a switch, not a mood, so it sits in the last door's place outside the group.
+        const doors = h("div", { class: "slab-doors" }, moodGrid, this.keepButton);
 
         const readout = h(
             "div",
@@ -908,16 +1044,17 @@ export class Deck {
             h("div", { class: "slab-ruler-slot" }, this.rulerEl, this.noGridEl, this.flashEl),
         );
 
-        const padRow = h("div", { class: "slab-pads", role: "group", "aria-label": "Beat-synced edits" });
         const tooEarly = "Not that much record behind the needle yet.";
-        const padDefs: PadDef[] = [
-            { id: "chop1", label: "Chop", sub: "1 bar back", run: () => chopBars(1), miss: tooEarly },
-            { id: "chop2", label: "Chop", sub: "2 bars back", run: () => chopBars(2), miss: tooEarly },
-            { id: "chop4", label: "Chop", sub: "4 bars back", run: () => chopBars(4), miss: tooEarly },
+        const chopDefs: PadDef[] = [
+            { id: "chop1", label: "Chop", sub: "1 bar back", key: "1", bank: "chop", run: () => chopBars(1), miss: tooEarly },
+            { id: "chop2", label: "Chop", sub: "2 bars back", key: "2", bank: "chop", run: () => chopBars(2), miss: tooEarly },
+            { id: "chop4", label: "Chop", sub: "4 bars back", key: "3", bank: "chop", run: () => chopBars(4), miss: tooEarly },
             {
                 id: "loop",
                 label: "Loop",
                 sub: LOOP_SUB,
+                key: "4",
+                bank: "chop",
                 // A second press ends the loop early.
                 run: () => {
                     if (!isLooping()) return loopBars(LOOP_TIMES);
@@ -931,6 +1068,8 @@ export class Deck {
                 id: "stop",
                 label: "Stop",
                 sub: "Tape stop",
+                key: "5",
+                bank: "chop",
                 run: () => {
                     if (isStopping()) {
                         this.flashActivity("Already stopping");
@@ -949,27 +1088,67 @@ export class Deck {
                 },
             },
         ];
-        padDefs.forEach((def, index) => {
-            const sub = h("small", {}, def.sub);
-            const pad = h("button", {
-                class: "slab-press slab-pad",
-                type: "button",
-                "data-pad": def.id,
-                "aria-keyshortcuts": String(index + 1),
-            }, h("i", { class: "slab-key", "aria-hidden": "true" }, String(index + 1)), h("b", {}, def.label), sub);
-            if (def.id === "loop") this.loopSub = sub;
-            this.press(pad, () => this.firePad(pad, def));
-            this.padDefs.set(pad, def);
-            this.pads.push(pad);
-            padRow.append(pad);
-        });
+        // The other half of the name: pitch ridden down by hand, the lid shut, an echo thrown, a
+        // line run back, the record spun. The holds last as long as the pad is down.
+        const screwDefs: PadDef[] = [
+            {
+                id: "screw",
+                label: "Screw",
+                sub: "Hold it down",
+                key: "6",
+                bank: "screw",
+                needsHelper: true,
+                run: () => pressHold("screw", { cents: -this.state.screwDepth * 100 }),
+                release: () => releaseHold("screw"),
+                miss: NEEDS_HELPER,
+            },
+            { id: "line", label: "Line", sub: "Run it back", key: "7", bank: "screw", run: () => runLineBack(), miss: tooEarly },
+            {
+                id: "trunk",
+                label: "Trunk",
+                sub: "Hold it shut",
+                key: "8",
+                bank: "screw",
+                needsHelper: true,
+                run: () => pressHold("trunk"),
+                release: () => releaseHold("trunk"),
+                miss: NEEDS_HELPER,
+            },
+            {
+                id: "echo",
+                label: "Echo",
+                sub: "Hold it",
+                key: "9",
+                bank: "screw",
+                needsHelper: true,
+                run: () => pressHold("echo", { beatMs: this.beatMs() }),
+                release: () => releaseHold("echo"),
+                miss: NEEDS_HELPER,
+            },
+            { id: "spin", label: "Spin", sub: "Back a bar", key: "0", bank: "screw", run: () => spinBack(), miss: tooEarly },
+        ];
+        const chopRow = this.padRow("chop", "Cuts", chopDefs);
+        const screwRow = this.padRow("screw", "Holds, a line and a spin", screwDefs);
 
         const auto = h(
             "div",
-            { class: "slab-auto" },
+            { class: "slab-auto", "data-for": "chop" },
             this.switchEl,
             h("div", { class: "slab-stepper" }, this.everyDown, this.everyEl, this.everyUp),
         );
+        const depth = h(
+            "div",
+            { class: "slab-auto", "data-for": "screw" },
+            h("div", { class: "slab-stepper" }, this.depthDown, this.depthEl, this.depthUp),
+        );
+        // Which pads show, the cuts or the screw. Both banks always play from the keys.
+        const banks = h(
+            "div",
+            { class: "slab-banks", role: "radiogroup", "aria-label": "Pads" },
+            this.bankButton("chop", "Chop"),
+            this.bankButton("screw", "Screw"),
+        );
+        const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth);
 
         // The scuff plate: stainless, ribbed along its length, a Phillips head at
         // each end, and the status stamped into the smooth field between the ribs.
@@ -982,14 +1161,320 @@ export class Deck {
         );
 
         // The body line: one crease across the door, with the deeper coat under it.
-        const lower = h("div", { class: "slab-lower" }, readout, padRow, auto);
-        const body = h("div", { class: "slab-body" }, head, trim, moodGrid, lower, this.sillEl);
+        const lower = h("div", { class: "slab-lower" }, readout, chopRow, screwRow, bankRow);
+        const body = h("div", { class: "slab-body" }, head, trim, doors, lower, this.sillEl);
         // In a short window the sill stays on the bottom edge and the car scrolls
         // behind it; a lip on the top edge says when something is hidden above.
         panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, this.statusEl);
         panel.addEventListener("click", (event) => event.stopPropagation());
         panel.addEventListener("keydown", (event) => this.handleTab(event, "panel"));
         return panel;
+    }
+
+    /** A row of five pads, one bank: four, then the last a hand's width apart. */
+    private padRow(bank: Bank, label: string, defs: PadDef[]): HTMLDivElement {
+        const row = h("div", { class: "slab-pads", role: "group", "aria-label": label, "data-bank": bank });
+        for (const def of defs) {
+            const sub = h("small", {}, def.sub);
+            const pad = h("button", {
+                class: "slab-press slab-pad",
+                type: "button",
+                "data-pad": def.id,
+                "aria-keyshortcuts": def.key,
+            }, h("i", { class: "slab-key", "aria-hidden": "true" }, def.key), h("b", {}, def.label), sub);
+            if (def.id === "loop") this.loopSub = sub;
+            if (def.release) {
+                setData(pad, "hold", "true");
+                this.wireHold(pad, def);
+            } else {
+                this.press(pad, () => {
+                    this.showBank(def.bank);
+                    this.firePad(pad, def);
+                });
+            }
+            this.padDefs.set(pad, def);
+            this.padByKey.set(def.key, pad);
+            this.pads.push(pad);
+            row.append(pad);
+        }
+        return row;
+    }
+
+    /**
+     * A held pad is down for as long as a finger, the pointer or its key is: it comes up on
+     * the matching up, wherever the pointer has wandered by then.
+     */
+    private wireHold(pad: HTMLButtonElement, def: PadDef): void {
+        pad.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0 || !event.isPrimary) return;
+            event.preventDefault();
+            try {
+                pad.setPointerCapture(event.pointerId);
+            } catch {
+                /* a synthetic pointer can't be captured; its up still lets the pad go */
+            }
+            this.holdDown(pad, def, `pointer:${event.pointerId}`);
+        });
+        const up = (event: PointerEvent) => this.holdUp(`pointer:${event.pointerId}`);
+        pad.addEventListener("pointerup", up);
+        pad.addEventListener("pointercancel", up);
+        pad.addEventListener("lostpointercapture", up);
+        pad.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.repeat) return;
+            this.holdDown(pad, def, `key:${event.code}`);
+        });
+        pad.addEventListener("keyup", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            this.holdUp(`key:${event.code}`);
+        });
+        // A click with no press behind it (a screen reader, voice control) can't hold anything
+        // down: it latches the pad instead, and the next one lets it go.
+        pad.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (event.detail !== 0) return;
+            const by = `latch:${def.id}`;
+            if (this.heldBy.has(by)) {
+                this.holdUp(by);
+                this.flashActivity(`${def.label} let go`);
+                return;
+            }
+            this.holdDown(pad, def, by);
+            if (this.heldBy.has(by)) this.flashActivity(`${def.label} held. Press again to let go.`);
+        });
+    }
+
+    private holdDown(pad: HTMLButtonElement, def: PadDef, by: string): void {
+        if (this.heldBy.has(by)) return;
+        this.showBank(def.bank);
+        if (isOff(pad)) {
+            this.flashActivity(def.needsHelper ? NEEDS_HELPER : NO_GRID);
+            return;
+        }
+        if (def.run() !== true) {
+            if (def.miss) this.flashActivity(def.miss);
+            return;
+        }
+        this.heldBy.set(by, pad);
+    }
+
+    private holdUp(by: string): void {
+        const pad = this.heldBy.get(by);
+        if (!pad) return;
+        this.heldBy.delete(by);
+        // Still down under another key or pointer: it stays down.
+        for (const other of this.heldBy.values()) if (other === pad) return;
+        this.padDefs.get(pad)?.release?.();
+    }
+
+    /** Every held pad up at once: the window lost the keys, or the panel is going. */
+    private releaseHolds(): void {
+        this.heldBy.clear();
+        releaseAll();
+    }
+
+    private onKeyUp = (event: KeyboardEvent) => this.holdUp(`key:${event.code}`);
+    private onBlur = () => this.releaseHolds();
+    private onVisibility = () => {
+        if (document.visibilityState === "hidden") this.releaseHolds();
+    };
+
+    private bankButton(bank: Bank, label: string): HTMLButtonElement {
+        const button = h("button", {
+            class: "slab-press slab-bank",
+            type: "button",
+            role: "radio",
+            "data-bank": bank,
+            "aria-checked": "false",
+            tabindex: "-1",
+            onclick: () => this.showBank(bank),
+            onkeydown: (event: KeyboardEvent) => {
+                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                event.preventDefault();
+                const next: Bank = bank === "chop" ? "screw" : "chop";
+                this.showBank(next);
+                this.bankButtons.get(next)?.focus();
+            },
+        }, h("span", {}, label));
+        this.bankButtons.set(bank, button);
+        return button;
+    }
+
+    /** Shows a bank's pads and its control. Playing a pad from the other bank's key shows that bank. */
+    private showBank(bank: Bank): void {
+        if (this.state.bank !== bank) {
+            this.state.bank = bank;
+            saveState(this.state);
+        }
+        this.renderBank();
+    }
+
+    private renderBank(): void {
+        const bank = this.state.bank;
+        setData(this.panel, "bank", bank);
+        for (const [id, button] of this.bankButtons) {
+            setAttr(button, "aria-checked", id === bank ? "true" : "false");
+            setAttr(button, "tabindex", id === bank ? "0" : "-1");
+        }
+    }
+
+    private setScrewDepth(depth: number): void {
+        const next = Math.max(SCREW_MIN, Math.min(SCREW_MAX, Math.round(depth)));
+        if (next === this.state.screwDepth) return;
+        this.state.screwDepth = next;
+        saveState(this.state);
+        this.renderDepth();
+        this.announceSettled(() => this.depthEl.textContent ?? "");
+    }
+
+    private renderDepth(): void {
+        const depth = this.state.screwDepth;
+        setText(this.depthEl, `Screws ${depth} semitone${depth === 1 ? "" : "s"} down`);
+        setOff(this.depthDown, depth <= SCREW_MIN);
+        setOff(this.depthUp, depth >= SCREW_MAX);
+    }
+
+    /** One beat of the song where the needle is, for the echo; a 90 BPM beat with no grid. */
+    private beatMs(): number {
+        const grid = gridFor();
+        if (!grid) return 667;
+        return beatLengthMs(grid, Math.max(0, beatIndexAt(grid, needlePosition())));
+    }
+
+    /**
+     * Mine: a tap keeps the sound you hear when it's empty and brings it back when it isn't; a
+     * hold keeps what you hear now over what was in it. Shift+Enter does the hold from the keys.
+     */
+    private wireMine(button: HTMLButtonElement): void {
+        let timer: number | null = null;
+        let kept = false;
+        const cancel = () => {
+            if (timer !== null) window.clearTimeout(timer);
+            timer = null;
+        };
+        button.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0 || !event.isPrimary) return;
+            kept = false;
+            cancel();
+            if (!mineMood()) return;
+            timer = window.setTimeout(() => {
+                timer = null;
+                kept = true;
+                this.saveMine(true);
+            }, MINE_HOLD_MS);
+        });
+        for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, cancel);
+        this.releases.push(cancel);
+        button.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" || !event.shiftKey) return;
+            event.preventDefault();
+            event.stopPropagation();
+            this.saveMine(true);
+        });
+        button.addEventListener("click", () => {
+            // The hold already kept a new sound; the click it ends with isn't a second press.
+            if (kept) {
+                kept = false;
+                return;
+            }
+            if (mineMood()) void this.applyMood(MINE_ID, true);
+            else this.saveMine(false);
+        });
+    }
+
+    /** Keeps what you hear now in Mine: this mood's curve and room, and the pitch as the slider has it. */
+    private saveMine(over: boolean): void {
+        const current = moodById(this.state.moodId);
+        const from = current.id === MINE_ID ? (this.state.mine?.from ?? "flat") : current.id;
+        const saved = { from, gains: [...current.gains], dsp: { ...current.dsp, pitch: this.state.pitch } };
+        this.state.mine = saved;
+        setMine(saved);
+        this.state.moodId = MINE_ID;
+        saveState(this.state);
+        this.renderMine();
+        this.renderMoodState();
+        this.keepFollows();
+        this.flashActivity(over ? "Mine holds what you hear now" : "Kept what you hear as Mine");
+    }
+
+    private renderMine(): void {
+        const button = this.mineButton;
+        if (!button) return;
+        const mine = mineMood();
+        setData(button, "empty", mine ? "false" : "true");
+        button.innerHTML = mine
+            ? `${pinstripe(MINE_ID)}
+        <span class="slab-mood-name">Mine</span>
+        <span class="slab-mood-cents">${formatCents(mine.dsp.pitch)}<span class="slab-sr"> cents</span></span>
+        ${doorCurve(mine.gains)}`
+            : `${pinstripe(MINE_ID)}
+        <span class="slab-mood-name">Mine</span>
+        <span class="slab-mood-cents">Tap to keep this sound</span>`;
+        setAttr(button, "title", mine
+            ? "Your own mood. Hold to keep what you hear now in its place."
+            : "Keeps the mood, pitch and room you hear now as your own.");
+    }
+
+    /** The Keep door, for whoever is playing: drawn again only when the artist or what's kept changes. */
+    private renderKeep(): void {
+        const artist = currentArtist();
+        const kept = keptFor(artist);
+        const shown = `${artist?.uri ?? ""}|${artist?.name ?? ""}|${kept ? `${kept.moodId}:${kept.pitch}` : ""}`;
+        if (shown === this.keepShown) return;
+        this.keepShown = shown;
+        setAttr(this.keepButton, "aria-pressed", kept ? "true" : "false");
+        if (!artist) {
+            setText(this.keepNameEl, "Keep for an artist");
+            setText(this.keepSubEl, "Nobody playing to keep it for");
+            setOff(this.keepButton, true);
+            setAttr(this.keepButton, "title", "");
+            return;
+        }
+        const name = artist.name || "this artist";
+        setOff(this.keepButton, false);
+        setText(this.keepNameEl, `Keep for ${name}`);
+        setText(this.keepSubEl, kept ? `Locked on ${moodById(kept.moodId).name}` : "Locks this mood to them");
+        setAttr(this.keepButton, "title", kept
+            ? `${name} comes on ${moodById(kept.moodId).name} every time. Press to let it go.`
+            : `Every time ${name} comes on, so does the mood you have now.`);
+    }
+
+    private toggleKeep(): void {
+        if (isOff(this.keepButton)) return;
+        const artist = currentArtist();
+        if (!artist) return;
+        const name = artist.name || "This artist";
+        if (keptFor(artist)) {
+            forget(artist);
+            this.flashActivity(`${name} plays on whatever's on`);
+        } else {
+            keep(artist, this.state.moodId, this.state.pitch);
+            this.flashActivity(`${name} comes on ${moodById(this.state.moodId).name} from now on`);
+        }
+        this.renderKeep();
+    }
+
+    /** While a mood is kept for this artist, keeping follows what you pick for them. */
+    private keepFollows(): void {
+        const artist = currentArtist();
+        if (artist && keptFor(artist)) keep(artist, this.state.moodId, this.state.pitch);
+        this.renderKeep();
+    }
+
+    /** A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change. */
+    private applyKept(say: boolean): void {
+        const artist: Artist | null = currentArtist();
+        const kept = keptFor(artist);
+        if (!artist || !kept) return;
+        const id = kept.moodId === MINE_ID && !mineMood() ? "flat" : kept.moodId;
+        const pitch = clampPitch(kept.pitch);
+        if (id === this.state.moodId && pitch === this.state.pitch) return;
+        this.state.pitch = pitch;
+        void this.applyMood(id, false);
+        if (say) this.flashActivity(`${moodById(id).name}, kept for ${artist.name || "this artist"}`);
     }
 
     private handleOutside(event: MouseEvent): void {
@@ -1078,15 +1563,21 @@ export class Deck {
             return;
         }
         if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
-        const index = Number.parseInt(event.key, 10);
-        if (!Number.isFinite(index) || index < 1 || index > this.pads.length) return;
+        const pad = this.padByKey.get(event.key);
+        if (!pad) return;
         if (isTypingTarget(event.target)) return;
         event.preventDefault();
-        // A held key is one hit, not a machine gun of seeks. A dead pad still answers, with why.
+        // A held key is one hit, not a machine gun of seeks, and a held pad stays down until it's up.
+        // A dead pad still answers, with why.
         if (event.repeat) return;
-        const pad = this.pads[index - 1];
         const def = this.padDefs.get(pad);
-        if (def) this.firePad(pad, def);
+        if (!def) return;
+        if (def.release) {
+            this.holdDown(pad, def, `key:${event.code}`);
+            return;
+        }
+        this.showBank(def.bank);
+        this.firePad(pad, def);
     }
 
     /**
@@ -1095,7 +1586,9 @@ export class Deck {
      * them and the ends don't wrap from −560 straight to +400.
      */
     private handleMoodKey(event: KeyboardEvent): void {
+        // Mine is the last door once something is kept in it; an empty one is only ever tapped.
         const order = MOODS_BY_PITCH.map((mood) => mood.id);
+        if (mineMood()) order.push(MINE_ID);
         const from = order.indexOf(moodById(this.state.moodId).id);
         let to: number;
         switch (event.key) {
@@ -1150,6 +1643,8 @@ export class Deck {
         // Focus inside the panel would otherwise fall to the document. Spotify's
         // body doesn't scroll, so focusing must never scroll it either.
         if (this.panel.contains(document.activeElement) && this.chip.isConnected) this.chip.focus({ preventScroll: true });
+        // A pad held down when the panel shuts would never see its finger come up.
+        this.releaseHolds();
         this.panel.hidden = true;
         this.state.open = false;
         saveState(this.state);
@@ -1302,6 +1797,8 @@ export class Deck {
         // saved mood without announcing it, and keeps the saved slider position.
         if (announce) this.state.pitch = mood.dsp.pitch;
         saveState(this.state);
+        // Picked by hand while this artist's mood is kept: the kept mood is this one now.
+        if (announce) this.keepFollows();
         this.renderMoodState();
         this.renderPitch(announce);
         this.renderDsp();
@@ -1398,7 +1895,10 @@ export class Deck {
         this.pendingPitch = null;
         if (value === null) return;
         void sendDsp({ pitch: value });
-        if (persist) saveState(this.state);
+        if (persist) {
+            saveState(this.state);
+            this.keepFollows();
+        }
     }
 
     /**
@@ -1868,7 +2368,9 @@ export class Deck {
         const base = `Every ${every} bar${every === 1 ? "" : "s"}`;
         const grid = gridFor();
         const ahead = this.state.auto && grid && isPlaying() ? autoBarsAhead(barIndexAt(grid, progressMs())) : null;
-        setText(this.everyEl, ahead === null ? base : `${base}, ${ahead === 1 ? "next bar" : `next in ${ahead}`}`);
+        // Two lines while it runs: how often, then how soon, each whole.
+        setText(this.everyEl.firstElementChild as HTMLElement, base);
+        setText(this.everyEl.lastElementChild as HTMLElement, ahead === null ? "" : ahead === 1 ? "next bar" : `next in ${ahead}`);
     }
 
     /**
@@ -2107,12 +2609,17 @@ export class Deck {
         setText(this.speedEl, speed.text);
         setAttr(this.speedEl, "title", speed.hint);
 
+        const holding = canHold();
         for (const pad of this.pads) {
-            const off = pad.dataset.pad !== "stop" && !grid;
+            const def = this.padDefs.get(pad);
+            // The holds need the helper and nothing else; everything else but Stop needs the grid.
+            const off = def?.needsHelper ? !holding : pad.dataset.pad !== "stop" && !grid;
             setOff(pad, off);
-            if (off) setAttr(pad, "aria-describedby", "slab-nogrid");
+            if (off && !def?.needsHelper) setAttr(pad, "aria-describedby", "slab-nogrid");
             else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
+            setAttr(pad, "title", off && def?.needsHelper ? NEEDS_HELPER : "");
         }
+        this.renderKeep();
         this.renderEvery();
         // A running loop keeps its pad lit and counts down on it, through the last pass.
         const left = loopRemaining();

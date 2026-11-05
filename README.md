@@ -20,6 +20,8 @@ SLAB does the things the client can actually do, and pairs with a small companio
 - **A real pitch slider** — ±1200 cents, live, with the mood cards acting as presets that move it.
 - **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
 - **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware, and with SLAB DSP running they land the instant you hit them: no waiting on Spotify to seek.
+- **The Screw bank** — the other half of the name, on keys 6 to 0: hold Screw and the pitch rides down like a hand on the pitch fader, Line runs the lyric line you just heard back on the beat, Trunk shuts the lid on the sound, Echo throws it back in time with the song, and Spin backspins the record into a chop. The holds last as long as the pad is down.
+- **Your own mood, kept for the artist** — a seventh door, Mine, keeps the sound you have on, and Keep locks a mood to whoever is playing, so UGK always comes on Screwed.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
 - **Auto chop** — cuts on the phrase lines every N bars and shows how far off the next cut is, on a worker clock that survives a backgrounded window.
 - **The trunk lights up** — while the mood can be heard, the nameplate, the sign and every word on the paint burn as neon; paused, they go back to glass and whitewall. Behind the slider, a big 84 wire wheel turns once a bar, read off the beat grid, and its neon ring kicks on every beat.
@@ -42,7 +44,15 @@ The slider's position is saved. A relaunch restores the mood and the slider wher
 
 These are EQ curves, not presets with names slapped on. The sparkline on each card is the actual curve.
 
+**Mine** is the seventh door. Tap it while it's empty and it keeps the sound you have on: that mood's curve and room, at the pitch the slider has now. Tap it again any time to bring it back, and hold it to keep a new sound over the old one (Shift+Enter from the keyboard).
+
+**Keep** is the eighth: it locks the mood you have on to the artist playing, and their tracks come on it from then on, quietly when SLAB starts and with a word on the sill when a track changes. While it's locked, whatever you pick for them is what's kept. Press it again to let them go. It's kept on this computer only.
+
 ### The pads
+
+Two banks, the two halves of the name. The switch under the pads shows one at a time; the keys play both, and the panel shows whichever bank you last played.
+
+**Chop** (keys `1`–`5`)
 
 | Pad | Move |
 |---|---|
@@ -52,7 +62,19 @@ These are EQ curves, not presets with names slapped on. The sparkline on each ca
 | **Loop, 4 times** | Repeat the current bar four more times, cutting on the bar line, then let the record run. The pad stays lit and counts down; press it again to end the loop early. |
 | **Stop, tape stop** | Fade, pause, restore the fader. One at a time, so a double tap can't leave the volume down. |
 
-Keyboard `1`–`5` plays the pads while the panel is open; a held key is one hit, and digits typed into Spotify's search or any text field never reach them. `Esc` closes the panel from inside it. A pad that can't do anything (no beat grid, or not that much record behind the needle yet) says why instead of doing nothing.
+**Screw** (keys `6`–`0`)
+
+| Pad | Move |
+|---|---|
+| **Screw, hold it down** | Hold it and the pitch rides down, slow, like a hand on the pitch fader on the hook; let go and it springs back to the mood. How far it rides is the stepper beside the switch, a semitone to an octave. |
+| **Line, run it back** | Back to the start of the lyric line you just heard, at the same place in the beat, the way Screw ran a vocal back. Uses Spotify's synced lyrics; a track without them, or a stretch with no singing, gets a bar chop instead. |
+| **Trunk, hold it shut** | The sound of a slab going by with the trunk shut: muffled and boomy while you hold it, and the lid pops open the moment you let go. |
+| **Echo, hold it** | Throws the record back on the beat while you hold it, timed off the song's own tempo; let go and it rings off. |
+| **Spin, back a bar** | Backspins the record for a beat and lands a bar back, on the beat, as if the record had kept turning under the spin. |
+
+Screw, Trunk and Echo need SLAB DSP and say so without it. Spin without it is a plain bar chop.
+
+Keyboard `1`–`0` plays the pads while the panel is open. A held key on Chop is one hit, a held key on Screw, Trunk or Echo holds it, and digits typed into Spotify's search or any text field never reach them. If the window loses the keys mid-hold, everything lets go. `Esc` closes the panel from inside it. A pad that can't do anything (no beat grid, or not that much record behind the needle yet) says why instead of doing nothing.
 
 Auto chop cuts on the phrase lines this music is built on: with every 4 bars, at the top of bars 5, 9, 13 and so on, replaying the bar that ended the phrase. Only bars reached for the first time count, so the replayed bar, your own chops and a running loop can never set it off again. The stepper shows how many bars until the next cut.
 
@@ -70,6 +92,8 @@ The companion app is what makes the moods real. It taps Spotify's audio with `Au
 | Low-pass | 200 Hz–20 kHz |
 | Tape stop | Real rate ramp: 380 ms down, 70 ms hold, 240 ms back up |
 | Chops and loops | Instant, from the last 45 seconds it has heard |
+| Backspin | The record run backwards out of memory, landing on a chop |
+| Holds | Screw, Trunk and Echo ramped on top of the mood, and back off it |
 
 **Requirements:** macOS 14.2 or newer. Apple Silicon or Intel. Spotify desktop.
 
@@ -106,6 +130,8 @@ The helper listens on `http://127.0.0.1:47832`:
 | `POST /tapstop` | `{"downMs": 380, "holdMs": 70, "upMs": 240}` |
 | `POST /jump` | `{"backMs": 3333, "inMs": 0, "seekAheadMs": 250, "availableMs": 12000}`: jump back in memory (forward when negative), `inMs` from now; `409` when that much song isn't there |
 | `POST /jump/cancel` | call a jump off: one still to come never happens, one waiting on Spotify goes back to live (a new track, a pause) |
+| `POST /spin` | `{"backMs": 1250, "spinMs": 417, "seekAheadMs": 250, "availableMs": 12000}`: spin back for `spinMs`, land `backMs` before where the spin began |
+| `POST /hold` | `{"pitchOffset": -500, "lowpassCap": 420, "gainBoost": 3, "echoMix": 38, "echoFeedback": 48, "echoTime": 0.42, "ms": 650}`: what's held on top of the mood, ramped over `ms`; what it leaves out is let go, `{}` lets go of everything. Refresh it within 10 s or it lets go by itself |
 | `POST /reset` | back to neutral |
 | `POST /reconnect` | drop the tap and attach again |
 | `POST /quit` | shut the helper down |
@@ -204,7 +230,10 @@ src/
     moderneq.ts    ModernEQ detection + its saved curve, for handing the bands back
     moods.ts       six curves + sparkline geometry + DSP params
     grid.ts        audio-analysis cache, bar/beat lookup
-    chops.ts       chop / loop / tape stop / auto
+    chops.ts       chop / loop / line / spin / tape stop / auto, and the needle
+    holds.ts       Screw, Trunk and Echo: what's held on top of the mood
+    lyrics.ts      Spotify's synced lyrics, for running a line back
+    keep.ts        moods kept for artists
     clock.ts       worker ticker (main-thread timers get clamped when hidden)
     state.ts       localStorage persistence
   ui/

@@ -23,6 +23,22 @@ struct DSPParams: Codable, Equatable {
     static let neutral = DSPParams()
 }
 
+/// A pad held on top of the mood: let it go and the mood is back. Each part ramps.
+struct Hold: Equatable {
+    /// Added to the mood's pitch, in cents.
+    var pitchOffset: Float = 0
+    /// The low-pass can't open past this, in Hz. 20000 = no cap.
+    var lowpassCap: Float = 20_000
+    /// Added to the output trim, in dB.
+    var gainBoost: Float = 0
+    /// An echo over the mood's own delay: wet 0...100, feedback 0...95, time in seconds.
+    var echoMix: Float = 0
+    var echoFeedback: Float = 0
+    var echoTime: Double = 0.36
+
+    static let none = Hold()
+}
+
 final class DSPGraph {
     private let engine = AVAudioEngine()
     private let source: AVAudioSourceNode
@@ -42,6 +58,17 @@ final class DSPGraph {
     private let paramsLock = NSLock()
     private var params = DSPParams.neutral
     private var tapeToken = 0
+
+    /// What is held on top of the mood right now, and the ramp it is on. Main thread only.
+    private var holdNow = Hold.none
+    private var holdFrom = Hold.none
+    private var holdTo = Hold.none
+    private var holdStart = Date()
+    private var holdSeconds: Double = 0
+    private var holdTimer: DispatchSourceTimer?
+    /// A hold nobody refreshes lets go by itself: SLAB may have lost the key-up with the window.
+    private var holdWatch: DispatchSourceTimer?
+    static let holdLifetime: TimeInterval = 10
 
     /// Peak of the last render block, for the panel's level readout.
     nonisolated(unsafe) static var renderPeak: Float = 0
@@ -120,6 +147,10 @@ final class DSPGraph {
         guard isRunning else { return }
         steerTimer?.cancel()
         steerTimer = nil
+        holdTimer?.cancel()
+        holdTimer = nil
+        holdWatch?.cancel()
+        holdWatch = nil
         engine.stop()
         isRunning = false
     }
@@ -182,18 +213,100 @@ final class DSPGraph {
     }
 
     private func push(_ p: DSPParams) {
-        timePitch.pitch = max(-2400, min(2400, p.pitch))
         reverb.loadFactoryPreset(Self.preset(named: p.reverbPreset))
         reverb.wetDryMix = max(0, min(100, p.reverb))
-        delay.delayTime = max(0.01, min(2.0, p.delayTime))
-        delay.feedback = max(0, min(95, p.delayFeedback))
-        delay.wetDryMix = max(0, min(100, p.delayMix))
+        mix(p, holdNow)
+    }
+
+    /// The parts a hold can move, as the mood sets them with the hold on top. Cheap enough to run
+    /// every step of a ramp: no reverb preset reload, which would click.
+    private func mix(_ p: DSPParams, _ h: Hold) {
+        timePitch.pitch = max(-2400, min(2400, p.pitch + h.pitchOffset))
+        let echo = h.echoMix > 0
+        delay.delayTime = max(0.01, min(2.0, echo ? h.echoTime : p.delayTime))
+        delay.feedback = max(0, min(95, echo ? max(p.delayFeedback, h.echoFeedback) : p.delayFeedback))
+        delay.wetDryMix = max(0, min(100, max(p.delayMix, h.echoMix)))
         let band = eq.bands[0]
-        let cutoff = max(200, min(20_000, p.lowpass))
+        let cutoff = max(200, min(20_000, min(p.lowpass, h.lowpassCap)))
         band.bypass = cutoff >= 19_900
         band.frequency = cutoff
-        engine.mainMixerNode.outputVolume = pow(10, max(-24, min(12, p.gain)) / 20)
+        engine.mainMixerNode.outputVolume = pow(10, max(-24, min(12, p.gain + h.gainBoost)) / 20)
     }
+
+    /// Ramps what is held to `target` over `ms`: the Screw pad's pitch ride, the Trunk pad's
+    /// filter, the Echo pad's echo. `Hold.none` lets go. A hold has to be refreshed within
+    /// `holdLifetime` or it lets go by itself.
+    func hold(_ target: Hold, ms: Int) {
+        if Thread.isMainThread {
+            startHold(target, ms: ms)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.startHold(target, ms: ms) }
+        }
+    }
+
+    private func startHold(_ target: Hold, ms: Int) {
+        // The same hold again is SLAB saying it's still down: keep it, and whatever ramp it's on.
+        if target == holdTo, target != .none {
+            armHoldWatch()
+            return
+        }
+        holdFrom = holdNow
+        holdTo = target
+        // An echo coming in takes its time and feedback at once and only its level ramps.
+        if target.echoMix > 0 {
+            holdFrom.echoTime = target.echoTime
+            holdFrom.echoFeedback = target.echoFeedback
+        }
+        holdStart = Date()
+        holdSeconds = max(0, Double(ms) / 1000)
+        if holdTimer == nil {
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + .milliseconds(10), repeating: .milliseconds(10), leeway: .milliseconds(2))
+            timer.setEventHandler { [weak self] in self?.stepHold() }
+            timer.resume()
+            holdTimer = timer
+        }
+        stepHold()
+        armHoldWatch()
+    }
+
+    private func armHoldWatch() {
+        holdWatch?.cancel()
+        holdWatch = nil
+        guard holdTo != .none else { return }
+        let watch = DispatchSource.makeTimerSource(queue: .main)
+        watch.schedule(deadline: .now() + Self.holdLifetime)
+        watch.setEventHandler { [weak self] in
+            slabLog("a hold went unrefreshed; letting go")
+            self?.startHold(.none, ms: 300)
+        }
+        watch.resume()
+        holdWatch = watch
+    }
+
+    private func stepHold() {
+        let t = holdSeconds > 0 ? min(1, Date().timeIntervalSince(holdStart) / holdSeconds) : 1
+        let s = Float(t)
+        var h = Hold.none
+        h.pitchOffset = holdFrom.pitchOffset + (holdTo.pitchOffset - holdFrom.pitchOffset) * s
+        // The filter sweeps evenly to the ear: in octaves, not hertz.
+        h.lowpassCap = holdFrom.lowpassCap * pow(holdTo.lowpassCap / holdFrom.lowpassCap, s)
+        h.gainBoost = holdFrom.gainBoost + (holdTo.gainBoost - holdFrom.gainBoost) * s
+        h.echoMix = holdFrom.echoMix + (holdTo.echoMix - holdFrom.echoMix) * s
+        // Going out, the echo keeps its time and feedback until it has faded away.
+        let echoing = t < 1 && holdTo.echoMix == 0 ? holdFrom : holdTo
+        h.echoTime = echoing.echoTime
+        h.echoFeedback = echoing.echoFeedback
+        holdNow = t >= 1 ? holdTo : h
+        mix(current, holdNow)
+        if t >= 1 {
+            holdTimer?.cancel()
+            holdTimer = nil
+        }
+    }
+
+    /// Something is held on top of the mood right now.
+    var holding: Bool { holdNow != .none || holdTo != .none }
 
     static func preset(named name: String) -> AVAudioUnitReverbPreset {
         switch name {

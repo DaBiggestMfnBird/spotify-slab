@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import ServiceManagement
 
-let slabVersion = "0.4.0"
+let slabVersion = "0.5.0"
 let defaultPort: UInt16 = 47_832
 
 struct Options {
