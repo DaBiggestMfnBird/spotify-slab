@@ -21,9 +21,9 @@ self.onmessage = (event) => {
   var lastTick = 0;
   var WORKER_SILENT_MS = 3e3;
   function tickAll(now) {
-    for (const tick of subscribers) {
+    for (const tick2 of subscribers) {
       try {
-        tick(now);
+        tick2(now);
       } catch {
       }
     }
@@ -74,10 +74,10 @@ self.onmessage = (event) => {
       useMainThread();
     }
   }
-  function subscribe(tick) {
+  function subscribe(tick2) {
     boot();
     const wasIdle = subscribers.size === 0;
-    subscribers.add(tick);
+    subscribers.add(tick2);
     if (wasIdle) {
       if (mode === "worker" && worker) {
         worker.postMessage("start");
@@ -87,7 +87,7 @@ self.onmessage = (event) => {
       }
     }
     return () => {
-      if (!subscribers.delete(tick) || subscribers.size > 0) return;
+      if (!subscribers.delete(tick2) || subscribers.size > 0) return;
       stopTimers();
       if (worker) worker.postMessage("stop");
     };
@@ -119,10 +119,10 @@ self.onmessage = (event) => {
   var PROBE_LINKED_MS = 4e3;
   var PROBE_ABSENT_MS = 3e4;
   var PROBE_FAST_TRIES = 3;
-  function onDspChange(listener3) {
-    listeners.add(listener3);
-    listener3(status);
-    return () => listeners.delete(listener3);
+  function onDspChange(listener4) {
+    listeners.add(listener4);
+    listener4(status);
+    return () => listeners.delete(listener4);
   }
   function dspStatus() {
     return status;
@@ -130,7 +130,7 @@ self.onmessage = (event) => {
   function publish(next) {
     const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio || next.jump !== status.jump || next.spin !== status.spin || next.hold !== status.hold || next.tape !== status.tape;
     status = next;
-    if (changed) for (const listener3 of listeners) listener3(status);
+    if (changed) for (const listener4 of listeners) listener4(status);
   }
   async function request(path, init, timeout = 700) {
     const controller = new AbortController();
@@ -309,9 +309,9 @@ self.onmessage = (event) => {
   var cache = /* @__PURE__ */ new Map();
   var inflight = /* @__PURE__ */ new Map();
   var CACHE_LIMIT = 24;
-  function remember(uri, grid) {
-    cache.delete(uri);
-    cache.set(uri, grid);
+  function remember(uri2, grid) {
+    cache.delete(uri2);
+    cache.set(uri2, grid);
     while (cache.size > CACHE_LIMIT) {
       const oldest = cache.keys().next().value;
       if (oldest === void 0) break;
@@ -321,8 +321,8 @@ self.onmessage = (event) => {
   function currentUri() {
     return Spicetify.Player.data?.item?.uri ?? null;
   }
-  async function loadGrid(uri) {
-    const target = uri ?? currentUri();
+  async function loadGrid(uri2) {
+    const target = uri2 ?? currentUri();
     if (!target) return null;
     if (!target.startsWith("spotify:track:")) return null;
     const cached = cache.get(target);
@@ -330,8 +330,8 @@ self.onmessage = (event) => {
       remember(target, cached);
       return cached;
     }
-    const running2 = inflight.get(target);
-    if (running2) return running2;
+    const running3 = inflight.get(target);
+    if (running3) return running3;
     const request2 = (async () => {
       try {
         const analysis = await Spicetify.getAudioData(target);
@@ -345,7 +345,8 @@ self.onmessage = (event) => {
           timeSignature: analysis.track?.time_signature ?? 4,
           beats,
           bars,
-          durationMs
+          durationMs,
+          sections: (analysis.sections ?? []).map((section) => ({ start: section.start * 1e3, loudness: section.loudness ?? -60 })).filter((section) => Number.isFinite(section.start))
         };
         remember(target, grid);
         return grid;
@@ -358,8 +359,8 @@ self.onmessage = (event) => {
     inflight.set(target, request2);
     return request2;
   }
-  function gridFor(uri) {
-    const target = uri ?? currentUri();
+  function gridFor(uri2) {
+    const target = uri2 ?? currentUri();
     return target ? cache.get(target) ?? null : null;
   }
   function indexAt(markers, ms) {
@@ -415,9 +416,9 @@ self.onmessage = (event) => {
   var CACHE_LIMIT2 = 24;
   var cache2 = /* @__PURE__ */ new Map();
   var inflight2 = /* @__PURE__ */ new Map();
-  function remember2(uri, lines) {
-    cache2.delete(uri);
-    cache2.set(uri, lines);
+  function remember2(uri2, lines2) {
+    cache2.delete(uri2);
+    cache2.set(uri2, lines2);
     while (cache2.size > CACHE_LIMIT2) {
       const oldest = cache2.keys().next().value;
       if (oldest === void 0) break;
@@ -427,16 +428,16 @@ self.onmessage = (event) => {
   function currentUri2() {
     return Spicetify.Player.data?.item?.uri ?? null;
   }
-  async function loadLines(uri) {
-    const target = uri ?? currentUri2();
+  async function loadLines(uri2) {
+    const target = uri2 ?? currentUri2();
     if (!target) return null;
     if (cache2.has(target)) {
       const cached = cache2.get(target) ?? null;
       remember2(target, cached);
       return cached;
     }
-    const running2 = inflight2.get(target);
-    if (running2) return running2;
+    const running3 = inflight2.get(target);
+    if (running3) return running3;
     const id = /^spotify:track:([A-Za-z0-9]+)$/.exec(target)?.[1];
     const cosmos = Spicetify.CosmosAsync;
     if (!id || !cosmos) {
@@ -453,8 +454,8 @@ self.onmessage = (event) => {
           remember2(target, null);
           return null;
         }
-        const lines = lyrics.lines.map((line) => ({ startMs: Number(line.startTimeMs), words: String(line.words ?? "").trim() })).filter((line) => Number.isFinite(line.startMs) && line.words !== "" && line.words !== "\u266A").sort((a, b) => a.startMs - b.startMs);
-        const result = lines.length >= 2 ? lines : null;
+        const lines2 = lyrics.lines.map((line) => ({ startMs: Number(line.startTimeMs), words: String(line.words ?? "").trim() })).filter((line) => Number.isFinite(line.startMs) && line.words !== "" && line.words !== "\u266A").sort((a, b) => a.startMs - b.startMs);
+        const result = lines2.length >= 2 ? lines2 : null;
         remember2(target, result);
         return result;
       } catch {
@@ -467,15 +468,15 @@ self.onmessage = (event) => {
     inflight2.set(target, request2);
     return request2;
   }
-  function lineJustHeard(lines, ms) {
+  function lineJustHeard(lines2, ms) {
     let index = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startMs > ms) break;
+    for (let i = 0; i < lines2.length; i++) {
+      if (lines2[i].startMs > ms) break;
       index = i;
     }
     if (index < 0) return null;
-    if (ms - lines[index].startMs < JUST_BEGUN_MS && index > 0) index -= 1;
-    return lines[index];
+    if (ms - lines2[index].startMs < JUST_BEGUN_MS && index > 0) index -= 1;
+    return lines2[index];
   }
 
   // src/core/chops.ts
@@ -535,41 +536,41 @@ self.onmessage = (event) => {
     helperCutUntil = 0;
   }
   function watchNeedle() {
-    let playing = false;
-    let at = 0;
-    let uri = null;
+    let playing2 = false;
+    let at2 = 0;
+    let uri2 = null;
     try {
-      playing = Spicetify.Player.isPlaying();
-      at = Spicetify.Player.getProgress();
-      uri = Spicetify.Player.data?.item?.uri ?? null;
+      playing2 = Spicetify.Player.isPlaying();
+      at2 = Spicetify.Player.getProgress();
+      uri2 = Spicetify.Player.data?.item?.uri ?? null;
     } catch {
       return;
     }
     const now = Date.now();
-    if (uri !== lastUri) {
-      runFrom = playing ? at : null;
+    if (uri2 !== lastUri) {
+      runFrom = playing2 ? at2 : null;
       forgetReckoning();
       if (lastUri !== null) dropHelperCut();
-    } else if (!playing) {
+    } else if (!playing2) {
       forgetReckoning();
       if (lastPlaying) dropHelperCut();
     } else if (!lastPlaying) {
-      runFrom = at;
+      runFrom = at2;
       forgetReckoning();
-    } else if (Math.abs(at - (lastAt + (now - lastTime))) > MOVED_MS) {
-      const ours = now - sentAt < 2e3 && Math.abs(at - (sentTo + (now - sentAt))) < MOVED_MS;
+    } else if (Math.abs(at2 - (lastAt + (now - lastTime))) > MOVED_MS) {
+      const ours = now - sentAt < 2e3 && Math.abs(at2 - (sentTo + (now - sentAt))) < MOVED_MS;
       if (!ours) {
-        runFrom = at;
+        runFrom = at2;
         forgetReckoning();
       } else if (!sentKeepsRun) {
         runFrom = sentTo;
       }
     }
-    if (runFrom === null && playing) runFrom = at;
-    lastAt = at;
+    if (runFrom === null && playing2) runFrom = at2;
+    lastAt = at2;
     lastTime = now;
-    lastPlaying = playing;
-    lastUri = uri;
+    lastPlaying = playing2;
+    lastUri = uri2;
   }
   function needlePosition() {
     const now = Date.now();
@@ -579,8 +580,8 @@ self.onmessage = (event) => {
     }
     if ((dspStatus().wentLive ?? 0) > reckonWentLive) forgetReckoning();
     if (reckon && now - reckon.time < RECKON_MS) return reckon.at + (now - reckon.time);
-    const at = Spicetify.Player.getProgress();
-    return canJump() ? at - (dspStatus().latencyMs ?? 0) : at;
+    const at2 = Spicetify.Player.getProgress();
+    return canJump() ? at2 - (dspStatus().latencyMs ?? 0) : at2;
   }
   function unbrokenMs(heard) {
     if (runFrom === null) return 0;
@@ -655,11 +656,11 @@ self.onmessage = (event) => {
     }
   }
   var LINE_REACH_MS = 15e3;
-  function onTheBeat(grid, at, start) {
-    const here = beatIndexAt(grid, at);
+  function onTheBeat(grid, at2, start) {
+    const here = beatIndexAt(grid, at2);
     let there = beatIndexAt(grid, start);
     if (here < 0 || there < 0) return start;
-    const phase = (at - beatStartMs(grid, here)) / beatLengthMs(grid, here);
+    const phase = (at2 - beatStartMs(grid, here)) / beatLengthMs(grid, here);
     let target = beatStartMs(grid, there) + phase * beatLengthMs(grid, there);
     if (target > start + 25 && there > 0) {
       there -= 1;
@@ -674,15 +675,15 @@ self.onmessage = (event) => {
     if (busy) return false;
     const grid = await ensureGrid();
     if (!grid) return false;
-    const lines = await loadLines();
+    const lines2 = await loadLines();
     const heard = needlePosition();
-    const line = lines ? lineJustHeard(lines, heard) : null;
+    const line = lines2 ? lineJustHeard(lines2, heard) : null;
     if (!line || heard - line.startMs > LINE_REACH_MS) {
       const did = await chopBars(1, true);
       if (did) {
         padJumpAt = Date.now();
         manualBar = barIndexAt(grid, heard);
-        emit("chop", lines ? "No line here, so a bar back" : "No synced lyrics, so a bar back");
+        emit("chop", lines2 ? "No line here, so a bar back" : "No synced lyrics, so a bar back");
       }
       return did;
     }
@@ -759,22 +760,22 @@ self.onmessage = (event) => {
     const total = Math.max(1, Math.round(times));
     let armed = true;
     loopLeft = total;
-    const tick = () => {
+    const tick2 = () => {
       if (!Spicetify.Player.isPlaying()) {
         cancelLoop();
         return;
       }
-      const at = needlePosition();
-      if (at < start - 250 || at > end + length) {
+      const at2 = needlePosition();
+      if (at2 < start - 250 || at2 > end + length) {
         cancelLoop();
         return;
       }
       if (!armed) {
-        if (at < end - length / 2) armed = true;
+        if (at2 < end - length / 2) armed = true;
         return;
       }
       const helper = canJump();
-      if (at < end - (helper ? LOOP_SEND_MS : LOOP_LEAD_MS)) return;
+      if (at2 < end - (helper ? LOOP_SEND_MS : LOOP_LEAD_MS)) return;
       if (loopLeft <= 0) {
         cancelLoop();
         emit("loop", "Loop done");
@@ -783,18 +784,18 @@ self.onmessage = (event) => {
       armed = false;
       loopLeft -= 1;
       manualBar = index;
-      const late = Math.max(0, at - end);
+      const late = Math.max(0, at2 - end);
       const to = start + Math.min(late, length / 4);
       if (helper) {
-        void cut(to, late > 0 ? at : end, late > 0 ? 0 : end - at);
+        void cut(to, late > 0 ? at2 : end, late > 0 ? 0 : end - at2);
         return;
       }
       sent(to, false);
       seek(to);
     };
-    loopUnsub = subscribe(tick);
-    tick();
-    emit("loop", `Looping this bar ${total} times`);
+    loopUnsub = subscribe(tick2);
+    tick2();
+    emit("loop", total === 1 ? "Looping this bar once more" : `Looping this bar ${total} times`);
     return true;
   }
   var stopping = null;
@@ -823,10 +824,10 @@ self.onmessage = (event) => {
       const finish = () => {
         if (done) return;
         done = true;
-        unsub();
+        unsub2();
         resolve();
       };
-      const unsub = subscribe(() => {
+      const unsub2 = subscribe(() => {
         const progress = duration === 0 ? 1 : Math.min(1, (Date.now() - origin) / duration);
         if (fade) {
           try {
@@ -1201,7 +1202,9 @@ self.onmessage = (event) => {
     bank: "chop",
     screwDepth: 5,
     mine: null,
-    tape: CLEAN_TAPE
+    tape: CLEAN_TAPE,
+    dj: false,
+    djBefore: null
   };
   function clampPitch(value) {
     if (!Number.isFinite(value)) return 0;
@@ -1246,9 +1249,9 @@ self.onmessage = (event) => {
         return { ...DEFAULTS, tape: { ...CLEAN_TAPE } };
       }
       const parsed = JSON.parse(raw);
-      const mine2 = readMine(parsed.mine);
-      setMine(mine2);
-      const moodId = typeof parsed.moodId === "string" && (parsed.moodId !== MINE_ID || mine2) ? parsed.moodId : DEFAULTS.moodId;
+      const mine3 = readMine(parsed.mine);
+      setMine(mine3);
+      const moodId = typeof parsed.moodId === "string" && (parsed.moodId !== MINE_ID || mine3) ? parsed.moodId : DEFAULTS.moodId;
       return {
         moodId,
         auto: parsed.auto === true,
@@ -1259,8 +1262,10 @@ self.onmessage = (event) => {
         eqOwner: parsed.eqOwner === "slab" || parsed.eqOwner === "modern" ? parsed.eqOwner : DEFAULTS.eqOwner,
         bank: parsed.bank === "screw" || parsed.bank === "tape" ? parsed.bank : "chop",
         screwDepth: typeof parsed.screwDepth === "number" && parsed.screwDepth >= SCREW_MIN && parsed.screwDepth <= SCREW_MAX ? Math.round(parsed.screwDepth) : DEFAULTS.screwDepth,
-        mine: mine2,
-        tape: readTape(parsed.tape)
+        mine: mine3,
+        tape: readTape(parsed.tape),
+        dj: parsed.dj === true,
+        djBefore: parsed.djBefore && typeof parsed.djBefore.moodId === "string" && typeof parsed.djBefore.pitch === "number" ? { moodId: parsed.djBefore.moodId, pitch: clampPitch(parsed.djBefore.pitch), tape: readTape(parsed.djBefore.tape) } : null
       };
     } catch {
       setMine(null);
@@ -1272,6 +1277,60 @@ self.onmessage = (event) => {
       localStorage.setItem(KEY, JSON.stringify(state));
     } catch {
     }
+  }
+
+  // src/core/genre.ts
+  var STYLE_NAMES = {
+    houston: "Houston",
+    trap: "trap",
+    rap: "rap",
+    slowjam: "slow jam",
+    band: "band",
+    dance: "dance",
+    pop: "pop"
+  };
+  var MATCHES = [
+    ["houston", /houston|screw|chopped|texas|dirty south|southern hip hop|memphis/],
+    ["trap", /trap|drill|plugg|rage|crunk/],
+    ["slowjam", /r&b|rnb|soul|quiet storm|slow jam|funk|motown/],
+    ["rap", /hip hop|rap|gangster|g funk|boom bap/],
+    ["dance", /house|techno|edm|electro|dance|dubstep|drum and bass|trance|garage/],
+    ["band", /rock|metal|punk|indie|grunge|alternative|emo|shoegaze|country|folk/],
+    ["pop", /pop/]
+  ];
+  var cache3 = /* @__PURE__ */ new Map();
+  var inflight3 = /* @__PURE__ */ new Map();
+  async function artistGenres(artistUri) {
+    const cached = cache3.get(artistUri);
+    if (cached) return cached;
+    const running3 = inflight3.get(artistUri);
+    if (running3) return running3;
+    const id = /^spotify:artist:([A-Za-z0-9]+)$/.exec(artistUri)?.[1];
+    const cosmos = Spicetify.CosmosAsync;
+    if (!id || !cosmos) return [];
+    const request2 = (async () => {
+      try {
+        const body = await cosmos.get(`https://api.spotify.com/v1/artists/${id}`);
+        const genres = Array.isArray(body?.genres) ? body.genres.filter((g) => typeof g === "string") : [];
+        cache3.set(artistUri, genres);
+        return genres;
+      } catch {
+        cache3.set(artistUri, []);
+        return [];
+      } finally {
+        inflight3.delete(artistUri);
+      }
+    })();
+    inflight3.set(artistUri, request2);
+    return request2;
+  }
+  function styleFor(genres, tempo) {
+    const all = genres.join(" | ").toLowerCase();
+    for (const [style2, pattern] of MATCHES) if (pattern.test(all)) return style2;
+    if (tempo > 0 && tempo < 85) return "slowjam";
+    if (tempo >= 130 && tempo <= 165) return "trap";
+    if (tempo >= 118 && tempo < 130) return "dance";
+    return "rap";
   }
 
   // src/core/holds.ts
@@ -1341,6 +1400,9 @@ self.onmessage = (event) => {
     void dspHold({}, 150);
     keepAlive();
   }
+  function isHeld(name) {
+    return down.has(name);
+  }
 
   // src/core/keep.ts
   var KEY2 = "slab:keep:v1";
@@ -1351,9 +1413,9 @@ self.onmessage = (event) => {
     memory = {};
     try {
       const parsed = JSON.parse(localStorage.getItem(KEY2) ?? "{}");
-      for (const [uri, kept] of Object.entries(parsed)) {
+      for (const [uri2, kept] of Object.entries(parsed)) {
         if (typeof kept?.moodId === "string" && typeof kept.pitch === "number") {
-          memory[uri] = {
+          memory[uri2] = {
             name: typeof kept.name === "string" ? kept.name : "",
             moodId: kept.moodId,
             pitch: kept.pitch,
@@ -1377,9 +1439,9 @@ self.onmessage = (event) => {
   function currentArtist() {
     try {
       const metadata = Spicetify.Player.data?.item?.metadata;
-      const uri = metadata?.artist_uri;
-      if (!uri || !uri.startsWith("spotify:artist:")) return null;
-      return { uri, name: metadata?.artist_name ?? "" };
+      const uri2 = metadata?.artist_uri;
+      if (!uri2 || !uri2.startsWith("spotify:artist:")) return null;
+      return { uri: uri2, name: metadata?.artist_name ?? "" };
     } catch {
       return null;
     }
@@ -1397,6 +1459,322 @@ self.onmessage = (event) => {
     if (!(artist.uri in kept)) return;
     delete kept[artist.uri];
     save();
+  }
+
+  // src/core/style.ts
+  var MOVES = ["chop1", "chop2", "chop4", "loop", "line", "spin", "screw", "trunk", "echo"];
+  function isMove(id) {
+    return MOVES.includes(id);
+  }
+  var KEY3 = "slab:style:v1";
+  var PHRASE = 8;
+  var ENOUGH = 6;
+  var counts = null;
+  function load2() {
+    if (counts) return counts;
+    counts = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(KEY3) ?? "{}");
+      if (parsed && typeof parsed === "object") counts = parsed;
+    } catch {
+    }
+    return counts;
+  }
+  function save2() {
+    try {
+      localStorage.setItem(KEY3, JSON.stringify(counts ?? {}));
+    } catch {
+    }
+  }
+  function noteMove(style2, move, barInPhrase) {
+    const all = load2();
+    const byMove = all[style2] ?? (all[style2] = {});
+    const bars = byMove[move] ?? (byMove[move] = new Array(PHRASE).fill(0));
+    const at2 = (Math.round(barInPhrase) % PHRASE + PHRASE) % PHRASE;
+    bars[at2] = (bars[at2] ?? 0) + 1;
+    save2();
+  }
+  function lean(style2, move, barInPhrase) {
+    const byMove = load2()[style2];
+    if (!byMove) return 1;
+    let total = 0;
+    for (const bars2 of Object.values(byMove)) for (const n of bars2 ?? []) total += n;
+    if (total < ENOUGH) return 1;
+    const bars = byMove[move] ?? [];
+    const here = bars[(Math.round(barInPhrase) % PHRASE + PHRASE) % PHRASE] ?? 0;
+    const overall = bars.reduce((sum, n) => sum + n, 0);
+    return 1 + Math.min(1.5, here / total * 6 + overall / total);
+  }
+
+  // src/core/dj.ts
+  var PLANS = {
+    houston: { phrase: 4, chop: 0.75, chopBars: [[1, 0.55], [2, 0.35], [4, 0.1]], line: 0.7, loop: 0.3, spin: 0.15, echo: 0.3, screw: 0.55, trunk: 0.35 },
+    trap: { phrase: 4, chop: 0.6, chopBars: [[1, 0.5], [2, 0.4], [4, 0.1]], line: 0.4, loop: 0.4, spin: 0.35, echo: 0.4, screw: 0.4, trunk: 0.4 },
+    rap: { phrase: 4, chop: 0.65, chopBars: [[1, 0.5], [2, 0.4], [4, 0.1]], line: 0.55, loop: 0.3, spin: 0.2, echo: 0.3, screw: 0.45, trunk: 0.3 },
+    slowjam: { phrase: 8, chop: 0.45, chopBars: [[1, 0.4], [2, 0.5], [4, 0.1]], line: 0.8, loop: 0.25, spin: 0.1, echo: 0.5, screw: 0.65, trunk: 0.25 },
+    band: { phrase: 8, chop: 0.45, chopBars: [[1, 0.3], [2, 0.5], [4, 0.2]], line: 0.35, loop: 0.3, spin: 0.25, echo: 0.45, screw: 0.35, trunk: 0.3 },
+    dance: { phrase: 8, chop: 0.4, chopBars: [[1, 0.3], [2, 0.4], [4, 0.3]], line: 0.25, loop: 0.5, spin: 0.4, echo: 0.4, screw: 0.3, trunk: 0.5 },
+    pop: { phrase: 8, chop: 0.5, chopBars: [[1, 0.45], [2, 0.45], [4, 0.1]], line: 0.5, loop: 0.3, spin: 0.2, echo: 0.4, screw: 0.4, trunk: 0.3 }
+  };
+  var REST_BARS = 2;
+  var YIELD_BARS = 8;
+  var MOVED_BARS = 5;
+  var OWN_JUMP_MS = 1500;
+  var running = false;
+  var unsub = null;
+  var listener3 = null;
+  var uri = null;
+  var style = "rap";
+  var styleReady = false;
+  var lines = null;
+  var seed = 1;
+  var lastBar = null;
+  var maxBar = -1;
+  var restUntil = -1;
+  var lastJumpBar = -10;
+  var yieldUntil = -1;
+  var jumpedAt = 0;
+  var timers = [];
+  var mine2 = /* @__PURE__ */ new Set();
+  function onDj(fn) {
+    listener3 = fn;
+  }
+  function djRunning() {
+    return running;
+  }
+  function djStyleName() {
+    return running && styleReady ? STYLE_NAMES[style] : null;
+  }
+  function say(label) {
+    listener3?.(label);
+  }
+  function clearTimers() {
+    for (const timer of timers) window.clearTimeout(timer);
+    timers = [];
+  }
+  function letUpMine() {
+    for (const name of mine2) release(name);
+    mine2.clear();
+  }
+  function playing() {
+    try {
+      return Spicetify.Player.isPlaying();
+    } catch {
+      return false;
+    }
+  }
+  function at(when, fn) {
+    const wait = Math.max(0, when - needlePosition());
+    timers.push(window.setTimeout(() => {
+      if (running && playing()) fn();
+    }, wait));
+  }
+  function dice(bar) {
+    let a = (seed ^ Math.imul(bar + 1, 2654435761)) >>> 0;
+    return () => {
+      a = a + 1831565813 >>> 0;
+      let t = a;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function hash(text) {
+    let h2 = 2166136261;
+    for (let i = 0; i < text.length; i++) h2 = Math.imul(h2 ^ text.charCodeAt(i), 16777619);
+    return h2 >>> 0;
+  }
+  async function trackStyle() {
+    const grid = gridFor() ?? await loadGrid();
+    const artist = currentArtist();
+    const genres = artist ? await artistGenres(artist.uri) : [];
+    return styleFor(genres, grid?.tempo ?? 0);
+  }
+  async function prepare(track) {
+    uri = track;
+    lastBar = null;
+    maxBar = -1;
+    restUntil = -1;
+    lastJumpBar = -10;
+    yieldUntil = -1;
+    clearTimers();
+    letUpMine();
+    styleReady = false;
+    lines = null;
+    seed = hash(track ?? "");
+    if (!track) return;
+    const [found, words] = await Promise.all([trackStyle(), loadLines(track)]);
+    if (uri !== track) return;
+    style = found;
+    styleReady = true;
+    lines = words;
+  }
+  function startDj() {
+    if (running) return;
+    running = true;
+    let track = null;
+    try {
+      track = Spicetify.Player.data?.item?.uri ?? null;
+    } catch {
+    }
+    void prepare(track);
+    unsub = subscribe(tick);
+  }
+  function stopDj() {
+    running = false;
+    unsub?.();
+    unsub = null;
+    clearTimers();
+    letUpMine();
+  }
+  function djYield(move) {
+    const grid = gridFor();
+    const bar = grid ? barIndexAt(grid, needlePosition()) : -1;
+    if (move && bar >= 0) {
+      void trackStyle().then((kind) => noteMove(kind, move, bar % PHRASE));
+    }
+    if (!running) return;
+    clearTimers();
+    letUpMine();
+    if (bar >= 0) yieldUntil = bar + YIELD_BARS;
+  }
+  function tick() {
+    if (!running) return;
+    let track = null;
+    try {
+      track = Spicetify.Player.data?.item?.uri ?? null;
+    } catch {
+      return;
+    }
+    if (track !== uri) {
+      void prepare(track);
+      return;
+    }
+    if (!playing()) {
+      clearTimers();
+      letUpMine();
+      return;
+    }
+    if (!styleReady) return;
+    const grid = gridFor();
+    if (!grid) return;
+    const heard = needlePosition();
+    const bar = barIndexAt(grid, heard);
+    if (bar < 0) return;
+    const last = lastBar;
+    lastBar = bar;
+    if (last === null || bar === last) return;
+    if (bar !== last + 1) {
+      const own = Date.now() - jumpedAt < OWN_JUMP_MS;
+      if (bar > maxBar) maxBar = bar;
+      else if (!own && bar < maxBar - MOVED_BARS) maxBar = bar;
+      return;
+    }
+    if (bar <= maxBar) return;
+    maxBar = bar;
+    if (bar < yieldUntil || isLooping()) return;
+    play(grid, bar, heard);
+  }
+  function sectionIndex(sections, ms) {
+    let found = -1;
+    for (let i = 0; i < sections.length; i++) {
+      if (sections[i].start > ms) break;
+      found = i;
+    }
+    return found;
+  }
+  function pick(weights, roll) {
+    const total = weights.reduce((sum, [, w]) => sum + w, 0);
+    let at2 = roll * total;
+    for (const [bars, w] of weights) {
+      at2 -= w;
+      if (at2 <= 0) return bars;
+    }
+    return weights[0][0];
+  }
+  function hold(name, from, to, label, beatMs) {
+    if (!canHold() || isHeld(name)) return;
+    at(from, () => {
+      if (isHeld(name)) return;
+      if (!press(name, name === "screw" ? { cents: -500 } : { beatMs })) return;
+      mine2.add(name);
+      say(label);
+      at(to, () => {
+        if (!mine2.delete(name)) return;
+        release(name);
+      });
+    });
+  }
+  function play(grid, bar, heard) {
+    const plan = PLANS[style];
+    const roll = dice(bar);
+    const start = barStartMs(grid, bar);
+    const length = barLengthMs(grid, bar);
+    const end = start + length;
+    const beat = beatLengthMs(grid, Math.max(0, beatIndexAt(grid, heard)));
+    const learnt = bar % PHRASE;
+    const weigh = (move, chance) => Math.min(0.95, chance * lean(style, move, learnt));
+    const sections = grid.sections;
+    const here = sectionIndex(sections, start + length / 2);
+    const next = here + 1 < sections.length ? sections[here + 1] : null;
+    const lastOfSection = next !== null && Math.abs(next.start - end) < length / 2;
+    const firstOfSection = here >= 0 && Math.abs(sections[here].start - start) < length / 2;
+    const loudest = sections.reduce((max, s) => Math.max(max, s.loudness), -Infinity);
+    const sorted = sections.map((s) => s.loudness).sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : -60;
+    const hook = here >= 0 && sections.length >= 3 && sections[here].loudness >= loudest - 1.5;
+    const breakdown = here >= 0 && sections.length >= 3 && sections[here].loudness <= median - 4;
+    let jumped = false;
+    const resting = bar < restUntil;
+    if (bar - lastJumpBar >= 2 && bar >= plan.phrase && bar % plan.phrase === 0) {
+      const bars = pick(plan.chopBars, roll());
+      const move = bars === 1 ? "chop1" : bars === 2 ? "chop2" : "chop4";
+      if (roll() < weigh(move, plan.chop) && bar >= bars) {
+        jumped = true;
+        jumpedAt = Date.now();
+        void chopBars(bars, true).then((did) => {
+          if (did) say(`DJ: ${bars === 1 ? "a bar" : `${bars} bars`} back`);
+        });
+      }
+    }
+    if (!jumped && !resting && lastOfSection) {
+      const r = roll();
+      const loop = weigh("loop", plan.loop);
+      if (r < loop) {
+        jumped = true;
+        jumpedAt = Date.now();
+        void loopBars(1).then((did) => {
+          if (did) say("DJ: looped the bar");
+        });
+      } else if (r < loop + weigh("spin", plan.spin)) {
+        jumped = true;
+        const turn = Math.max(350, Math.min(650, beat));
+        at(end - turn - 30, () => {
+          jumpedAt = Date.now();
+          void spinBack();
+        });
+      }
+    }
+    if (!jumped && !resting && lines) {
+      const fresh = lines.find((line) => line.startMs >= start && line.startMs < end);
+      if (fresh && roll() < weigh("line", plan.line)) {
+        jumped = true;
+        at(fresh.startMs + 150, () => {
+          jumpedAt = Date.now();
+          void runLineBack();
+        });
+      }
+    }
+    if (lastOfSection && roll() < weigh("echo", plan.echo)) hold("echo", end - beat, end, "DJ: echo thrown", beat);
+    const screwChance = hook ? plan.screw : sections.length < 3 && bar % plan.phrase === 1 ? plan.screw * 0.4 : 0;
+    if (screwChance > 0 && roll() < weigh("screw", screwChance)) hold("screw", start, end - beat / 4, "DJ: Screw on the hook", beat);
+    if (firstOfSection && breakdown && roll() < weigh("trunk", plan.trunk)) {
+      hold("trunk", start, start + length * 2 - beat / 4, "DJ: trunk shut", beat);
+    }
+    if (jumped) {
+      restUntil = bar + REST_BARS + 1;
+      lastJumpBar = bar;
+    }
   }
 
   // src/core/moderneq.ts
@@ -2009,6 +2387,13 @@ ${FONT_CSS}
   text-overflow: ellipsis;
   color: var(--wall-soft);
 }
+/* DJ mode: a latching press in the header, lit while SLAB works the record itself. */
+.slab-dj { --roll: 28px; flex: none; height: 28px; min-width: 44px; padding: 0 10px; flex-direction: row; font-weight: 700; font-size: 13px; letter-spacing: 0.06em; }
+.slab-dj[aria-checked="true"] {
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7), 0 0 0 #0B0203;
+}
+.slab-dj[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
 .slab-close {
   flex: none;
   width: 32px;
@@ -2714,7 +3099,7 @@ ${NEON_CSS}
   /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
   --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-clean, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-clean, .slab-dj, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
   color: var(--gas-core);
   text-shadow: var(--neon-text);
 }
@@ -2893,6 +3278,8 @@ ${NEON_CSS}
   var SPIN_MS = 1600;
   var ROLL_MS = 640;
   var TAGLINE = "Slow, loud and bangin\u2019";
+  var DJ_MOOD = "screwed";
+  var DJ_PITCH = -700;
   var CHIP_TITLE = "SLAB, Third Coast playback moods";
   var PX_PER_CENT = 12 / 100;
   var RAIL_WIDTH = WHEEL_SIZE + PX_PER_CENT * PITCH_LIMIT * 2;
@@ -3095,6 +3482,8 @@ ${NEON_CSS}
       this.heldBy = /* @__PURE__ */ new Map();
       this.bankButtons = /* @__PURE__ */ new Map();
       this.roomSub = null;
+      /** When a hand last played a pad: what happens just after is the hand's, not the DJ's. */
+      this.lastManualAt = 0;
       this.cleanButton = null;
       this.mineButton = null;
       /** The artist the Keep door last showed, so it is drawn again only when that changes. */
@@ -3322,9 +3711,18 @@ ${NEON_CSS}
       this.speedEl = h("p", { class: "slab-status" });
       this.statusEl = h("span", { class: "slab-sr", role: "status", "aria-live": "polite" });
       this.modernEq = modernEqPresent();
+      this.djButton = h("button", {
+        class: "slab-press slab-dj",
+        type: "button",
+        role: "switch",
+        "aria-checked": String(state.dj),
+        "aria-label": "DJ mode",
+        title: "DJ mode: SLAB works the record itself, on full screw. A Chop or Screw pad of yours takes it back for eight bars.",
+        onclick: () => this.toggleDj()
+      }, h("span", {}, "DJ"));
       this.panel = this.buildPanel();
       onChop((event) => {
-        const automatic = event.kind === "auto";
+        const automatic = event.kind === "auto" || djRunning() && Date.now() - this.lastManualAt > 1500;
         this.flashActivity(event.label, !automatic);
         if (automatic) this.hitPad(this.pads[0]);
       });
@@ -3359,6 +3757,9 @@ ${NEON_CSS}
       this.renderDepth();
       this.renderTape();
       this.renderKeep();
+      onDj((label) => this.flashActivity(label, false));
+      if (this.state.dj) startDj();
+      this.renderDj();
       this.renderPitch();
       this.renderEqNote();
       if (this.modernEq && !this.slabOwnsEq()) void this.restoreModernEqCurve();
@@ -3412,6 +3813,8 @@ ${NEON_CSS}
       document.removeEventListener("keyup", this.onKeyUp);
       window.removeEventListener("blur", this.onBlur);
       document.removeEventListener("visibilitychange", this.onVisibility);
+      stopDj();
+      onDj(null);
       this.releaseHolds();
       onHoldChange(null);
       window.removeEventListener("resize", this.onResize);
@@ -3441,9 +3844,9 @@ ${NEON_CSS}
      * Spotify's own CSS in the cascade, as it would on a clean boot.
      */
     injectStyles() {
-      const style = document.getElementById(STYLE_ID) ?? h("style", { id: STYLE_ID });
-      if (style.textContent !== CSS) style.textContent = CSS;
-      document.head.append(style);
+      const style2 = document.getElementById(STYLE_ID) ?? h("style", { id: STYLE_ID });
+      if (style2.textContent !== CSS) style2.textContent = CSS;
+      document.head.append(style2);
     }
     /**
      * Beside the lyrics button, where the playbar's own controls live. Without
@@ -3565,7 +3968,7 @@ ${NEON_CSS}
         html: CLOSE_ICON,
         onclick: () => this.close()
       });
-      const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, close);
+      const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, this.djButton, close);
       const scale = h(
         "div",
         { class: "slab-scale" },
@@ -3612,7 +4015,7 @@ ${NEON_CSS}
         this.moodButtons.set(mood.id, button);
         moodGrid.append(button);
       }
-      const mine2 = h("button", {
+      const mine3 = h("button", {
         class: "slab-mood slab-mine",
         type: "button",
         role: "radio",
@@ -3620,10 +4023,10 @@ ${NEON_CSS}
         "aria-checked": "false",
         tabindex: "-1"
       });
-      this.mineButton = mine2;
-      this.moodButtons.set(MINE_ID, mine2);
-      this.wireMine(mine2);
-      moodGrid.append(mine2);
+      this.mineButton = mine3;
+      this.moodButtons.set(MINE_ID, mine3);
+      this.wireMine(mine3);
+      moodGrid.append(mine3);
       this.renderMine();
       const doors = h("div", { class: "slab-doors" }, moodGrid, this.keepButton);
       const readout = h(
@@ -3876,6 +4279,7 @@ ${NEON_CSS}
         this.flashActivity(def.available ? def.unavailable?.() ?? NEEDS_HELPER : NO_GRID);
         return;
       }
+      this.handPlayed(def);
       if (def.run() !== true) {
         if (def.miss) this.flashActivity(def.miss);
         return;
@@ -3939,6 +4343,47 @@ ${NEON_CSS}
       saveState(this.state);
       this.renderDepth();
       this.announceSettled(() => this.depthEl.textContent ?? "");
+    }
+    /**
+     * DJ mode on: the sound you had is kept to go back to, the record goes on full screw, and the
+     * DJ starts working it. Off: the DJ stops and your sound comes back as it was.
+     */
+    toggleDj() {
+      if (this.state.dj) {
+        stopDj();
+        const before = this.state.djBefore;
+        this.state.dj = false;
+        this.state.djBefore = null;
+        if (before) {
+          this.state.pitch = before.pitch;
+          this.state.tape = { ...before.tape };
+          this.renderTape();
+          void this.applyMood(before.moodId === MINE_ID && !mineMood() ? "flat" : before.moodId, false);
+        } else {
+          saveState(this.state);
+        }
+        this.applyKept(false);
+        this.renderDj();
+        this.renderAutoState();
+        this.flashActivity("DJ off: the record is yours");
+        return;
+      }
+      this.state.djBefore = { moodId: this.state.moodId, pitch: this.state.pitch, tape: { ...this.state.tape } };
+      this.state.dj = true;
+      this.state.pitch = DJ_PITCH;
+      this.state.tape = { ...this.state.tape, wow: true };
+      this.renderTape();
+      void this.applyMood(DJ_MOOD, false);
+      startDj();
+      this.renderDj();
+      this.renderAutoState();
+      this.flashActivity("DJ on: full screw");
+    }
+    /** The switch, and in the tagline's place, what the DJ makes of the record. */
+    renderDj() {
+      setAttr(this.djButton, "aria-checked", this.state.dj ? "true" : "false");
+      const style2 = djStyleName();
+      setText(this.tagEl, this.state.dj ? style2 ? `DJ on: full screw, ${style2}` : "DJ on: full screw" : TAGLINE);
     }
     /** What the helper plays: the mood, through the tape, at the slider's pitch. */
     sound(mood = moodById(this.state.moodId)) {
@@ -4052,15 +4497,15 @@ ${NEON_CSS}
     renderMine() {
       const button = this.mineButton;
       if (!button) return;
-      const mine2 = mineMood();
-      setData(button, "empty", mine2 ? "false" : "true");
-      button.innerHTML = mine2 ? `${pinstripe(MINE_ID)}
+      const mine3 = mineMood();
+      setData(button, "empty", mine3 ? "false" : "true");
+      button.innerHTML = mine3 ? `${pinstripe(MINE_ID)}
         <span class="slab-mood-name">Mine</span>
-        <span class="slab-mood-cents">${formatCents(mine2.dsp.pitch)}<span class="slab-sr"> cents</span></span>
-        ${doorCurve(mine2.gains)}` : `${pinstripe(MINE_ID)}
+        <span class="slab-mood-cents">${formatCents(mine3.dsp.pitch)}<span class="slab-sr"> cents</span></span>
+        ${doorCurve(mine3.gains)}` : `${pinstripe(MINE_ID)}
         <span class="slab-mood-name">Mine</span>
         <span class="slab-mood-cents">Tap to keep this sound</span>`;
-      setAttr(button, "title", mine2 ? "Your own mood. Hold to keep what you hear now in its place." : "Keeps the mood, pitch and room you hear now as your own.");
+      setAttr(button, "title", mine3 ? "Your own mood. Hold to keep what you hear now in its place." : "Keeps the mood, pitch and room you hear now as your own.");
     }
     /** The Keep door, for whoever is playing: drawn again only when the artist or what's kept changes. */
     renderKeep() {
@@ -4103,8 +4548,12 @@ ${NEON_CSS}
       if (artist && keptFor(artist)) keep(artist, this.state.moodId, this.state.pitch);
       this.renderKeep();
     }
-    /** A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change. */
-    applyKept(say) {
+    /**
+     * A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change.
+     * While DJ mode has the record it stays on full screw, and the kept mood waits for it to go off.
+     */
+    applyKept(say2) {
+      if (this.state.dj) return;
       const artist = currentArtist();
       const kept = keptFor(artist);
       if (!artist || !kept) return;
@@ -4114,7 +4563,7 @@ ${NEON_CSS}
       this.state.pitch = pitch;
       if (id === MINE_ID) this.bringBackMineTape();
       void this.applyMood(id, false);
-      if (say) this.flashActivity(`${moodById(id).name}, kept for ${artist.name || "this artist"}`);
+      if (say2) this.flashActivity(`${moodById(id).name}, kept for ${artist.name || "this artist"}`);
     }
     handleOutside(event) {
       if (this.panel.hidden) return;
@@ -4166,8 +4615,8 @@ ${NEON_CSS}
       const all = [...document.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")].filter(
         (node) => node.tabIndex >= 0 && !node.hasAttribute("disabled") && !this.panel.contains(node) && node.getClientRects().length > 0
       );
-      const at = all.indexOf(this.chip);
-      return at >= 0 ? all[at + 1] ?? null : null;
+      const at2 = all.indexOf(this.chip);
+      return at2 >= 0 ? all[at2 + 1] ?? null : null;
     }
     handleKey(event) {
       if (this.panel.hidden || event.defaultPrevented) return;
@@ -4625,20 +5074,32 @@ ${NEON_CSS}
     helperParams() {
       const sent2 = this.sound();
       const got = dspStatus().params ?? {};
-      const pick = (key) => {
+      const pick2 = (key) => {
         const value = got[key];
         return typeof value === "number" && Number.isFinite(value) ? value : sent2[key];
       };
-      return { pitch: pick("pitch"), reverb: pick("reverb"), delayMix: pick("delayMix"), lowpass: pick("lowpass") };
+      return { pitch: pick2("pitch"), reverb: pick2("reverb"), delayMix: pick2("delayMix"), lowpass: pick2("lowpass") };
     }
     helperEffects() {
-      const running2 = this.helperParams();
+      const running3 = this.helperParams();
       return [
-        ...Math.abs(running2.pitch) >= 1 ? ["pitch"] : [],
-        ...running2.reverb > 0 ? ["reverb"] : [],
-        ...running2.delayMix > 0 ? ["delay"] : [],
-        ...running2.lowpass < 2e4 ? ["low-pass"] : []
+        ...Math.abs(running3.pitch) >= 1 ? ["pitch"] : [],
+        ...running3.reverb > 0 ? ["reverb"] : [],
+        ...running3.delayMix > 0 ? ["delay"] : [],
+        ...running3.lowpass < 2e4 ? ["low-pass"] : [],
+        ...this.helperTape() ? ["tape"] : []
       ];
+    }
+    /** The tape is running: a helper that plays it has a layer on, by what it confirmed or was sent. */
+    helperTape() {
+      const status2 = dspStatus();
+      if (status2.tape !== true) return false;
+      const sent2 = this.sound();
+      const got = status2.params ?? {};
+      return ["wow", "hiss", "crackle", "crush"].some((key) => {
+        const value = got[key];
+        return (typeof value === "number" && Number.isFinite(value) ? value : sent2[key]) > 0;
+      });
     }
     /**
      * What can be heard right now, decided in one place so the sign, the chip,
@@ -4857,7 +5318,7 @@ ${NEON_CSS}
       this.renderEvery();
       setOff(this.everyDown, every <= EVERY_MIN);
       setOff(this.everyUp, every >= EVERY_MAX);
-      setAuto(this.state.auto, every);
+      setAuto(this.state.auto && !this.state.dj, every);
     }
     /** "Every 4 bars", and while auto chop runs, how far off the next cut is, so it can be played to. */
     renderEvery() {
@@ -4895,11 +5356,11 @@ ${NEON_CSS}
         if (holdTimer !== null) window.clearTimeout(holdTimer);
         holdTimer = null;
       };
-      const hold = (event, delay) => {
+      const hold2 = (event, delay) => {
         holdTimer = window.setTimeout(() => {
           if (isOff(button)) return release3();
           action(event);
-          hold(event, 70);
+          hold2(event, 70);
         }, delay);
       };
       button.addEventListener("pointerdown", (event) => {
@@ -4909,7 +5370,7 @@ ${NEON_CSS}
         action(event);
         if (repeat) {
           release3();
-          hold(event, 420);
+          hold2(event, 420);
         }
       });
       for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, release3);
@@ -4929,12 +5390,18 @@ ${NEON_CSS}
       });
       this.releases.push(release3);
     }
+    /** A pad played by hand: DJ mode steps back for eight bars, and learns where you play. */
+    handPlayed(def) {
+      this.lastManualAt = Date.now();
+      if (def.bank !== "tape") djYield(isMove(def.id) ? def.id : void 0);
+    }
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     firePad(pad, def) {
       if (isOff(pad)) {
         this.flashActivity(def.available ? def.unavailable?.() ?? NEEDS_HELPER : NO_GRID);
         return;
       }
+      this.handPlayed(def);
       void Promise.resolve(def.run()).then((ran) => {
         if (this.disposed) return;
         if (ran) this.hitPad(pad);
@@ -4945,8 +5412,8 @@ ${NEON_CSS}
     hitPad(pad) {
       if (!pad) return;
       pad.dataset.hit = "true";
-      const running2 = this.padTimers.get(pad);
-      if (running2 !== void 0) window.clearTimeout(running2);
+      const running3 = this.padTimers.get(pad);
+      if (running3 !== void 0) window.clearTimeout(running3);
       this.padTimers.set(pad, window.setTimeout(() => {
         delete pad.dataset.hit;
         this.padTimers.delete(pad);
@@ -4973,15 +5440,15 @@ ${NEON_CSS}
       void sendDsp(want);
     }
     async syncGrid(force = false) {
-      const uri = Spicetify.Player.data?.item?.uri;
-      if (!uri) return;
-      if (!force && uri === this.lastGridUri && gridFor(uri)) return;
-      if (uri !== this.lastGridUri) this.gridMisses = 0;
-      this.lastGridUri = uri;
+      const uri2 = Spicetify.Player.data?.item?.uri;
+      if (!uri2) return;
+      if (!force && uri2 === this.lastGridUri && gridFor(uri2)) return;
+      if (uri2 !== this.lastGridUri) this.gridMisses = 0;
+      this.lastGridUri = uri2;
       this.lastGridAttempt = Date.now();
-      const grid = await loadGrid(uri);
+      const grid = await loadGrid(uri2);
       if (this.disposed) return;
-      if (uri === this.lastGridUri) this.gridMisses = grid ? 0 : this.gridMisses + 1;
+      if (uri2 === this.lastGridUri) this.gridMisses = grid ? 0 : this.gridMisses + 1;
       this.refresh();
     }
     /**
@@ -4991,9 +5458,9 @@ ${NEON_CSS}
      * event is picked up here too.
      */
     retryGrid() {
-      const uri = Spicetify.Player.data?.item?.uri;
-      if (!uri || gridFor(uri)) return;
-      if (uri !== this.lastGridUri) {
+      const uri2 = Spicetify.Player.data?.item?.uri;
+      if (!uri2 || gridFor(uri2)) return;
+      if (uri2 !== this.lastGridUri) {
         void this.syncGrid();
         return;
       }
@@ -5056,9 +5523,9 @@ ${NEON_CSS}
       if (!playingNow || this.panel.hidden) this.stopBigWheel();
       if (this.panel.hidden) return;
       this.renderHelperLine();
-      const playing = isPlaying();
-      setData(this.panel, "playing", playing ? "true" : "false");
-      setText(this.playEl, playing ? "Playing" : "Paused");
+      const playing2 = isPlaying();
+      setData(this.panel, "playing", playing2 ? "true" : "false");
+      setText(this.playEl, playing2 ? "Playing" : "Paused");
       const grid = gridFor();
       setData(this.panel, "grid", grid ? "true" : "false");
       if (!grid) {
@@ -5085,17 +5552,18 @@ ${NEON_CSS}
         setAttr(pad, "title", off && def?.available ? def.unavailable?.() ?? NEEDS_HELPER : "");
       }
       this.renderKeep();
+      this.renderDj();
       this.renderEvery();
       const left = loopRemaining();
       const looping = isLooping();
       const loopPad = this.pads.find((pad) => pad.dataset.pad === "loop");
       if (loopPad) setData(loopPad, "latched", looping ? "true" : "false");
       if (this.loopSub) setText(this.loopSub, !looping ? LOOP_SUB : left > 0 ? `${left} to go` : "Last pass");
-      const autoOff = !grid && !this.state.auto;
+      const autoOff = !grid && !this.state.auto || this.state.dj;
       setOff(this.switchEl, autoOff);
       if (autoOff) setAttr(this.switchEl, "aria-describedby", "slab-nogrid");
       else if (this.switchEl.hasAttribute("aria-describedby")) this.switchEl.removeAttribute("aria-describedby");
-      if (playing && grid && this.lampFrame === null) this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
+      if (playing2 && grid && this.lampFrame === null) this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
     }
     /** Bar, beat lamps and ruler, from where the record actually is. */
     renderBeat(grid) {
@@ -5174,7 +5642,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.8.0";
+  var VERSION = "0.9.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {
@@ -5241,16 +5709,16 @@ ${NEON_CSS}
     };
     console.info(LOG, `v${VERSION} ready, eq=${eqReady ? "on" : "off"}`);
   }
-  var running = window.SLAB;
+  var running2 = window.SLAB;
   var claimed = window.__slabClaim;
-  var rival = running?.version ?? claimed?.version;
+  var rival = running2?.version ?? claimed?.version;
   if (rival && !isNewer(VERSION, rival)) {
     console.info(LOG, `v${VERSION} standing down, v${rival} is already loaded`);
   } else {
     const claim = { version: VERSION };
     window.__slabClaim = claim;
     try {
-      running?.destroy?.();
+      running2?.destroy?.();
     } catch {
     }
     void boot2(claim).catch((error) => {

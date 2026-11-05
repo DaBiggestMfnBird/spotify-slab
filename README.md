@@ -21,6 +21,7 @@ SLAB does the things the client can actually do, and pairs with a small companio
 - **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
 - **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware, and with SLAB DSP running they land the instant you hit them: no waiting on Spotify to seek.
 - **The Screw bank** — the other half of the name, on keys 6 to 0: hold Screw and the pitch rides down like a hand on the pitch fader, Line runs the lyric line you just heard back on the beat, Trunk shuts the lid on the sound, Echo throws it back in time with the song, and Spin backspins the record into a chop. The holds last as long as the pad is down.
+- **DJ mode** — the `DJ` switch in the header: SLAB puts the record on full screw and works it itself, cutting on the phrase lines, running vocal lines back, looping and spinning out of sections, throwing echoes, riding Screw over the hook. It plays it by what kind of record it is, leans toward how you play, and hands the record back for eight bars whenever you hit a pad.
 - **The Tape bank** — what the record plays through, over any mood: a room for the reverb, a worn cassette's wow and hiss, a played record's crackle, a cheap sampler's crunch. It stays on until you clean it off.
 - **Your own mood, kept for the artist** — a seventh door, Mine, keeps the sound you have on, and Keep locks a mood to whoever is playing, so UGK always comes on Screwed.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
@@ -90,6 +91,24 @@ The tape stays on over every mood until **Clean tape** takes it off, and Mine ke
 ![The three banks: Chop, Screw and Tape](docs/banks.png)
 
 Keyboard `1`–`0` plays the pads while the panel is open. A held key on Chop is one hit, a held key on Screw, Trunk or Echo holds it, and digits typed into Spotify's search or any text field never reach them. If the window loses the keys mid-hold, everything lets go. `Esc` closes the panel from inside it. A pad that can't do anything (no beat grid, or not that much record behind the needle yet) says why instead of doing nothing.
+
+### DJ mode
+
+The `DJ` switch in the header hands the record to SLAB. It puts it on **full screw**, the Screwed mood ridden seven semitones down on a worn tape, and works it the way a screw DJ works a tape, reading the bars, the song's sections and its lyric lines:
+
+| Where | What it plays |
+|---|---|
+| A phrase line | A chop back to the bar that ended the phrase, or two or four bars back |
+| The end of a vocal line | The line run back, on the beat |
+| A section's last bar | The bar looped once more, or a spin back out of it, and an echo thrown into what's next |
+| The hook (the song's loudest sections) | Screw held down over a bar |
+| A breakdown (its quietest) | The trunk shut for two bars |
+
+How much of each depends on what kind of record it is, from the artist's genres on Spotify, or with none, from the tempo. Houston and Southern rap get worked hardest, trap gets spun and looped, slow jams get their lines run back and long Screw holds, band and dance records more echoes and loops. The header says how it's reading the record: *DJ on: full screw, Houston*.
+
+![DJ mode on: the header reads DJ on: full screw, Houston, and the record sits seven semitones down](docs/dj.png)
+
+It also leans toward how you play. The chops, loops, lines, spins and holds you play yourself are counted, by kind of record and where in the phrase you play them, and DJ mode makes more of those moves in those places. Any pad of yours from the Chop or Screw bank takes the record back for eight bars; the tape pads leave it with the DJ. It decides one bar at a time, never acts on a bar it just replayed, and the same track gets the same mix. Pause, and whatever it had planned is called off. Switch it off and your sound comes back as it was. A mood kept for an artist waits while DJ mode is on, and goes on when you switch it off. Auto chop rests while DJ mode is on.
 
 Auto chop cuts on the phrase lines this music is built on: with every 4 bars, at the top of bars 5, 9, 13 and so on, replaying the bar that ended the phrase. Only bars reached for the first time count, so the replayed bar, your own chops and a running loop can never set it off again. The stepper shows how many bars until the next cut.
 
@@ -252,6 +271,9 @@ src/
     lyrics.ts      Spotify's synced lyrics, for running a line back
     keep.ts        moods kept for artists
     tape.ts        the Tape bank: rooms and layers over the mood
+    dj.ts          DJ mode: what it plays, bar by bar
+    genre.ts       what kind of record it is, from the artist's genres
+    style.ts       how you play, learned from your pads
     clock.ts       worker ticker (main-thread timers get clamped when hidden)
     state.ts       localStorage persistence
   ui/
