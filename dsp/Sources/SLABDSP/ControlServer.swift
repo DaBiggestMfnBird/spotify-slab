@@ -228,7 +228,7 @@ final class ControlServer {
         case .waitingForProcess: break
         }
         // What this helper can do beyond 0.3.0: SLAB only sends a route to a helper that names it.
-        payload["features"] = ["jump", "spin", "hold"]
+        payload["features"] = ["jump", "spin", "hold", "tape", "throw"]
         if let graph {
             payload["latencyMs"] = (graph.latencyMs * 10).rounded() / 10
             payload["droppedFrames"] = graph.droppedFrames
@@ -251,6 +251,7 @@ final class ControlServer {
             "pitch": p.pitch, "reverb": p.reverb, "reverbPreset": p.reverbPreset,
             "delayTime": p.delayTime, "delayFeedback": p.delayFeedback,
             "delayMix": p.delayMix, "lowpass": p.lowpass, "gain": p.gain,
+            "wow": p.wow, "hiss": p.hiss, "crackle": p.crackle, "crush": p.crush,
         ]
     }
 
@@ -276,6 +277,10 @@ final class ControlServer {
             if let v = object["delayMix"] as? NSNumber { p.delayMix = v.floatValue }
             if let v = object["lowpass"] as? NSNumber { p.lowpass = v.floatValue }
             if let v = object["gain"] as? NSNumber { p.gain = v.floatValue }
+            if let v = object["wow"] as? NSNumber { p.wow = max(0, min(1, v.floatValue)) }
+            if let v = object["hiss"] as? NSNumber { p.hiss = max(0, min(1, v.floatValue)) }
+            if let v = object["crackle"] as? NSNumber { p.crackle = max(0, min(1, v.floatValue)) }
+            if let v = object["crush"] as? NSNumber { p.crush = max(0, min(1, v.floatValue)) }
             supervisor.apply(p)
             return (200, ["ok": true, "params": Self.dictionary(p)])
 
