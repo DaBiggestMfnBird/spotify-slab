@@ -2294,6 +2294,27 @@ ${NEON_CSS}
       return false;
     }
   }
+  function steer(animation, phase, periodMs, settling = false) {
+    const rate = 1e3 / periodMs;
+    const want = (phase % 1 + 1) % 1;
+    const timeline = Number(document.timeline?.currentTime ?? performance.now());
+    const since = Math.max(0, performance.now() - timeline);
+    const time = Number(animation.currentTime ?? 0) + (animation.playState === "running" ? since * animation.playbackRate : 0);
+    let error = want - (time % 1e3 + 1e3) % 1e3 / 1e3;
+    error -= Math.round(error);
+    const snapAt = settling ? 0.012 : 0.12;
+    if (animation.playState !== "running" || Math.abs(error) > snapAt) {
+      const started = animation.playState !== "running";
+      animation.currentTime = want * 1e3 - (started ? 0 : since * rate);
+      animation.playbackRate = rate;
+      animation.play();
+      return started;
+    }
+    const ride = rate * (1 + Math.max(-0.06, Math.min(0.06, error * 1.6)));
+    if (typeof animation.updatePlaybackRate === "function") animation.updatePlaybackRate(ride);
+    else animation.playbackRate = ride;
+    return false;
+  }
   function progressMs() {
     try {
       return Spicetify.Player?.getProgress?.() ?? 0;
@@ -2393,6 +2414,14 @@ ${NEON_CSS}
       this.renderedCents = null;
       /** Spokes and knock-off spin as one; two animations on one clock. */
       this.spinAnimations = [];
+      /** The big wheel's turn and its ring's beat kick, run by the compositor and steered from the beat clock. */
+      this.wheelTurn = null;
+      this.ringKick = null;
+      /** A smooth playhead for the wheel: Spotify's position reaches the page in steps and with jitter. */
+      this.wheelClock = null;
+      this.lastWheelSteer = 0;
+      /** When the wheel last started turning; for a moment after, it may still set itself straight. */
+      this.wheelStartedAt = 0;
       this.strikeAnimation = null;
       this.spinning = false;
       this.modernEq = false;
@@ -3098,24 +3127,61 @@ ${NEON_CSS}
       this.bigWheelEl.style.top = `${Math.round(y - BIG_WHEEL_BOX / 2)}px`;
     }
     /**
-     * The big wheel turns once a bar, read off the playhead every frame, so it
-     * is on the beat by construction: beat one has the knock-off level, every
-     * beat after it is a quarter turn. The ring kicks on each beat and settles
-     * before the next one. Still when paused, with no beat grid, or for anyone
-     * who has asked for less motion.
+     * The big wheel turns once a bar and its ring kicks on every beat. Both run
+     * as compositor animations, so a busy page can't make them stutter, and the
+     * beat clock only steers them: it reads the playhead, works out where the
+     * wheel should be, and nudges its speed a few percent to close any gap, the
+     * way a DJ rides a turntable's pitch to hold a mix. Only a real jump (a seek,
+     * a new track) snaps it. Chops and loops jump whole bars, so the phase they
+     * land on is the phase the wheel already has.
      */
-    turnBigWheel(grid, progress, bar, beat) {
-      if (bar < 0 || reducedMotion()) return;
-      const start = barStartMs(grid, bar);
-      const length = barLengthMs(grid, bar);
-      if (!(length > 0)) return;
-      const turn = Math.min(1, Math.max(0, (progress - start) / length));
-      this.bigTurnEl.style.transform = `rotate(${(turn * 360).toFixed(2)}deg)`;
+    turnBigWheel(grid, raw) {
+      if (reducedMotion()) {
+        this.stopBigWheel();
+        return;
+      }
+      const t = performance.now();
+      const clock = this.wheelClock;
+      if (!clock || Math.abs(raw - (clock.pos + (t - clock.at))) > 320) {
+        this.wheelClock = { pos: raw, at: t, raw };
+      } else if (raw !== clock.raw) {
+        const predicted = clock.pos + (t - clock.at);
+        this.wheelClock = { pos: predicted + (raw - predicted) * 0.2, at: t, raw };
+      }
+      const steering = this.wheelTurn?.playState === "running" && this.ringKick?.playState === "running";
+      if (steering && t - this.lastWheelSteer < 180) return;
+      this.lastWheelSteer = t;
+      const pos = this.wheelClock.pos + (t - this.wheelClock.at);
+      const bar = barIndexAt(grid, pos);
+      if (bar < 0) return;
+      const barLength = barLengthMs(grid, bar);
+      if (!(barLength > 0)) return;
+      this.wheelTurn ?? (this.wheelTurn = this.bigTurnEl.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
+        duration: 1e3,
+        iterations: Infinity,
+        easing: "linear"
+      }));
+      this.ringKick ?? (this.ringKick = this.ringTube.gas.animate(
+        [
+          { opacity: 0.9, easing: "cubic-bezier(0.15, 0.7, 0.3, 1)" },
+          { opacity: 0.28, offset: 0.8 },
+          { opacity: 0.28 }
+        ],
+        { duration: 1e3, iterations: Infinity }
+      ));
+      const settling = t - this.wheelStartedAt < 1200;
+      if (steer(this.wheelTurn, (pos - barStartMs(grid, bar)) / barLength, barLength, settling)) this.wheelStartedAt = t;
+      const beat = beatIndexAt(grid, pos);
       const beatStart = grid.beats[beat];
       if (beatStart === void 0) return;
-      const beatLength = (grid.beats[beat + 1] ?? beatStart + length / Math.max(1, grid.timeSignature || 4)) - beatStart;
-      const since = Math.max(0, (progress - beatStart) / Math.max(1, beatLength));
-      this.ringTube.gas.style.opacity = (0.28 + 0.62 * Math.exp(-since * 5)).toFixed(3);
+      const beatLength = (grid.beats[beat + 1] ?? beatStart + barLength / Math.max(1, grid.timeSignature || 4)) - beatStart;
+      if (beatLength > 0) steer(this.ringKick, (pos - beatStart) / beatLength, beatLength, settling);
+    }
+    /** Paused, closed or no beat: the wheel stops where it is, and picks the beat up again on play. */
+    stopBigWheel() {
+      this.wheelTurn?.pause();
+      this.ringKick?.pause();
+      this.wheelClock = null;
     }
     /** Only when a short window has hidden part of the panel. Writes only on change. */
     renderScrollCue() {
@@ -3789,6 +3855,7 @@ ${NEON_CSS}
       }
       this.renderLit();
       this.updateSpin();
+      if (!playingNow || this.panel.hidden) this.stopBigWheel();
       if (this.panel.hidden) return;
       this.renderHelperLine();
       const playing = isPlaying();
@@ -3841,7 +3908,7 @@ ${NEON_CSS}
       this.setLampCount(Math.min(7, beatsPerBar));
       this.renderLamps(beatInBar);
       setAttr(this.lampsEl, "aria-label", `Beat ${beatInBar + 1} of ${beatsPerBar}`);
-      this.turnBigWheel(grid, progress, bar, beat);
+      this.turnBigWheel(grid, progress);
       this.buildRuler(grid);
       if (bar !== this.rulerBar) {
         this.rulerBar = bar;
@@ -3858,9 +3925,15 @@ ${NEON_CSS}
      */
     tickBeat() {
       this.lampFrame = null;
-      if (this.disposed || this.panel.hidden || !isPlaying()) return;
+      if (this.disposed || this.panel.hidden || !isPlaying()) {
+        this.stopBigWheel();
+        return;
+      }
       const grid = gridFor();
-      if (!grid) return;
+      if (!grid) {
+        this.stopBigWheel();
+        return;
+      }
       this.renderBeat(grid);
       this.renderEvery();
       this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
