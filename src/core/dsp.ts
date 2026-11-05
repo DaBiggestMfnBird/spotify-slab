@@ -24,6 +24,11 @@ export interface DspParams {
     /** Low-pass cutoff in Hz; 20000 = bypass. */
     lowpass: number;
     gain: number;
+    /** Tape, each 0–1: the speed wandering, a cassette's hiss, a record's crackle, a sampler's crunch. */
+    wow: number;
+    hiss: number;
+    crackle: number;
+    crush: number;
 }
 
 export interface DspStatus {
@@ -45,6 +50,10 @@ export interface DspStatus {
     spin?: boolean;
     /** It can hold a pad on top of the mood and ramp it (0.5.0 on). */
     hold?: boolean;
+    /** It plays the record through tape: wow, hiss, crackle, crush (0.6.0 on). */
+    tape?: boolean;
+    /** Its echo is a send, so a thrown echo rings out after the pad is let go (0.6.0 on). */
+    throw?: boolean;
     /** What Spotify's seeks have lately cost, as the helper measured them. */
     seekGapMs?: number;
     /** Jumps the helper gave up on (Spotify never came back) and went live from, since it started. */
@@ -84,7 +93,8 @@ function publish(next: DspStatus): void {
         next.audio !== status.audio ||
         next.jump !== status.jump ||
         next.spin !== status.spin ||
-        next.hold !== status.hold;
+        next.hold !== status.hold ||
+        next.tape !== status.tape;
     status = next;
     if (changed) for (const listener of listeners) listener(status);
 }
@@ -154,6 +164,8 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
             jump: Array.isArray(payload.features) && payload.features.includes("jump"),
             spin: Array.isArray(payload.features) && payload.features.includes("spin"),
             hold: Array.isArray(payload.features) && payload.features.includes("hold"),
+            tape: Array.isArray(payload.features) && payload.features.includes("tape"),
+            throw: Array.isArray(payload.features) && payload.features.includes("throw"),
             seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : undefined,
             wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : undefined,
         });
@@ -327,6 +339,11 @@ export async function dspSpin(order: SpinOrder): Promise<boolean> {
         }, 2_600 + order.spinMs);
     }
     return ok;
+}
+
+/** A helper that plays the record through tape, with Spotify's audio coming through it now. */
+export function canTape(): boolean {
+    return status.linked && status.tapping === true && status.audio === true && status.tape === true;
 }
 
 /** A helper that can hold a pad on top of the mood, with Spotify's audio coming through it now. */

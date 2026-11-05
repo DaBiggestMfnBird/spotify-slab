@@ -128,7 +128,7 @@ self.onmessage = (event) => {
     return status;
   }
   function publish(next) {
-    const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio || next.jump !== status.jump || next.spin !== status.spin || next.hold !== status.hold;
+    const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio || next.jump !== status.jump || next.spin !== status.spin || next.hold !== status.hold || next.tape !== status.tape;
     status = next;
     if (changed) for (const listener3 of listeners) listener3(status);
   }
@@ -174,6 +174,8 @@ self.onmessage = (event) => {
         jump: Array.isArray(payload.features) && payload.features.includes("jump"),
         spin: Array.isArray(payload.features) && payload.features.includes("spin"),
         hold: Array.isArray(payload.features) && payload.features.includes("hold"),
+        tape: Array.isArray(payload.features) && payload.features.includes("tape"),
+        throw: Array.isArray(payload.features) && payload.features.includes("throw"),
         seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : void 0,
         wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : void 0
       });
@@ -286,6 +288,9 @@ self.onmessage = (event) => {
       }, 2600 + order.spinMs);
     }
     return ok;
+  }
+  function canTape() {
+    return status.linked && status.tapping === true && status.audio === true && status.tape === true;
   }
   function canHold() {
     return status.linked && status.tapping === true && status.audio === true && status.hold === true;
@@ -930,7 +935,11 @@ self.onmessage = (event) => {
     delayFeedback: 0,
     delayMix: 0,
     lowpass: 2e4,
-    gain: 0
+    gain: 0,
+    wow: 0,
+    hiss: 0,
+    crackle: 0,
+    crush: 0
   };
   var MOODS = [
     {
@@ -1136,6 +1145,50 @@ self.onmessage = (event) => {
     return chain;
   }
 
+  // src/core/tape.ts
+  var ROOMS = [
+    { id: "smallRoom", name: "Small room", wet: 18 },
+    { id: "plate", name: "Plate", wet: 22 },
+    { id: "mediumChamber", name: "Chamber", wet: 24 },
+    { id: "largeHall", name: "Hall", wet: 28 },
+    { id: "cathedral", name: "Cathedral", wet: 32 }
+  ];
+  var CLEAN_TAPE = { room: null, wow: false, hiss: false, crackle: false, crush: false };
+  function withTape(dsp, tape) {
+    const room = ROOMS.find((r) => r.id === tape.room);
+    return {
+      ...dsp,
+      reverbPreset: room ? room.id : dsp.reverbPreset,
+      reverb: room ? Math.max(dsp.reverb, room.wet) : dsp.reverb,
+      wow: tape.wow ? 1 : dsp.wow,
+      hiss: tape.hiss ? 1 : dsp.hiss,
+      crackle: tape.crackle ? 1 : dsp.crackle,
+      crush: tape.crush ? 1 : dsp.crush
+    };
+  }
+  function nextRoom(id) {
+    const index = ROOMS.findIndex((room) => room.id === id);
+    if (index < 0) return ROOMS[0].id;
+    return index + 1 < ROOMS.length ? ROOMS[index + 1].id : null;
+  }
+  function roomName(id) {
+    return ROOMS.find((room) => room.id === id)?.name ?? "The mood's";
+  }
+  function isClean(tape) {
+    return !tape.room && !tape.wow && !tape.hiss && !tape.crackle && !tape.crush;
+  }
+  function readTape(raw) {
+    if (!raw || typeof raw !== "object") return { ...CLEAN_TAPE };
+    const tape = raw;
+    return {
+      room: typeof tape.room === "string" && ROOMS.some((room) => room.id === tape.room) ? tape.room : null,
+      wow: tape.wow === true,
+      hiss: tape.hiss === true,
+      crackle: tape.crackle === true,
+      crush: tape.crush === true
+    };
+  }
+
   // src/core/state.ts
   var KEY = "slab:state:v1";
   var DEFAULTS = {
@@ -1147,7 +1200,8 @@ self.onmessage = (event) => {
     eqOwner: "auto",
     bank: "chop",
     screwDepth: 5,
-    mine: null
+    mine: null,
+    tape: CLEAN_TAPE
   };
   function clampPitch(value) {
     if (!Number.isFinite(value)) return 0;
@@ -1175,8 +1229,13 @@ self.onmessage = (event) => {
         delayFeedback: finite(dsp.delayFeedback, 0),
         delayMix: finite(dsp.delayMix, 0),
         lowpass: finite(dsp.lowpass, 2e4),
-        gain: finite(dsp.gain, 0)
-      }
+        gain: finite(dsp.gain, 0),
+        wow: Math.max(0, Math.min(1, finite(dsp.wow, 0))),
+        hiss: Math.max(0, Math.min(1, finite(dsp.hiss, 0))),
+        crackle: Math.max(0, Math.min(1, finite(dsp.crackle, 0))),
+        crush: Math.max(0, Math.min(1, finite(dsp.crush, 0)))
+      },
+      ...saved.tape ? { tape: readTape(saved.tape) } : {}
     };
   }
   function loadState() {
@@ -1184,7 +1243,7 @@ self.onmessage = (event) => {
       const raw = localStorage.getItem(KEY);
       if (!raw) {
         setMine(null);
-        return { ...DEFAULTS };
+        return { ...DEFAULTS, tape: { ...CLEAN_TAPE } };
       }
       const parsed = JSON.parse(raw);
       const mine2 = readMine(parsed.mine);
@@ -1198,13 +1257,14 @@ self.onmessage = (event) => {
         // State saved before the slider existed has no pitch; the mood's is the truth.
         pitch: typeof parsed.pitch === "number" ? clampPitch(parsed.pitch) : moodById(moodId).dsp.pitch,
         eqOwner: parsed.eqOwner === "slab" || parsed.eqOwner === "modern" ? parsed.eqOwner : DEFAULTS.eqOwner,
-        bank: parsed.bank === "screw" ? "screw" : "chop",
+        bank: parsed.bank === "screw" || parsed.bank === "tape" ? parsed.bank : "chop",
         screwDepth: typeof parsed.screwDepth === "number" && parsed.screwDepth >= SCREW_MIN && parsed.screwDepth <= SCREW_MAX ? Math.round(parsed.screwDepth) : DEFAULTS.screwDepth,
-        mine: mine2
+        mine: mine2,
+        tape: readTape(parsed.tape)
       };
     } catch {
       setMine(null);
-      return { ...DEFAULTS };
+      return { ...DEFAULTS, tape: { ...CLEAN_TAPE } };
     }
   }
   function saveState(state) {
@@ -1269,9 +1329,10 @@ self.onmessage = (event) => {
     keepAlive();
     return true;
   }
+  var THROW_MS = 60;
   function release(name) {
     if (!down.delete(name)) return;
-    void dspHold(overlay(), RAMP[name].off);
+    void dspHold(overlay(), name === "echo" && dspStatus().throw ? THROW_MS : RAMP[name].off);
     keepAlive();
   }
   function releaseAll() {
@@ -2480,11 +2541,13 @@ ${NEON_CSS}
   margin-top: 8px;
 }
 .slab-pad { --roll: 27px; height: 54px; gap: 1px; }
-.slab-pad:is([data-pad="stop"], [data-pad="spin"]) { grid-column: 6; }
-.slab-panel:not([data-bank="screw"]) .slab-pads[data-bank="screw"],
-.slab-panel[data-bank="screw"] .slab-pads[data-bank="chop"],
-.slab-panel:not([data-bank="screw"]) .slab-auto[data-for="screw"],
-.slab-panel[data-bank="screw"] .slab-auto[data-for="chop"] { display: none; }
+.slab-pad:is([data-pad="stop"], [data-pad="spin"], [data-pad="crush"]) { grid-column: 6; }
+/* One bank's pads and its control show at a time; Chop until another is picked. */
+.slab-panel:not([data-bank="screw"]):not([data-bank="tape"]) :is(.slab-pads[data-bank="screw"], .slab-pads[data-bank="tape"], .slab-auto[data-for="screw"], .slab-auto[data-for="tape"]),
+.slab-panel[data-bank="screw"] :is(.slab-pads[data-bank="chop"], .slab-pads[data-bank="tape"], .slab-auto[data-for="chop"], .slab-auto[data-for="tape"]),
+.slab-panel[data-bank="tape"] :is(.slab-pads[data-bank="chop"], .slab-pads[data-bank="screw"], .slab-auto[data-for="chop"], .slab-auto[data-for="screw"]) { display: none; }
+/* The tape is set and left, not played from the keys: no number in the corner. */
+.slab-key:empty { display: none; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
 .slab-pad small { font-size: 12px; line-height: 14px; color: var(--wall-soft); }
 /* The number key that plays it, small in the corner like a pad number on a sampler. */
@@ -2507,7 +2570,7 @@ ${NEON_CSS}
   padding-top: 4px;
 }
 .slab-banks { display: flex; gap: 3px; flex: none; }
-.slab-bank { --roll: 30px; height: 30px; min-width: 52px; padding: 0 10px; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-bank { --roll: 30px; height: 30px; min-width: 46px; padding: 0 8px; flex-direction: row; font-weight: 600; font-size: 13px; }
 .slab-auto {
   flex: 1;
   min-width: 0;
@@ -2516,12 +2579,15 @@ ${NEON_CSS}
   justify-content: space-between;
   gap: 6px;
 }
-.slab-auto-press { --roll: 30px; min-width: 92px; height: 30px; padding: 0 10px; flex: none; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-auto-press { --roll: 30px; height: 30px; padding: 0 8px; flex: 1; min-width: 0; flex-direction: row; font-weight: 600; font-size: 13px; }
+/* Its name, then how often, and how soon while it runs. */
+.slab-auto-words { display: flex; flex-direction: column; align-items: center; min-width: 0; line-height: 14px; }
+.slab-auto-name { white-space: nowrap; }
+.slab-auto-press .slab-every { flex: none; display: block; font-size: 12px; font-weight: 500; line-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.slab-clean { --roll: 30px; height: 30px; padding: 0 12px; flex: none; flex-direction: row; font-weight: 600; font-size: 13px; }
+.slab-tape-note { text-align: left; }
 .slab-stepper { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
-.slab-every { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; font-size: 13px; line-height: 14px; color: var(--wall-soft); }
-.slab-every-n, .slab-every-next { white-space: nowrap; }
-.slab-every-next { font-size: 12px; }
-.slab-every-next:empty { display: none; }
+.slab-every { flex: 1; min-width: 0; text-align: center; font-size: 13px; line-height: 15px; color: var(--wall-soft); }
 .slab-panel[data-auto="on"] .slab-every { color: var(--wall); }
 .slab-step { --roll: 30px; flex: none; width: 30px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
 
@@ -2648,7 +2714,7 @@ ${NEON_CSS}
   /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
   --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-clean, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
   color: var(--gas-core);
   text-shadow: var(--neon-text);
 }
@@ -2669,7 +2735,7 @@ ${NEON_CSS}
   26% { text-shadow: none; }
   44%, 100% { text-shadow: var(--neon-text); }
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press, .slab-bank) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press, .slab-bank, .slab-clean) {
   animation: slab-neon-strike 420ms linear 1;
 }
 
@@ -2998,6 +3064,14 @@ ${NEON_CSS}
     (a, b) => a.dsp.pitch - b.dsp.pitch || Number(a.id === "flat") - Number(b.id === "flat")
   );
   var NEEDS_HELPER = "That pad needs SLAB DSP running on this Mac.";
+  var NEEDS_NEWER = "That pad needs a newer SLAB DSP: run bun run dsp:install.";
+  function processing() {
+    const status2 = dspStatus();
+    return status2.linked && status2.tapping === true && status2.audio === true;
+  }
+  function tapeMissing() {
+    return processing() ? NEEDS_NEWER : NEEDS_HELPER;
+  }
   var NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
   var LOOP_TIMES = 4;
   var LOOP_SUB = `${LOOP_TIMES} times`;
@@ -3020,6 +3094,8 @@ ${NEON_CSS}
       /** Held pads by the key or pointer holding them down, so the right up lets the right one go. */
       this.heldBy = /* @__PURE__ */ new Map();
       this.bankButtons = /* @__PURE__ */ new Map();
+      this.roomSub = null;
+      this.cleanButton = null;
       this.mineButton = null;
       /** The artist the Keep door last showed, so it is drawn again only when that changes. */
       this.keepShown = null;
@@ -3180,6 +3256,7 @@ ${NEON_CSS}
       this.rulerLit = this.rulerEl.querySelector(".slab-ruler-lit");
       this.rulerClip = this.rulerEl.querySelector(".slab-ruler-clip");
       this.noGridEl = h("p", { class: "slab-nogrid", id: "slab-nogrid" });
+      this.everyEl = h("span", { class: "slab-every" });
       this.switchEl = h("button", {
         class: "slab-press slab-auto-press",
         type: "button",
@@ -3187,8 +3264,7 @@ ${NEON_CSS}
         "aria-checked": String(state.auto),
         "aria-label": "Auto chop",
         onclick: () => this.toggleAuto()
-      }, h("span", {}, "Auto chop"));
-      this.everyEl = h("span", { class: "slab-every" }, h("span", { class: "slab-every-n" }), h("span", { class: "slab-every-next" }));
+      }, h("span", { class: "slab-auto-words" }, h("span", { class: "slab-auto-name" }, "Auto chop"), this.everyEl));
       this.everyDown = h("button", {
         class: "slab-press slab-step",
         type: "button",
@@ -3281,6 +3357,7 @@ ${NEON_CSS}
       this.renderAutoState();
       this.renderBank();
       this.renderDepth();
+      this.renderTape();
       this.renderKeep();
       this.renderPitch();
       this.renderEqNote();
@@ -3289,7 +3366,7 @@ ${NEON_CSS}
       this.disposeDsp = onDspChange((status2) => {
         this.renderDsp();
         if (status2.linked && !wasLinked) {
-          void sendDsp({ ...moodById(this.state.moodId).dsp, pitch: this.state.pitch });
+          void sendDsp(this.sound());
         }
         wasLinked = status2.linked;
       });
@@ -3608,7 +3685,8 @@ ${NEON_CSS}
           sub: "Hold it down",
           key: "6",
           bank: "screw",
-          needsHelper: true,
+          available: canHold,
+          unavailable: () => NEEDS_HELPER,
           run: () => press("screw", { cents: -this.state.screwDepth * 100 }),
           release: () => release("screw"),
           miss: NEEDS_HELPER
@@ -3620,7 +3698,8 @@ ${NEON_CSS}
           sub: "Hold it shut",
           key: "8",
           bank: "screw",
-          needsHelper: true,
+          available: canHold,
+          unavailable: () => NEEDS_HELPER,
           run: () => press("trunk"),
           release: () => release("trunk"),
           miss: NEEDS_HELPER
@@ -3631,33 +3710,79 @@ ${NEON_CSS}
           sub: "Hold it",
           key: "9",
           bank: "screw",
-          needsHelper: true,
+          available: canHold,
+          unavailable: () => NEEDS_HELPER,
           run: () => press("echo", { beatMs: this.beatMs() }),
           release: () => release("echo"),
           miss: NEEDS_HELPER
         },
         { id: "spin", label: "Spin", sub: "Back a bar", key: "0", bank: "screw", run: () => spinBack(), miss: tooEarly }
       ];
+      const tapeLayer = (id, label, sub) => ({
+        id,
+        label,
+        sub,
+        key: "",
+        bank: "tape",
+        available: canTape,
+        unavailable: tapeMissing,
+        run: () => {
+          const next = { ...this.state.tape };
+          next[id] = !next[id];
+          this.setTape(next);
+          this.flashActivity(`${label} ${next[id] ? "on" : "off"}`);
+          return true;
+        }
+      });
+      const tapeDefs = [
+        {
+          id: "room",
+          label: "Room",
+          sub: roomName(this.state.tape.room),
+          key: "",
+          bank: "tape",
+          available: processing,
+          unavailable: () => NEEDS_HELPER,
+          run: () => {
+            const room = nextRoom(this.state.tape.room);
+            this.setTape({ ...this.state.tape, room });
+            this.flashActivity(room ? `In the ${roomName(room).toLowerCase()}` : "Back in the mood's own room");
+            return true;
+          }
+        },
+        tapeLayer("wow", "Wow", "Worn tape"),
+        tapeLayer("hiss", "Hiss", "Cassette"),
+        tapeLayer("crackle", "Crackle", "Vinyl"),
+        tapeLayer("crush", "Crush", "Lo-fi")
+      ];
       const chopRow = this.padRow("chop", "Cuts", chopDefs);
       const screwRow = this.padRow("screw", "Holds, a line and a spin", screwDefs);
-      const auto = h(
-        "div",
-        { class: "slab-auto", "data-for": "chop" },
-        this.switchEl,
-        h("div", { class: "slab-stepper" }, this.everyDown, this.everyEl, this.everyUp)
-      );
+      const tapeRow = this.padRow("tape", "Tape", tapeDefs);
+      const auto = h("div", { class: "slab-auto", "data-for": "chop" }, this.everyDown, this.switchEl, this.everyUp);
       const depth = h(
         "div",
         { class: "slab-auto", "data-for": "screw" },
         h("div", { class: "slab-stepper" }, this.depthDown, this.depthEl, this.depthUp)
       );
+      this.cleanButton = h("button", {
+        class: "slab-press slab-clean",
+        type: "button",
+        onclick: () => this.cleanTape()
+      }, h("span", {}, "Clean tape"));
+      const tapeControl = h(
+        "div",
+        { class: "slab-auto", "data-for": "tape" },
+        this.cleanButton,
+        h("span", { class: "slab-every slab-tape-note" }, "On over every mood")
+      );
       const banks = h(
         "div",
         { class: "slab-banks", role: "radiogroup", "aria-label": "Pads" },
         this.bankButton("chop", "Chop"),
-        this.bankButton("screw", "Screw")
+        this.bankButton("screw", "Screw"),
+        this.bankButton("tape", "Tape")
       );
-      const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth);
+      const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth, tapeControl);
       this.sillEl = h(
         "div",
         { class: "slab-sill" },
@@ -3665,7 +3790,7 @@ ${NEON_CSS}
         h("span", { class: "slab-screw-at slab-screw-right", html: SILL_SCREW_RIGHT }),
         h("div", { class: "slab-sill-plate" }, this.eqNote, this.helperEl, this.speedEl)
       );
-      const lower = h("div", { class: "slab-lower" }, readout, chopRow, screwRow, bankRow);
+      const lower = h("div", { class: "slab-lower" }, readout, chopRow, screwRow, tapeRow, bankRow);
       const body = h("div", { class: "slab-body" }, head, trim, doors, lower, this.sillEl);
       panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, this.statusEl);
       panel.addEventListener("click", (event) => event.stopPropagation());
@@ -3681,9 +3806,10 @@ ${NEON_CSS}
           class: "slab-press slab-pad",
           type: "button",
           "data-pad": def.id,
-          "aria-keyshortcuts": def.key
+          ...def.key ? { "aria-keyshortcuts": def.key } : {}
         }, h("i", { class: "slab-key", "aria-hidden": "true" }, def.key), h("b", {}, def.label), sub);
         if (def.id === "loop") this.loopSub = sub;
+        if (def.id === "room") this.roomSub = sub;
         if (def.release) {
           setData(pad, "hold", "true");
           this.wireHold(pad, def);
@@ -3694,7 +3820,7 @@ ${NEON_CSS}
           });
         }
         this.padDefs.set(pad, def);
-        this.padByKey.set(def.key, pad);
+        if (def.key) this.padByKey.set(def.key, pad);
         this.pads.push(pad);
         row.append(pad);
       }
@@ -3747,7 +3873,7 @@ ${NEON_CSS}
       if (this.heldBy.has(by)) return;
       this.showBank(def.bank);
       if (isOff(pad)) {
-        this.flashActivity(def.needsHelper ? NEEDS_HELPER : NO_GRID);
+        this.flashActivity(def.available ? def.unavailable?.() ?? NEEDS_HELPER : NO_GRID);
         return;
       }
       if (def.run() !== true) {
@@ -3780,7 +3906,9 @@ ${NEON_CSS}
         onkeydown: (event) => {
           if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
           event.preventDefault();
-          const next = bank === "chop" ? "screw" : "chop";
+          const order = ["chop", "screw", "tape"];
+          const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+          const next = order[(order.indexOf(bank) + step + order.length) % order.length];
           this.showBank(next);
           this.bankButtons.get(next)?.focus();
         }
@@ -3811,6 +3939,39 @@ ${NEON_CSS}
       saveState(this.state);
       this.renderDepth();
       this.announceSettled(() => this.depthEl.textContent ?? "");
+    }
+    /** What the helper plays: the mood, through the tape, at the slider's pitch. */
+    sound(mood = moodById(this.state.moodId)) {
+      return { ...withTape(mood.dsp, this.state.tape), pitch: this.state.pitch };
+    }
+    setTape(tape) {
+      this.state.tape = { ...tape };
+      saveState(this.state);
+      this.renderTape();
+      void sendDsp(this.sound());
+    }
+    cleanTape() {
+      if (isClean(this.state.tape)) {
+        this.flashActivity("The tape is already clean");
+        return;
+      }
+      this.setTape({ ...CLEAN_TAPE });
+      this.flashActivity("Clean tape: the mood as it comes");
+    }
+    /** The tape pads stay lit while they're on, and say so to a screen reader; Room says which room it is. */
+    renderTape() {
+      const tape = this.state.tape;
+      for (const pad of this.pads) {
+        const id = pad.dataset.pad;
+        if (id === "room") {
+          setData(pad, "latched", tape.room ? "true" : "false");
+        } else if (id === "wow" || id === "hiss" || id === "crackle" || id === "crush") {
+          setData(pad, "latched", tape[id] ? "true" : "false");
+          setAttr(pad, "aria-pressed", tape[id] ? "true" : "false");
+        }
+      }
+      if (this.roomSub) setText(this.roomSub, roomName(tape.room));
+      if (this.cleanButton) setOff(this.cleanButton, isClean(tape));
     }
     renderDepth() {
       const depth = this.state.screwDepth;
@@ -3859,15 +4020,26 @@ ${NEON_CSS}
           kept = false;
           return;
         }
-        if (mineMood()) void this.applyMood(MINE_ID, true);
-        else this.saveMine(false);
+        if (mineMood()) {
+          this.bringBackMineTape();
+          void this.applyMood(MINE_ID, true);
+        } else {
+          this.saveMine(false);
+        }
       });
     }
-    /** Keeps what you hear now in Mine: this mood's curve and room, and the pitch as the slider has it. */
+    /** Mine was kept with a tape: picking it puts that tape back on. */
+    bringBackMineTape() {
+      const tape = this.state.mine?.tape;
+      if (!tape) return;
+      this.state.tape = { ...tape };
+      this.renderTape();
+    }
+    /** Keeps what you hear now in Mine: this mood's curve and room, the tape, and the pitch as the slider has it. */
     saveMine(over) {
       const current = moodById(this.state.moodId);
       const from = current.id === MINE_ID ? this.state.mine?.from ?? "flat" : current.id;
-      const saved = { from, gains: [...current.gains], dsp: { ...current.dsp, pitch: this.state.pitch } };
+      const saved = { from, gains: [...current.gains], dsp: { ...current.dsp, pitch: this.state.pitch }, tape: { ...this.state.tape } };
       this.state.mine = saved;
       setMine(saved);
       this.state.moodId = MINE_ID;
@@ -3940,6 +4112,7 @@ ${NEON_CSS}
       const pitch = clampPitch(kept.pitch);
       if (id === this.state.moodId && pitch === this.state.pitch) return;
       this.state.pitch = pitch;
+      if (id === MINE_ID) this.bringBackMineTape();
       void this.applyMood(id, false);
       if (say) this.flashActivity(`${moodById(id).name}, kept for ${artist.name || "this artist"}`);
     }
@@ -4220,7 +4393,7 @@ ${NEON_CSS}
         if (id === "flat") await restoreBaseline();
         else await applyCurve(mood.gains);
       }
-      void sendDsp({ ...mood.dsp, pitch: this.state.pitch });
+      void sendDsp(this.sound(mood));
       if (announce) this.flashActivity(mood.name, speak);
     }
     /** The one flourish: a neon sign catching as the gas strikes. */
@@ -4450,7 +4623,7 @@ ${NEON_CSS}
      * syncDspParams() gets the panel's values through when they drift.
      */
     helperParams() {
-      const sent2 = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+      const sent2 = this.sound();
       const got = dspStatus().params ?? {};
       const pick = (key) => {
         const value = got[key];
@@ -4477,11 +4650,11 @@ ${NEON_CSS}
     hearing() {
       const status2 = dspStatus();
       const remote = remoteDeviceName();
-      const processing = !remote && status2.linked && status2.tapping === true && status2.audio === true && isPlaying();
+      const processing2 = !remote && status2.linked && status2.tapping === true && status2.audio === true && isPlaying();
       const eq = !remote && eqAvailable() && this.slabOwnsEq() && this.state.moodId !== "flat";
-      const helper = processing && this.helperEffects().length > 0;
-      const shifting = processing && Math.abs(this.helperParams().pitch) >= 1;
-      return { remote, processing, shifting, audible: isPlaying() && (eq || helper) };
+      const helper = processing2 && this.helperEffects().length > 0;
+      const shifting = processing2 && Math.abs(this.helperParams().pitch) >= 1;
+      return { remote, processing: processing2, shifting, audible: isPlaying() && (eq || helper) };
     }
     /**
      * The sign and the chip are lit only while the mood can be heard. The pitch
@@ -4692,8 +4865,7 @@ ${NEON_CSS}
       const base = `Every ${every} bar${every === 1 ? "" : "s"}`;
       const grid = gridFor();
       const ahead = this.state.auto && grid && isPlaying() ? autoBarsAhead(barIndexAt(grid, progressMs())) : null;
-      setText(this.everyEl.firstElementChild, base);
-      setText(this.everyEl.lastElementChild, ahead === null ? "" : ahead === 1 ? "next bar" : `next in ${ahead}`);
+      setText(this.everyEl, ahead === null ? base.toLowerCase() : `every ${every}, ${ahead === 1 ? "next bar" : `next in ${ahead}`}`);
     }
     /**
      * What a press just did, said right above the pads in the ruler's place for
@@ -4760,7 +4932,7 @@ ${NEON_CSS}
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     firePad(pad, def) {
       if (isOff(pad)) {
-        this.flashActivity(NO_GRID);
+        this.flashActivity(def.available ? def.unavailable?.() ?? NEEDS_HELPER : NO_GRID);
         return;
       }
       void Promise.resolve(def.run()).then((ran) => {
@@ -4790,9 +4962,12 @@ ${NEON_CSS}
       if (!status2.linked) return;
       const now = Date.now();
       if (now - this.lastDspSync < 3e3) return;
-      const want = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+      const want = this.sound();
       const have = status2.params ?? {};
-      const drifted = Math.abs((have.pitch ?? 0) - want.pitch) > 1 || Math.abs((have.reverb ?? 0) - want.reverb) > 1 || Math.abs((have.lowpass ?? 2e4) - want.lowpass) > 50;
+      const tapeDrift = status2.tape === true && ["wow", "hiss", "crackle", "crush"].some(
+        (key) => Math.abs((have[key] ?? 0) - want[key]) > 0.01
+      );
+      const drifted = Math.abs((have.pitch ?? 0) - want.pitch) > 1 || Math.abs((have.reverb ?? 0) - want.reverb) > 1 || Math.abs((have.lowpass ?? 2e4) - want.lowpass) > 50 || tapeDrift;
       if (!drifted) return;
       this.lastDspSync = now;
       void sendDsp(want);
@@ -4901,14 +5076,13 @@ ${NEON_CSS}
       const speed = this.speedInfo();
       setText(this.speedEl, speed.text);
       setAttr(this.speedEl, "title", speed.hint);
-      const holding = canHold();
       for (const pad of this.pads) {
         const def = this.padDefs.get(pad);
-        const off = def?.needsHelper ? !holding : pad.dataset.pad !== "stop" && !grid;
+        const off = def?.available ? !def.available() : pad.dataset.pad !== "stop" && !grid;
         setOff(pad, off);
-        if (off && !def?.needsHelper) setAttr(pad, "aria-describedby", "slab-nogrid");
+        if (off && !def?.available) setAttr(pad, "aria-describedby", "slab-nogrid");
         else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
-        setAttr(pad, "title", off && def?.needsHelper ? NEEDS_HELPER : "");
+        setAttr(pad, "title", off && def?.available ? def.unavailable?.() ?? NEEDS_HELPER : "");
       }
       this.renderKeep();
       this.renderEvery();
@@ -5000,7 +5174,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.7.0";
+  var VERSION = "0.8.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {

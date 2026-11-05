@@ -20,18 +20,31 @@ export interface SlabState {
      * `auto` yields to ModernEQ, `slab` takes the bands back.
      */
     eqOwner: "auto" | "slab" | "modern";
-    /** Which pads show: the cuts (keys 1–5) or the holds and the spin (6–0). Both always play. */
-    bank: "chop" | "screw";
+    /** Which pads show: the cuts (keys 1–5), the holds and the spin (6–0), or the tape. The keys always play. */
+    bank: "chop" | "screw" | "tape";
     /** How far the Screw pad rides the pitch down, in semitones. */
     screwDepth: number;
     /** The sound kept in the Mine door, or null while it's empty. */
     mine: SavedMoodState | null;
+    /** What the record is played through, over whatever mood is on. */
+    tape: TapeState;
+}
+
+export interface TapeState {
+    /** The reverb's room, over the mood's own; null keeps the mood's. */
+    room: string | null;
+    wow: boolean;
+    hiss: boolean;
+    crackle: boolean;
+    crush: boolean;
 }
 
 /** As stored: see `SavedMood` in core/moods. */
 export interface SavedMoodState {
     from: string;
     gains: number[];
+    /** The tape it was kept with; older keeps have none and leave the tape as it is. */
+    tape?: TapeState;
     dsp: {
         pitch: number;
         reverb: number;
@@ -41,5 +54,9 @@ export interface SavedMoodState {
         delayMix: number;
         lowpass: number;
         gain: number;
+        wow: number;
+        hiss: number;
+        crackle: number;
+        crush: number;
     };
 }
