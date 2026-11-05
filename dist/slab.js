@@ -875,6 +875,40 @@ self.onmessage = (event) => {
     <circle r="1.8" fill="#FFFFFF" stroke="#16181A" stroke-width=".55"/>
   </g>
 </svg>`;
+  var BIG_WHEEL_SCALE = 3.1;
+  var BIG_WHEEL_RING = Math.round((TYRE_RADIUS + 1.6) * BIG_WHEEL_SCALE);
+  var BIG_WHEEL_BOX = (BIG_WHEEL_RING + 14) * 2;
+  function bigWheel() {
+    const k = BIG_WHEEL_SCALE;
+    const half = BIG_WHEEL_BOX / 2;
+    const box = `viewBox="${-half} ${-half} ${BIG_WHEEL_BOX} ${BIG_WHEEL_BOX}" width="${BIG_WHEEL_BOX}" height="${BIG_WHEEL_BOX}" aria-hidden="true" focusable="false"`;
+    const base = `
+<svg class="slab-bigwheel-base" ${box}>
+  <circle r="${fmt(TYRE_RADIUS * k)}" fill="#0B0304" opacity=".55"/>
+  <circle r="${fmt(17.6 * k)}" fill="none" stroke="#F4F0E6" stroke-width="${fmt(1.45 * k)}" opacity=".24"/>
+  <circle r="${fmt(16.15 * k)}" fill="none" stroke="#E2B53A" stroke-width="${fmt(0.85 * k)}" opacity=".34"/>
+  <circle r="${fmt(13.3 * k)}" fill="none" stroke="#C9CFD3" stroke-width="${fmt(1.8 * k)}" opacity=".26"/>
+  <circle r="${fmt(12.4 * k)}" fill="#0B0304" opacity=".5"/>
+</svg>`;
+    let spokes = "";
+    for (let i = 0; i < 30; i++) {
+      const a = i * 12;
+      spokes += `<path d="M${polar(12.3 * k, a - 2.9)}L${polar(6.8 * k, a - 3.8)}L${polar(6.8 * k, a + 3.8)}L${polar(12.3 * k, a + 2.9)}Z"/>`;
+    }
+    const turn = `
+<svg class="slab-bigwheel-turn" ${box}>
+  <g fill="#C9CFD3" opacity=".27">${spokes}</g>
+  <circle r="${fmt(7.15 * k)}" fill="none" stroke="#F5F7F8" stroke-width="${fmt(1.1 * k)}" opacity=".3"/>
+  <path d="M${fmt(-7.7 * k)} ${fmt(-2 * k)}L${fmt(-2.6 * k)} ${fmt(-1.45 * k)}L${fmt(2.6 * k)} ${fmt(-1.45 * k)}L${fmt(7.7 * k)} ${fmt(-2 * k)}L${fmt(7.7 * k)} ${fmt(2 * k)}L${fmt(2.6 * k)} ${fmt(1.45 * k)}L${fmt(-2.6 * k)} ${fmt(1.45 * k)}L${fmt(-7.7 * k)} ${fmt(2 * k)}Z" fill="#F1F4F5" opacity=".34"/>
+</svg>`;
+    return { base, turn };
+  }
+  var BIG_WHEEL = bigWheel();
+  function bigWheelRingPath() {
+    const c = BIG_WHEEL_BOX / 2;
+    const r = BIG_WHEEL_RING;
+    return `M${fmt(c - r)} ${fmt(c)}A${r} ${r} 0 1 1 ${fmt(c + r)} ${fmt(c)}A${r} ${r} 0 1 1 ${fmt(c - r)} ${fmt(c)}Z`;
+  }
   function chipIcon() {
     let spokes = "";
     for (let i = 0; i < 10; i++) spokes += `<path d="M${polar(5, i * 36 + 18, 10, 10)}L${polar(2.2, i * 36 + 18, 10, 10)}"/>`;
@@ -1118,6 +1152,36 @@ self.onmessage = (event) => {
 .slab-panel[data-tube="off"] .slab-number-tube .slab-tube-gas { visibility: hidden; }
 /* The helper is running with nothing to shift: warm glass, not lit. */
 .slab-panel[data-tube="idle"] .slab-number-tube .slab-tube-gas { opacity: 0.24; }
+
+/* The nameplate on the deck lid, bent in the same glass: a fine tube for small script. */
+.slab-logo-tube { width: 58px; height: 28px; }
+.slab-logo-tube .slab-tube-cast { transform: translate(0.7px, 1.3px); opacity: 0.75; }
+.slab-logo-tube [data-l="shadowWide"] { stroke-width: 3.2; }
+.slab-logo-tube [data-l="shadow"] { stroke-width: 2; }
+.slab-logo-tube [data-l="frost"] { stroke-width: 1.8; }
+.slab-logo-tube [data-l="frostHi"] { stroke-width: 0.55; }
+.slab-logo-tube [data-l="bloom"] { stroke-width: 7.5; }
+.slab-logo-tube [data-l="halo"] { stroke-width: 3.8; }
+.slab-logo-tube [data-l="glass"] { stroke-width: 1.9; }
+.slab-logo-tube [data-l="core"] { stroke-width: 0.8; }
+.slab-panel[data-gas="off"] .slab-logo-tube .slab-tube-gas { visibility: hidden; }
+
+/*
+ * The ring round the big wheel: a thin loop of glass at low current, so it never
+ * outshines the sign, the number or the rail. Each beat drives it up and it
+ * settles before the next (deck.ts sets the opacity from the beat clock).
+ */
+.slab-ring-tube .slab-tube-cast { transform: translate(1px, 2px); opacity: 0.45; }
+.slab-ring-tube [data-l="shadowWide"] { stroke-width: 4; opacity: 0.1; }
+.slab-ring-tube [data-l="shadow"] { stroke-width: 2.2; opacity: 0.3; }
+.slab-ring-tube [data-l="frost"] { stroke-width: 1.8; opacity: 0.4; }
+.slab-ring-tube [data-l="frostHi"] { opacity: 0.35; }
+.slab-ring-tube [data-l="bloom"] { stroke-width: 9; opacity: 0.08; }
+.slab-ring-tube [data-l="halo"] { stroke-width: 4.5; opacity: 0.22; }
+.slab-ring-tube [data-l="glass"] { stroke-width: 1.9; }
+.slab-ring-tube [data-l="core"] { stroke-width: 0.7; }
+.slab-ring-tube .slab-tube-gas { opacity: 0.3; }
+.slab-panel[data-gas="off"] .slab-ring-tube .slab-tube-gas { visibility: hidden; }
 
 /* The number is small glass close to the board: thinner tube, a lighter, shorter shadow. */
 .slab-number-tube .slab-tube-cast { transform: translate(1px, 2px); opacity: 0.6; }
@@ -1969,8 +2033,64 @@ ${NEON_CSS}
 }
 .slab-chip[aria-expanded="true"] { background: rgba(255, 255, 255, 0.1); }
 
+/*
+ * The trunk's neon. While the mood can be heard (data-gas="on"), every word on
+ * the paint is lit gas: a white-hot core with the argon breathing round it, the
+ * way lettering looks on a sign at night. Secondary words burn in the glass
+ * colour at a lower current. With nothing heard it is all whitewall again, and
+ * the sill stays stamped steel: it is a scuff plate, not a sign.
+ */
+.slab-panel {
+  --neon-text: 0 0 1px rgba(243, 245, 255, 0.9), 0 0 4px color-mix(in srgb, var(--gas-glass) 75%, transparent), 0 0 11px color-mix(in srgb, var(--gas) 55%, transparent);
+  --neon-text-soft: 0 0 1px color-mix(in srgb, var(--gas-glass) 80%, transparent), 0 0 6px color-mix(in srgb, var(--gas) 45%, transparent);
+  /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
+  --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
+}
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *) {
+  color: var(--gas-core);
+  text-shadow: var(--neon-text);
+}
+.slab-panel[data-gas="on"] :is(.slab-sub, .slab-semi, .slab-mood-cents, .slab-bpm small, .slab-pad small, .slab-key, .slab-nogrid, .slab-play):not(.slab-press[aria-disabled="true"] *) {
+  color: var(--neon-soft);
+  text-shadow: var(--neon-text-soft);
+}
+/* A lit press is already full of gas; its small words burn white so they still read on it. */
+.slab-panel[data-gas="on"] .slab-pad:is([data-hit="true"], [data-latched="true"]) :is(small, .slab-key):not(.slab-press[aria-disabled="true"] *) {
+  color: var(--gas-core);
+}
+.slab-panel[data-gas="on"] .slab-close { color: var(--gas-core); filter: drop-shadow(0 0 3px color-mix(in srgb, var(--gas) 70%, transparent)); }
+.slab-panel[data-gas="on"] .slab-lamps i[data-on="true"] { background: var(--gas-core); box-shadow: 0 0 3px var(--gas-glass), 0 0 9px color-mix(in srgb, var(--gas) 60%, transparent); }
+/* When the gas comes on, the glass strikes: a flutter, then steady, like a sign at dusk. */
+@keyframes slab-neon-strike {
+  0% { text-shadow: none; }
+  14% { text-shadow: var(--neon-text); }
+  26% { text-shadow: none; }
+  44%, 100% { text-shadow: var(--neon-text); }
+}
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press) {
+  animation: slab-neon-strike 420ms linear 1;
+}
+
+/*
+ * The big wheel on the board behind the slider. Board-dark chrome so the glass
+ * in front stays the brightest thing; only its ring is lit, and only with the
+ * gas. It turns from the beat clock (see turnBigWheel in deck.ts), never from
+ * a CSS timer, so it can't drift off the music.
+ */
+.slab-bay > .slab-bigwheel {
+  position: absolute;
+  width: ${BIG_WHEEL_BOX}px;
+  height: ${BIG_WHEEL_BOX}px;
+  pointer-events: none;
+}
+.slab-bigwheel > svg, .slab-bigwheel-turnwrap, .slab-bigwheel > .slab-tube { position: absolute; left: 0; top: 0; }
+.slab-bigwheel-turnwrap { width: 100%; height: 100%; transform-origin: 50% 50%; will-change: transform; }
+.slab-bigwheel-turnwrap > svg { display: block; }
+.slab-panel[data-primer="true"] .slab-bigwheel { opacity: 0.6; }
+
 @media (prefers-reduced-motion: reduce) {
   .slab-panel { animation: none; }
+  .slab-panel[data-gas="on"] * { animation: none !important; }
   .slab-press, .slab-press::before, .slab-press::after, .slab-mood { transition: none; }
   .slab-mood:hover { transform: none; }
   .slab-rail[data-rolling="true"] .slab-wheel,
@@ -1985,7 +2105,12 @@ ${NEON_CSS}
  * for the default argon, as plain colours.
  */
 @supports not (color: color-mix(in srgb, red 50%, blue)) {
-  .slab-panel { --gas-spill: rgba(62, 88, 255, 0.24); }
+  .slab-panel {
+    --gas-spill: rgba(62, 88, 255, 0.24);
+    --neon-soft: #C4CFFF;
+    --neon-text: 0 0 1px rgba(243, 245, 255, 0.9), 0 0 4px rgba(157, 176, 255, 0.75), 0 0 11px rgba(77, 107, 255, 0.55);
+    --neon-text-soft: 0 0 1px rgba(157, 176, 255, 0.8), 0 0 6px rgba(77, 107, 255, 0.45);
+  }
   .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
     #0A0306 0, #0A0306 1px, #8D93D0 1px, #403E8A calc(var(--roll) * 0.22),
     #2F1730 calc(var(--roll) * 0.5), #1C070B calc(var(--roll) * 0.83),
@@ -2017,6 +2142,9 @@ ${NEON_CSS}
   /* Neon becomes plain system-coloured line work: no glow, no shadow, readable on any palette. */
   .slab-tube [data-l="glass"], .slab-tube [data-l="core"], .slab-tube [data-l="frost"], .slab-tube [data-l="frostHi"] { stroke: CanvasText; }
   .slab-tube [data-l="bloom"], .slab-tube [data-l="halo"], .slab-tube-cast, .slab-tube [data-l="dark"] { display: none; }
+  .slab-panel * { text-shadow: none !important; }
+  .slab-panel .slab-close { filter: none; }
+  .slab-bigwheel { display: none; }
 }
 `;
 
@@ -2069,21 +2197,18 @@ ${NEON_CSS}
     // the swash, off the b and back under "lab"
     "M40.2 15.7C44.6 16.6 47 19.6 42.6 21.2C35.2 23.8 23.2 22.8 15.6 20.6"
   ].join("");
-  var EMBLEM = `
-<svg class="slab-emblem" viewBox="0 0 50 24" width="58" height="28" role="img" aria-label="SLAB" focusable="false">
-  <defs>
-    <linearGradient id="slab-plate-chrome" gradientUnits="userSpaceOnUse" x1="0" y1="1.5" x2="0" y2="22">
-      <stop offset="0" stop-color="#FFFFFF"/><stop offset=".38" stop-color="#DDE2E5"/>
-      <stop offset=".55" stop-color="#8A9297"/><stop offset=".75" stop-color="#C9CFD3"/>
-      <stop offset="1" stop-color="#EEF1F2"/>
-    </linearGradient>
-  </defs>
-  <g transform="skewX(-12) translate(4.4 0)" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="${SCRIPT}" stroke="#1E0208" stroke-width="2.9" opacity=".85" transform="translate(.6 .9)"/>
-    <path d="${SCRIPT}" stroke="url(#slab-plate-chrome)" stroke-width="2.5"/>
-    <path d="${SCRIPT}" stroke="#FFFFFF" stroke-width=".55" opacity=".75" transform="translate(-.25 -.45)"/>
-  </g>
-</svg>`;
+  var NAMEPLATE_WIDTH = 58;
+  var NAMEPLATE_HEIGHT = 28;
+  function nameplateTubePath() {
+    const scale = NAMEPLATE_WIDTH / 50;
+    const top = (NAMEPLATE_HEIGHT - 24 * scale) / 2;
+    const slant = Math.tan(12 * Math.PI / 180);
+    const round = (value) => String(Math.round(value * 100) / 100);
+    return SCRIPT.replace(/(-?\d*\.?\d+)[ ,](-?\d*\.?\d+)/g, (_match, xs, ys) => {
+      const x = Number(xs), y = Number(ys);
+      return `${round((x + 4.4 - slant * y) * scale)} ${round(y * scale + top)}`;
+    });
+  }
 
   // src/ui/deck.ts
   var PITCH_LIMIT = 1200;
@@ -2100,6 +2225,7 @@ ${NEON_CSS}
   var SPIN_MS = 1600;
   var ROLL_MS = 640;
   var TAGLINE = "Slow, loud and bangin\u2019";
+  var CHIP_TITLE = "SLAB, Third Coast playback moods";
   var PX_PER_CENT = 12 / 100;
   var RAIL_WIDTH = WHEEL_SIZE + PX_PER_CENT * PITCH_LIMIT * 2;
   var RULER_WIDTH = 360;
@@ -2293,6 +2419,12 @@ ${NEON_CSS}
       this.chip = this.buildChip();
       this.tagEl = h("span", { class: "slab-tag" }, TAGLINE);
       this.signTube = new Tube("slab-sign-tube", SIGN_WIDTH, SIGN_HEIGHT);
+      this.logoTube = new Tube("slab-logo-tube", NAMEPLATE_WIDTH, NAMEPLATE_HEIGHT);
+      this.logoTube.set({ lit: nameplateTubePath(), dark: "", boots: "", supports: "" });
+      this.ringTube = new Tube("slab-ring-tube", BIG_WHEEL_BOX, BIG_WHEEL_BOX);
+      this.ringTube.set({ lit: bigWheelRingPath(), dark: "", boots: "", supports: "" });
+      this.bigTurnEl = h("div", { class: "slab-bigwheel-turnwrap", html: BIG_WHEEL.turn });
+      this.bigWheelEl = h("div", { class: "slab-bigwheel", "aria-hidden": "true", html: BIG_WHEEL.base }, this.bigTurnEl, this.ringTube.node);
       this.signEl = h("div", { class: "slab-sign", role: "img" }, this.signTube.node);
       this.subEl = h("p", { class: "slab-sub" });
       this.deadWhereEl = h("span", { class: "slab-dead-where" });
@@ -2549,7 +2681,7 @@ ${NEON_CSS}
         type: "button",
         "aria-label": "SLAB playback moods",
         "aria-expanded": "false",
-        title: "SLAB, Third Coast playback moods",
+        title: CHIP_TITLE,
         onclick: (event) => {
           event.stopPropagation();
           this.toggle(event.detail === 0);
@@ -2639,7 +2771,7 @@ ${NEON_CSS}
         html: CLOSE_ICON,
         onclick: () => this.close()
       });
-      const head = h("div", { class: "slab-head" }, h("span", { html: EMBLEM, class: "slab-badge" }), this.tagEl, close);
+      const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, close);
       const scale = h(
         "div",
         { class: "slab-scale" },
@@ -2661,7 +2793,7 @@ ${NEON_CSS}
         this.numberTube.node,
         h("div", { class: "slab-nudges" }, this.nudgeDown, this.nudgeUp)
       );
-      const bay = h("div", { class: "slab-bay" }, stage, pitchHead, this.railEl, scale);
+      const bay = h("div", { class: "slab-bay" }, this.bigWheelEl, stage, pitchHead, this.railEl, scale);
       const trim = h("div", { class: "slab-trim" }, bay);
       const moodGrid = h("div", {
         class: "slab-moods",
@@ -2893,6 +3025,7 @@ ${NEON_CSS}
       this.state.open = true;
       saveState(this.state);
       this.chip.setAttribute("aria-expanded", "true");
+      this.chip.removeAttribute("title");
       this.position();
       this.renderMoodState();
       this.refresh();
@@ -2908,6 +3041,7 @@ ${NEON_CSS}
       this.state.open = false;
       saveState(this.state);
       this.chip.setAttribute("aria-expanded", "false");
+      this.chip.setAttribute("title", CHIP_TITLE);
       this.updateSpin();
     }
     /**
@@ -2951,7 +3085,37 @@ ${NEON_CSS}
       }
       this.panel.style.left = `${Math.round(left)}px`;
       this.panel.style.top = `${Math.round(Math.max(8, top))}px`;
+      this.placeBigWheel();
       this.renderScrollCue();
+    }
+    /** The big wheel's hub sits on Normal, the middle of the slider, wherever the layout puts it. */
+    placeBigWheel() {
+      const rail = this.railEl;
+      if (!rail.offsetParent) return;
+      const x = rail.offsetLeft + railX(0);
+      const y = rail.offsetTop + rail.offsetHeight / 2;
+      this.bigWheelEl.style.left = `${Math.round(x - BIG_WHEEL_BOX / 2)}px`;
+      this.bigWheelEl.style.top = `${Math.round(y - BIG_WHEEL_BOX / 2)}px`;
+    }
+    /**
+     * The big wheel turns once a bar, read off the playhead every frame, so it
+     * is on the beat by construction: beat one has the knock-off level, every
+     * beat after it is a quarter turn. The ring kicks on each beat and settles
+     * before the next one. Still when paused, with no beat grid, or for anyone
+     * who has asked for less motion.
+     */
+    turnBigWheel(grid, progress, bar, beat) {
+      if (bar < 0 || reducedMotion()) return;
+      const start = barStartMs(grid, bar);
+      const length = barLengthMs(grid, bar);
+      if (!(length > 0)) return;
+      const turn = Math.min(1, Math.max(0, (progress - start) / length));
+      this.bigTurnEl.style.transform = `rotate(${(turn * 360).toFixed(2)}deg)`;
+      const beatStart = grid.beats[beat];
+      if (beatStart === void 0) return;
+      const beatLength = (grid.beats[beat + 1] ?? beatStart + length / Math.max(1, grid.timeSignature || 4)) - beatStart;
+      const since = Math.max(0, (progress - beatStart) / Math.max(1, beatLength));
+      this.ringTube.gas.style.opacity = (0.28 + 0.62 * Math.exp(-since * 5)).toFixed(3);
     }
     /** Only when a short window has hidden part of the panel. Writes only on change. */
     renderScrollCue() {
@@ -3406,6 +3570,7 @@ ${NEON_CSS}
       const compact = this.panel.dataset.short === "true" || !this.deadEl.hidden && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5;
       setData(this.panel, "compact", compact ? "true" : "false");
       this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
+      this.placeBigWheel();
     }
     toggleAuto() {
       if (!this.state.auto && !gridFor()) {
@@ -3676,6 +3841,7 @@ ${NEON_CSS}
       this.setLampCount(Math.min(7, beatsPerBar));
       this.renderLamps(beatInBar);
       setAttr(this.lampsEl, "aria-label", `Beat ${beatInBar + 1} of ${beatsPerBar}`);
+      this.turnBigWheel(grid, progress, bar, beat);
       this.buildRuler(grid);
       if (bar !== this.rulerBar) {
         this.rulerBar = bar;
@@ -3734,7 +3900,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.4.1";
+  var VERSION = "0.5.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {

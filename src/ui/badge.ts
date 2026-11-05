@@ -1,9 +1,10 @@
 /**
- * The deck-lid nameplate: "Slab" as a chrome script, the way 70s and 80s GM
+ * The deck-lid nameplate: "Slab" as a script, the way 70s and 80s GM
  * luxury cars carried their names on the trunk (Eldorado, Brougham, Caprice
  * Classic), not import-tuner block letters. One monoline stroke slanted like
- * handwriting, a swash off the b running back under the word, a chrome face lit
- * from above, and a dark contact shadow where it's mounted on the paint.
+ * handwriting, a swash off the b running back under the word. It is bent in
+ * the same glass as the sign (see Tube): frosted while nothing can be heard,
+ * lit gas while the mood plays, so the lid's name is part of the trunk's neon.
  */
 
 const SCRIPT = [
@@ -17,18 +18,22 @@ const SCRIPT = [
     "M40.2 15.7C44.6 16.6 47 19.6 42.6 21.2C35.2 23.8 23.2 22.8 15.6 20.6",
 ].join("");
 
-export const EMBLEM = `
-<svg class="slab-emblem" viewBox="0 0 50 24" width="58" height="28" role="img" aria-label="SLAB" focusable="false">
-  <defs>
-    <linearGradient id="slab-plate-chrome" gradientUnits="userSpaceOnUse" x1="0" y1="1.5" x2="0" y2="22">
-      <stop offset="0" stop-color="#FFFFFF"/><stop offset=".38" stop-color="#DDE2E5"/>
-      <stop offset=".55" stop-color="#8A9297"/><stop offset=".75" stop-color="#C9CFD3"/>
-      <stop offset="1" stop-color="#EEF1F2"/>
-    </linearGradient>
-  </defs>
-  <g transform="skewX(-12) translate(4.4 0)" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="${SCRIPT}" stroke="#1E0208" stroke-width="2.9" opacity=".85" transform="translate(.6 .9)"/>
-    <path d="${SCRIPT}" stroke="url(#slab-plate-chrome)" stroke-width="2.5"/>
-    <path d="${SCRIPT}" stroke="#FFFFFF" stroke-width=".55" opacity=".75" transform="translate(-.25 -.45)"/>
-  </g>
-</svg>`;
+/** The nameplate's box on the deck lid, in pixels. */
+export const NAMEPLATE_WIDTH = 58;
+export const NAMEPLATE_HEIGHT = 28;
+
+/**
+ * The same script bent in neon: the chrome nameplate's centreline, slanted and
+ * scaled into the lid's pixels, so the glass follows the letters exactly. The
+ * path is only absolute M, C and L, so every pair of numbers is a point.
+ */
+export function nameplateTubePath(): string {
+    const scale = NAMEPLATE_WIDTH / 50;
+    const top = (NAMEPLATE_HEIGHT - 24 * scale) / 2;
+    const slant = Math.tan((12 * Math.PI) / 180);
+    const round = (value: number) => String(Math.round(value * 100) / 100);
+    return SCRIPT.replace(/(-?\d*\.?\d+)[ ,](-?\d*\.?\d+)/g, (_match, xs: string, ys: string) => {
+        const x = Number(xs), y = Number(ys);
+        return `${round((x + 4.4 - slant * y) * scale)} ${round(y * scale + top)}`;
+    });
+}

@@ -1,5 +1,6 @@
 import { FONT_CSS } from "./fonts.generated";
 import { NEON_CSS } from "./neon-styles";
+import { BIG_WHEEL_BOX } from "./art";
 
 export const STYLE_ID = "slab-styles";
 
@@ -852,8 +853,64 @@ ${NEON_CSS}
 }
 .slab-chip[aria-expanded="true"] { background: rgba(255, 255, 255, 0.1); }
 
+/*
+ * The trunk's neon. While the mood can be heard (data-gas="on"), every word on
+ * the paint is lit gas: a white-hot core with the argon breathing round it, the
+ * way lettering looks on a sign at night. Secondary words burn in the glass
+ * colour at a lower current. With nothing heard it is all whitewall again, and
+ * the sill stays stamped steel: it is a scuff plate, not a sign.
+ */
+.slab-panel {
+  --neon-text: 0 0 1px rgba(243, 245, 255, 0.9), 0 0 4px color-mix(in srgb, var(--gas-glass) 75%, transparent), 0 0 11px color-mix(in srgb, var(--gas) 55%, transparent);
+  --neon-text-soft: 0 0 1px color-mix(in srgb, var(--gas-glass) 80%, transparent), 0 0 6px color-mix(in srgb, var(--gas) 45%, transparent);
+  /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
+  --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
+}
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *) {
+  color: var(--gas-core);
+  text-shadow: var(--neon-text);
+}
+.slab-panel[data-gas="on"] :is(.slab-sub, .slab-semi, .slab-mood-cents, .slab-bpm small, .slab-pad small, .slab-key, .slab-nogrid, .slab-play):not(.slab-press[aria-disabled="true"] *) {
+  color: var(--neon-soft);
+  text-shadow: var(--neon-text-soft);
+}
+/* A lit press is already full of gas; its small words burn white so they still read on it. */
+.slab-panel[data-gas="on"] .slab-pad:is([data-hit="true"], [data-latched="true"]) :is(small, .slab-key):not(.slab-press[aria-disabled="true"] *) {
+  color: var(--gas-core);
+}
+.slab-panel[data-gas="on"] .slab-close { color: var(--gas-core); filter: drop-shadow(0 0 3px color-mix(in srgb, var(--gas) 70%, transparent)); }
+.slab-panel[data-gas="on"] .slab-lamps i[data-on="true"] { background: var(--gas-core); box-shadow: 0 0 3px var(--gas-glass), 0 0 9px color-mix(in srgb, var(--gas) 60%, transparent); }
+/* When the gas comes on, the glass strikes: a flutter, then steady, like a sign at dusk. */
+@keyframes slab-neon-strike {
+  0% { text-shadow: none; }
+  14% { text-shadow: var(--neon-text); }
+  26% { text-shadow: none; }
+  44%, 100% { text-shadow: var(--neon-text); }
+}
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press) {
+  animation: slab-neon-strike 420ms linear 1;
+}
+
+/*
+ * The big wheel on the board behind the slider. Board-dark chrome so the glass
+ * in front stays the brightest thing; only its ring is lit, and only with the
+ * gas. It turns from the beat clock (see turnBigWheel in deck.ts), never from
+ * a CSS timer, so it can't drift off the music.
+ */
+.slab-bay > .slab-bigwheel {
+  position: absolute;
+  width: ${BIG_WHEEL_BOX}px;
+  height: ${BIG_WHEEL_BOX}px;
+  pointer-events: none;
+}
+.slab-bigwheel > svg, .slab-bigwheel-turnwrap, .slab-bigwheel > .slab-tube { position: absolute; left: 0; top: 0; }
+.slab-bigwheel-turnwrap { width: 100%; height: 100%; transform-origin: 50% 50%; will-change: transform; }
+.slab-bigwheel-turnwrap > svg { display: block; }
+.slab-panel[data-primer="true"] .slab-bigwheel { opacity: 0.6; }
+
 @media (prefers-reduced-motion: reduce) {
   .slab-panel { animation: none; }
+  .slab-panel[data-gas="on"] * { animation: none !important; }
   .slab-press, .slab-press::before, .slab-press::after, .slab-mood { transition: none; }
   .slab-mood:hover { transform: none; }
   .slab-rail[data-rolling="true"] .slab-wheel,
@@ -868,7 +925,12 @@ ${NEON_CSS}
  * for the default argon, as plain colours.
  */
 @supports not (color: color-mix(in srgb, red 50%, blue)) {
-  .slab-panel { --gas-spill: rgba(62, 88, 255, 0.24); }
+  .slab-panel {
+    --gas-spill: rgba(62, 88, 255, 0.24);
+    --neon-soft: #C4CFFF;
+    --neon-text: 0 0 1px rgba(243, 245, 255, 0.9), 0 0 4px rgba(157, 176, 255, 0.75), 0 0 11px rgba(77, 107, 255, 0.55);
+    --neon-text-soft: 0 0 1px rgba(157, 176, 255, 0.8), 0 0 6px rgba(77, 107, 255, 0.45);
+  }
   .slab-press { --lit-rolls: repeating-linear-gradient(180deg,
     #0A0306 0, #0A0306 1px, #8D93D0 1px, #403E8A calc(var(--roll) * 0.22),
     #2F1730 calc(var(--roll) * 0.5), #1C070B calc(var(--roll) * 0.83),
@@ -900,5 +962,8 @@ ${NEON_CSS}
   /* Neon becomes plain system-coloured line work: no glow, no shadow, readable on any palette. */
   .slab-tube [data-l="glass"], .slab-tube [data-l="core"], .slab-tube [data-l="frost"], .slab-tube [data-l="frostHi"] { stroke: CanvasText; }
   .slab-tube [data-l="bloom"], .slab-tube [data-l="halo"], .slab-tube-cast, .slab-tube [data-l="dark"] { display: none; }
+  .slab-panel * { text-shadow: none !important; }
+  .slab-panel .slab-close { filter: none; }
+  .slab-bigwheel { display: none; }
 }
 `;

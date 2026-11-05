@@ -16,6 +16,8 @@ import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } fro
 import {
     barCount,
     barIndexAt,
+    barLengthMs,
+    barStartMs,
     beatIndexAt,
     gridFor,
     loadGrid,
@@ -25,6 +27,8 @@ import { MOODS, curvePath, moodById } from "../core/moods";
 import { clampPitch, saveState } from "../core/state";
 import type { Grid, SlabState } from "../types";
 import {
+    BIG_WHEEL,
+    BIG_WHEEL_BOX,
     CHIP_ICON,
     CLOSE_ICON,
     POKE_X,
@@ -37,11 +41,12 @@ import {
     WHEEL_SIZE,
     WHEEL_SPOKES,
     WHEEL_STATIC,
+    bigWheelRingPath,
 } from "./art";
 import { NUMBER_HEIGHT, NUMBER_WIDTH, SIGN_HEIGHT, SIGN_WIDTH, numberLayout, signLayout } from "./neon";
 import { CSS, STYLE_ID } from "./styles";
 import { Tube } from "./tube";
-import { EMBLEM } from "./badge";
+import { NAMEPLATE_HEIGHT, NAMEPLATE_WIDTH, nameplateTubePath } from "./badge";
 
 type Props = Record<string, unknown>;
 
@@ -68,6 +73,7 @@ const SPIN_MS = 1600;
 /** Keep in step with the transition in styles.ts. */
 const ROLL_MS = 640;
 const TAGLINE = "Slow, loud and bangin’";
+const CHIP_TITLE = "SLAB, Third Coast playback moods";
 
 /** Pixels per cent. The track is laid out so 100 cents is exactly 12 px. */
 const PX_PER_CENT = 12 / 100;
@@ -276,6 +282,12 @@ export class Deck {
 
     private tagEl: HTMLSpanElement;
     private signTube: Tube;
+    /** The nameplate, bent in neon. */
+    private logoTube: Tube;
+    /** The big wheel on the board behind the slider, and the neon ring round it. */
+    private bigWheelEl: HTMLDivElement;
+    private bigTurnEl: HTMLDivElement;
+    private ringTube: Tube;
     private signEl: HTMLDivElement;
     private subEl: HTMLParagraphElement;
     private deadEl: HTMLParagraphElement;
@@ -388,6 +400,12 @@ export class Deck {
 
         this.tagEl = h("span", { class: "slab-tag" }, TAGLINE);
         this.signTube = new Tube("slab-sign-tube", SIGN_WIDTH, SIGN_HEIGHT);
+        this.logoTube = new Tube("slab-logo-tube", NAMEPLATE_WIDTH, NAMEPLATE_HEIGHT);
+        this.logoTube.set({ lit: nameplateTubePath(), dark: "", boots: "", supports: "" });
+        this.ringTube = new Tube("slab-ring-tube", BIG_WHEEL_BOX, BIG_WHEEL_BOX);
+        this.ringTube.set({ lit: bigWheelRingPath(), dark: "", boots: "", supports: "" });
+        this.bigTurnEl = h("div", { class: "slab-bigwheel-turnwrap", html: BIG_WHEEL.turn });
+        this.bigWheelEl = h("div", { class: "slab-bigwheel", "aria-hidden": "true", html: BIG_WHEEL.base }, this.bigTurnEl, this.ringTube.node);
         this.signEl = h("div", { class: "slab-sign", role: "img" }, this.signTube.node);
         this.subEl = h("p", { class: "slab-sub" });
         // Where it's playing, then what that means, each on its own line, so the second is never the one cut.
@@ -677,7 +695,7 @@ export class Deck {
             type: "button",
             "aria-label": "SLAB playback moods",
             "aria-expanded": "false",
-            title: "SLAB, Third Coast playback moods",
+            title: CHIP_TITLE,
             onclick: (event: MouseEvent) => {
                 event.stopPropagation();
                 // A keyboard press arrives as a click with no pointer detail.
@@ -783,7 +801,7 @@ export class Deck {
             onclick: () => this.close(),
         });
 
-        const head = h("div", { class: "slab-head" }, h("span", { html: EMBLEM, class: "slab-badge" }), this.tagEl, close);
+        const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, close);
 
         const scale = h(
             "div",
@@ -807,7 +825,7 @@ export class Deck {
             h("div", { class: "slab-nudges" }, this.nudgeDown, this.nudgeUp),
         );
 
-        const bay = h("div", { class: "slab-bay" }, stage, pitchHead, this.railEl, scale);
+        const bay = h("div", { class: "slab-bay" }, this.bigWheelEl, stage, pitchHead, this.railEl, scale);
         const trim = h("div", { class: "slab-trim" }, bay);
 
         const moodGrid = h("div", {
@@ -1073,6 +1091,8 @@ export class Deck {
         this.state.open = true;
         saveState(this.state);
         this.chip.setAttribute("aria-expanded", "true");
+        // The chip's tooltip explains a closed panel; over an open one it only covers the readout.
+        this.chip.removeAttribute("title");
         this.position();
         this.renderMoodState();
         this.refresh();
@@ -1092,6 +1112,7 @@ export class Deck {
         this.state.open = false;
         saveState(this.state);
         this.chip.setAttribute("aria-expanded", "false");
+        this.chip.setAttribute("title", CHIP_TITLE);
         this.updateSpin();
     }
 
@@ -1148,7 +1169,39 @@ export class Deck {
         }
         this.panel.style.left = `${Math.round(left)}px`;
         this.panel.style.top = `${Math.round(Math.max(8, top))}px`;
+        this.placeBigWheel();
         this.renderScrollCue();
+    }
+
+    /** The big wheel's hub sits on Normal, the middle of the slider, wherever the layout puts it. */
+    private placeBigWheel(): void {
+        const rail = this.railEl;
+        if (!rail.offsetParent) return;
+        const x = rail.offsetLeft + railX(0);
+        const y = rail.offsetTop + rail.offsetHeight / 2;
+        this.bigWheelEl.style.left = `${Math.round(x - BIG_WHEEL_BOX / 2)}px`;
+        this.bigWheelEl.style.top = `${Math.round(y - BIG_WHEEL_BOX / 2)}px`;
+    }
+
+    /**
+     * The big wheel turns once a bar, read off the playhead every frame, so it
+     * is on the beat by construction: beat one has the knock-off level, every
+     * beat after it is a quarter turn. The ring kicks on each beat and settles
+     * before the next one. Still when paused, with no beat grid, or for anyone
+     * who has asked for less motion.
+     */
+    private turnBigWheel(grid: Grid, progress: number, bar: number, beat: number): void {
+        if (bar < 0 || reducedMotion()) return;
+        const start = barStartMs(grid, bar);
+        const length = barLengthMs(grid, bar);
+        if (!(length > 0)) return;
+        const turn = Math.min(1, Math.max(0, (progress - start) / length));
+        this.bigTurnEl.style.transform = `rotate(${(turn * 360).toFixed(2)}deg)`;
+        const beatStart = grid.beats[beat];
+        if (beatStart === undefined) return;
+        const beatLength = (grid.beats[beat + 1] ?? beatStart + length / Math.max(1, grid.timeSignature || 4)) - beatStart;
+        const since = Math.max(0, (progress - beatStart) / Math.max(1, beatLength));
+        this.ringTube.gas.style.opacity = (0.28 + 0.62 * Math.exp(-since * 5)).toFixed(3);
     }
 
     /** Only when a short window has hidden part of the panel. Writes only on change. */
@@ -1691,6 +1744,8 @@ export class Deck {
             (!this.deadEl.hidden && this.deadEl.scrollHeight > DEAD_LINE_PX * 1.5);
         setData(this.panel, "compact", compact ? "true" : "false");
         this.signTube.set(signLayout(mood.id, mood.name, compact ? COMPACT_SIGN_HEIGHT : SIGN_HEIGHT));
+        // A compact sign moves the slider up, and the wheel's hub with it.
+        this.placeBigWheel();
     }
 
     private toggleAuto(): void {
@@ -2004,6 +2059,7 @@ export class Deck {
         this.renderLamps(beatInBar);
         setAttr(this.lampsEl, "aria-label", `Beat ${beatInBar + 1} of ${beatsPerBar}`);
 
+        this.turnBigWheel(grid, progress, bar, beat);
         this.buildRuler(grid);
         if (bar !== this.rulerBar) {
             this.rulerBar = bar;
