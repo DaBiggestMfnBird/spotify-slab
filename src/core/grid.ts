@@ -60,6 +60,9 @@ export async function loadGrid(uri?: string): Promise<Grid | null> {
                 beats,
                 bars,
                 durationMs,
+                sections: (analysis.sections ?? [])
+                    .map((section) => ({ start: section.start * 1000, loudness: section.loudness ?? -60 }))
+                    .filter((section) => Number.isFinite(section.start)),
             };
             remember(target, grid);
             return grid;

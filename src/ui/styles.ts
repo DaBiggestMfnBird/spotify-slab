@@ -217,6 +217,13 @@ ${FONT_CSS}
   text-overflow: ellipsis;
   color: var(--wall-soft);
 }
+/* DJ mode: a latching press in the header, lit while SLAB works the record itself. */
+.slab-dj { --roll: 28px; flex: none; height: 28px; min-width: 44px; padding: 0 10px; flex-direction: row; font-weight: 700; font-size: 13px; letter-spacing: 0.06em; }
+.slab-dj[aria-checked="true"] {
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7), 0 0 0 #0B0203;
+}
+.slab-dj[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
 .slab-close {
   flex: none;
   width: 32px;
@@ -922,7 +929,7 @@ ${NEON_CSS}
   /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
   --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-clean, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-clean, .slab-dj, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
   color: var(--gas-core);
   text-shadow: var(--neon-text);
 }

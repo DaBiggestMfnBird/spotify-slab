@@ -479,7 +479,7 @@ export async function loopBars(times = 4): Promise<boolean> {
     // first time, its thread has to start), so the line is looked at right away too.
     tick();
 
-    emit("loop", `Looping this bar ${total} times`);
+    emit("loop", total === 1 ? "Looping this bar once more" : `Looping this bar ${total} times`);
     return true;
 }
 

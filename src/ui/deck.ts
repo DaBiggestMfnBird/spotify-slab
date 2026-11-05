@@ -15,6 +15,7 @@ import {
     tapeStop,
     watchNeedle,
 } from "../core/chops";
+import { djRunning, djStyleName, djYield, onDj, startDj, stopDj } from "../core/dj";
 import { canHold, canTape, type DspParams, dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
 import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } from "../core/eq";
 import {
@@ -33,6 +34,7 @@ import { loadLines } from "../core/lyrics";
 import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MINE_ID, MOODS, curvePath, mineMood, moodById, setMine } from "../core/moods";
 import { SCREW_MAX, SCREW_MIN, clampPitch, saveState } from "../core/state";
+import type { Move } from "../core/style";
 import { CLEAN_TAPE, isClean, nextRoom, roomName, type TapeLayer, withTape } from "../core/tape";
 import type { Grid, SlabState } from "../types";
 import {
@@ -82,6 +84,23 @@ const SPIN_MS = 1600;
 /** Keep in step with the transition in styles.ts. */
 const ROLL_MS = 640;
 const TAGLINE = "Slow, loud and bangin’";
+
+/** Full screw: DJ mode's sound, the Screwed mood ridden seven semitones down on a worn tape. */
+const DJ_MOOD = "screwed";
+const DJ_PITCH = -700;
+
+/** The pads a hand plays, by what DJ mode learns them as. */
+const MOVE_OF: Record<string, Move> = {
+    chop1: "chop1",
+    chop2: "chop2",
+    chop4: "chop4",
+    loop: "loop",
+    line: "line",
+    spin: "spin",
+    screw: "screw",
+    trunk: "trunk",
+    echo: "echo",
+};
 const CHIP_TITLE = "SLAB, Third Coast playback moods";
 
 /** Pixels per cent. The track is laid out so 100 cents is exactly 12 px. */
@@ -440,6 +459,9 @@ export class Deck {
     private heldBy = new Map<string, HTMLButtonElement>();
     private bankButtons = new Map<Bank, HTMLButtonElement>();
     private roomSub: HTMLElement | null = null;
+    private djButton: HTMLButtonElement;
+    /** When a hand last played a pad: what happens just after is the hand's, not the DJ's. */
+    private lastManualAt = 0;
     private cleanButton: HTMLButtonElement | null = null;
     private depthEl: HTMLSpanElement;
     private depthDown: HTMLButtonElement;
@@ -698,11 +720,22 @@ export class Deck {
         this.statusEl = h("span", { class: "slab-sr", role: "status", "aria-live": "polite" });
         this.modernEq = modernEqPresent();
 
+        // DJ mode: SLAB works the record itself, on full screw, until it's switched off.
+        this.djButton = h("button", {
+            class: "slab-press slab-dj",
+            type: "button",
+            role: "switch",
+            "aria-checked": String(state.dj),
+            "aria-label": "DJ mode",
+            title: "DJ mode: SLAB works the record itself, on full screw. Any pad of yours takes it back for eight bars.",
+            onclick: () => this.toggleDj(),
+        }, h("span", {}, "DJ"));
+
         this.panel = this.buildPanel();
 
         onChop((event) => {
-            // Auto chop cuts every few bars on its own; it's shown, not spoken each time.
-            const automatic = event.kind === "auto";
+            // Auto chop and DJ mode cut on their own; what they do is shown, not spoken each time.
+            const automatic = event.kind === "auto" || (djRunning() && Date.now() - this.lastManualAt > 1_500);
             this.flashActivity(event.label, !automatic);
             if (automatic) this.hitPad(this.pads[0]);
         });
@@ -742,6 +775,9 @@ export class Deck {
         this.renderDepth();
         this.renderTape();
         this.renderKeep();
+        onDj((label) => this.flashActivity(label, false));
+        if (this.state.dj) startDj();
+        this.renderDj();
         this.renderPitch();
         this.renderEqNote();
         // Yielding is not the same as doing nothing: ModernEQ only writes its
@@ -807,6 +843,8 @@ export class Deck {
         document.removeEventListener("keyup", this.onKeyUp);
         window.removeEventListener("blur", this.onBlur);
         document.removeEventListener("visibilitychange", this.onVisibility);
+        stopDj();
+        onDj(null);
         this.releaseHolds();
         onHoldChange(null);
         window.removeEventListener("resize", this.onResize);
@@ -984,7 +1022,7 @@ export class Deck {
             onclick: () => this.close(),
         });
 
-        const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, close);
+        const head = h("div", { class: "slab-head" }, h("span", { class: "slab-badge", role: "img", "aria-label": "SLAB" }, this.logoTube.node), this.tagEl, this.djButton, close);
 
         const scale = h(
             "div",
@@ -1323,6 +1361,7 @@ export class Deck {
             this.flashActivity(def.available ? (def.unavailable?.() ?? NEEDS_HELPER) : NO_GRID);
             return;
         }
+        this.handPlayed(def);
         if (def.run() !== true) {
             if (def.miss) this.flashActivity(def.miss);
             return;
@@ -1399,6 +1438,48 @@ export class Deck {
         saveState(this.state);
         this.renderDepth();
         this.announceSettled(() => this.depthEl.textContent ?? "");
+    }
+
+    /**
+     * DJ mode on: the sound you had is kept to go back to, the record goes on full screw, and the
+     * DJ starts working it. Off: the DJ stops and your sound comes back as it was.
+     */
+    private toggleDj(): void {
+        if (this.state.dj) {
+            stopDj();
+            const before = this.state.djBefore;
+            this.state.dj = false;
+            this.state.djBefore = null;
+            if (before) {
+                this.state.pitch = before.pitch;
+                this.state.tape = { ...before.tape };
+                this.renderTape();
+                void this.applyMood(before.moodId === MINE_ID && !mineMood() ? "flat" : before.moodId, false);
+            } else {
+                saveState(this.state);
+            }
+            this.renderDj();
+            this.renderAutoState();
+            this.flashActivity("DJ off: the record is yours");
+            return;
+        }
+        this.state.djBefore = { moodId: this.state.moodId, pitch: this.state.pitch, tape: { ...this.state.tape } };
+        this.state.dj = true;
+        this.state.pitch = DJ_PITCH;
+        this.state.tape = { ...this.state.tape, wow: true };
+        this.renderTape();
+        void this.applyMood(DJ_MOOD, false);
+        startDj();
+        this.renderDj();
+        this.renderAutoState();
+        this.flashActivity("DJ on: full screw");
+    }
+
+    /** The switch, and in the tagline's place, what the DJ makes of the record. */
+    private renderDj(): void {
+        setAttr(this.djButton, "aria-checked", this.state.dj ? "true" : "false");
+        const style = djStyleName();
+        setText(this.tagEl, this.state.dj ? (style ? `DJ on: full screw, ${style}` : "DJ on: full screw") : TAGLINE);
     }
 
     /** What the helper plays: the mood, through the tape, at the slider's pitch. */
@@ -2220,7 +2301,20 @@ export class Deck {
             ...(running.reverb > 0 ? ["reverb"] : []),
             ...(running.delayMix > 0 ? ["delay"] : []),
             ...(running.lowpass < 20_000 ? ["low-pass"] : []),
+            ...(this.helperTape() ? ["tape"] : []),
         ];
+    }
+
+    /** The tape is running: a helper that plays it has a layer on, by what it confirmed or was sent. */
+    private helperTape(): boolean {
+        const status = dspStatus();
+        if (status.tape !== true) return false;
+        const sent = this.sound();
+        const got = status.params ?? {};
+        return (["wow", "hiss", "crackle", "crush"] as const).some((key) => {
+            const value = got[key];
+            return (typeof value === "number" && Number.isFinite(value) ? value : sent[key]) > 0;
+        });
     }
 
     /**
@@ -2480,7 +2574,7 @@ export class Deck {
         this.renderEvery();
         setOff(this.everyDown, every <= EVERY_MIN);
         setOff(this.everyUp, every >= EVERY_MAX);
-        setAuto(this.state.auto, every);
+        setAuto(this.state.auto && !this.state.dj, every);
     }
 
     /** "Every 4 bars", and while auto chop runs, how far off the next cut is, so it can be played to. */
@@ -2558,7 +2652,15 @@ export class Deck {
     }
 
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
+    /** A pad played by hand: DJ mode steps back for eight bars, and learns where you play. */
+    private handPlayed(def: PadDef): void {
+        this.lastManualAt = Date.now();
+        const move = MOVE_OF[def.id];
+        if (move) djYield(move);
+    }
+
     private firePad(pad: HTMLButtonElement, def: PadDef): void {
+        if (!isOff(pad)) this.handPlayed(def);
         if (isOff(pad)) {
             this.flashActivity(def.available ? (def.unavailable?.() ?? NEEDS_HELPER) : NO_GRID);
             return;
@@ -2743,6 +2845,7 @@ export class Deck {
             setAttr(pad, "title", off && def?.available ? (def.unavailable?.() ?? NEEDS_HELPER) : "");
         }
         this.renderKeep();
+        this.renderDj();
         this.renderEvery();
         // A running loop keeps its pad lit and counts down on it, through the last pass.
         const left = loopRemaining();
@@ -2751,7 +2854,7 @@ export class Deck {
         if (loopPad) setData(loopPad, "latched", looping ? "true" : "false");
         if (this.loopSub) setText(this.loopSub, !looping ? LOOP_SUB : left > 0 ? `${left} to go` : "Last pass");
         // Off with nothing to count; it can still be switched off if it was on.
-        const autoOff = !grid && !this.state.auto;
+        const autoOff = (!grid && !this.state.auto) || this.state.dj;
         setOff(this.switchEl, autoOff);
         if (autoOff) setAttr(this.switchEl, "aria-describedby", "slab-nogrid");
         else if (this.switchEl.hasAttribute("aria-describedby")) this.switchEl.removeAttribute("aria-describedby");

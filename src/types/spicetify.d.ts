@@ -39,7 +39,7 @@ interface SlabAudioAnalysis {
     };
     beats?: { start: number; duration: number; confidence?: number }[];
     bars?: { start: number; duration: number; confidence?: number }[];
-    sections?: { start: number; duration: number }[];
+    sections?: { start: number; duration: number; loudness?: number }[];
 }
 
 interface SlabSpicetify {

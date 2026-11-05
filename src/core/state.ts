@@ -15,6 +15,8 @@ const DEFAULTS: SlabState = {
     screwDepth: 5,
     mine: null,
     tape: CLEAN_TAPE,
+    dj: false,
+    djBefore: null,
 };
 
 /** The one rule for a pitch value: ±1200 cents, on the slider's 10-cent grid. */
@@ -92,6 +94,11 @@ export function loadState(): SlabState {
                     : DEFAULTS.screwDepth,
             mine,
             tape: readTape(parsed.tape),
+            dj: parsed.dj === true,
+            djBefore:
+                parsed.djBefore && typeof parsed.djBefore.moodId === "string" && typeof parsed.djBefore.pitch === "number"
+                    ? { moodId: parsed.djBefore.moodId, pitch: clampPitch(parsed.djBefore.pitch), tape: readTape(parsed.djBefore.tape) }
+                    : null,
         };
     } catch {
         setMine(null);
