@@ -531,10 +531,11 @@ final class DeckTests: XCTestCase {
 
     func testRealignsWhenSpotifysCopyIsHalfASampleOff() throws {
         // Spotify's 44.1 kHz stream resampled for a 48 kHz Mac: after the seek the resampler starts
-        // at another phase, and no frame matches memory exactly. On a breakdown, hats over the chords
-        // and a voice, the whole band scored 0.96 for this, under the bar; below 4 kHz it's 0.9996.
-        let rig = Rig(song: { music(Double($0), hats: 0.08, breakdown: true) })
-        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5, hats: 0.08, breakdown: true) }
+        // at another phase, and no frame matches memory exactly. On a stretch with no 808 and the hats
+        // as loud as the chords and the voice, the whole band scored 0.96 at best, under the bar, and
+        // the chop went live. Below 4 kHz it scores 0.9996.
+        let rig = Rig(song: { music(Double($0), hats: 0.12, breakdown: true) })
+        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5, hats: 0.12, breakdown: true) }
         // Never a skip or a repeat from the chop on, through the crossover onto Spotify's copy.
         XCTAssertNil(rig.drift(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames))
         XCTAssertEqual(try XCTUnwrap(rig.deck.seekGapMs), 220, accuracy: 15)
