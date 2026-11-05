@@ -313,6 +313,13 @@ final class ControlServer {
                 return (409, ["ok": false, "error": "\(error)"])
             }
 
+        case ("POST", "/jump/cancel"):
+            // A new track or a pause: a jump still to come is called off, and one waiting on
+            // Spotify's audio stops waiting and goes back to live.
+            guard let graph = supervisor.graph else { return (503, ["ok": false, "error": "not tapping"]) }
+            graph.deck.cancelJump()
+            return (200, ["ok": true])
+
         case ("POST", "/quit"):
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [onQuit] in
                 if let onQuit { onQuit() } else { exit(0) }

@@ -312,6 +312,16 @@ public final class Deck: @unchecked Sendable {
         pending = Jump(at: played + delay, back: backFrames, seekAhead: max(0, seekAheadFrames))
     }
 
+    /// Calls a jump off: one still to come never happens, and one that has happened stops waiting
+    /// for Spotify and goes back to live at once. For a new track or a pause, where Spotify's
+    /// audio is never coming back to meet it.
+    public func cancelJump() {
+        lock.lock()
+        defer { lock.unlock() }
+        pending = nil
+        if detached != nil { goLive() }
+    }
+
     /// Where the sound `back` frames before what plays now is (after it, for a negative `back`).
     private func target(back: Int) -> Copy? {
         copy(ofClock: head - headDelta - back, room: 2 * fadeFrames)

@@ -6,10 +6,12 @@ import {
     isStopping,
     loopBars,
     loopRemaining,
+    needlePosition,
     onChop,
     resetForTrack,
     setAuto,
     tapeStop,
+    watchNeedle,
 } from "../core/chops";
 import { dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
 import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } from "../core/eq";
@@ -203,9 +205,10 @@ function steer(animation: Animation, phase: number, periodMs: number, settling =
     return false;
 }
 
+/** What is heard, so the count, the lamps and the wheel follow the sound, not where Spotify was sent. */
 function progressMs(): number {
     try {
-        return Spicetify.Player?.getProgress?.() ?? 0;
+        return needlePosition();
     } catch {
         return 0;
     }
@@ -2057,6 +2060,8 @@ export class Deck {
 
     private refresh(): void {
         if (this.disposed) return;
+        // How much record has played unbroken, for the helper's chops, is watched open or closed.
+        watchNeedle();
         // Probe even when the panel is closed: if the helper starts or restarts,
         // the selected mood needs to reach it without waiting for a click.
         void probeDsp(false, !this.panel.hidden);

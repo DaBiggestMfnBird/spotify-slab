@@ -295,6 +295,27 @@ final class DeckTests: XCTestCase {
         XCTAssertThrowsError(try rig.deck.scheduleJump(backFrames: rig.ms(2_000), seekAheadFrames: 0, availableFrames: rig.ms(10_000)))
     }
 
+    func testACalledOffJumpNeverHappensOrStopsWaiting() throws {
+        let rig = Rig()
+        rig.run(rig.ms(3_000))
+        // Still to come: called off, it never happens.
+        let headBefore = rig.deck.head
+        let index = rig.heard.count
+        try rig.deck.scheduleJump(backFrames: rig.ms(1_000), inFrames: rig.ms(200), seekAheadFrames: 0, availableFrames: rig.ms(3_000))
+        rig.deck.cancelJump()
+        rig.run(rig.ms(400))
+        XCTAssertNil(rig.seam(from: index, playing: headBefore))
+        XCTAssertEqual(rig.deck.jumps, 0)
+        // Already happened, and Spotify moved on to another track: back to live now, not after the wait.
+        try rig.deck.scheduleJump(backFrames: rig.ms(1_000), seekAheadFrames: rig.ms(250), availableFrames: rig.ms(3_000))
+        rig.run(512)
+        XCTAssertTrue(rig.deck.isDetached)
+        rig.deck.cancelJump()
+        XCTAssertFalse(rig.deck.isDetached)
+        rig.run(rig.ms(100))
+        XCTAssertLessThanOrEqual(rig.deck.framesAvailable, rig.deck.maxLag)
+    }
+
     func testRefusesToJumpPastWhatSLABKnowsIsContiguous() {
         let rig = Rig()
         rig.run(rig.ms(4_000))

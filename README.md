@@ -19,7 +19,7 @@ SLAB does the things the client can actually do, and pairs with a small companio
 - **Six EQ moods** written against the client's native six-band equalizer.
 - **A real pitch slider** — ±1200 cents, live, with the mood cards acting as presets that move it.
 - **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
-- **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware.
+- **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware, and with SLAB DSP running they land the instant you hit them: no waiting on Spotify to seek.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
 - **Auto chop** — cuts on the phrase lines every N bars and shows how far off the next cut is, on a worker clock that survives a backgrounded window.
 - **The trunk lights up** — while the mood can be heard, the nameplate, the sign and every word on the paint burn as neon; paused, they go back to glass and whitewall. Behind the slider, a big 84 wire wheel turns once a bar, read off the beat grid, and its neon ring kicks on every beat.
@@ -69,8 +69,17 @@ The companion app is what makes the moods real. It taps Spotify's audio with `Au
 | Delay | 10 ms–2 s, feedback 0–95, wet 0–100 |
 | Low-pass | 200 Hz–20 kHz |
 | Tape stop | Real rate ramp: 380 ms down, 70 ms hold, 240 ms back up |
+| Chops and loops | Instant, from the last 45 seconds it has heard |
 
 **Requirements:** macOS 14.2 or newer. Apple Silicon or Intel. Spotify desktop.
+
+### Instant chops
+
+Without the helper, a pad is a Spotify seek, and Spotify takes a moment to start playing again from the new spot. You can feel it under your fingers. The helper keeps the last 45 seconds of what Spotify played, so a pad jumps there inside the helper on the next block of audio, a few milliseconds, to the sample. Loops are sent ahead with the time they should land, and they land on the bar line exactly.
+
+Spotify is still seeked, just out of earshot. SLAB sends it a little past the spot, the helper plays from memory until Spotify's audio comes back, finds the same sound in it and crosses over where the two meet. Nobody hears the restart. The helper measures what each seek cost and SLAB aims the next one by it. The helper only jumps through song it knows played straight through: never across a new track, a pause, or you dragging the record. Past that, a pad falls back to a plain seek.
+
+Older helpers (before 0.4.0) don't have this, and the pads seek Spotify the old way. Rebuild with `bun run dsp:install` to get it.
 
 ### Install
 
@@ -95,6 +104,8 @@ The helper listens on `http://127.0.0.1:47832`:
 | `GET /status` | version, link state (`tapping`, `audio`), sample rate, level, latency, current params |
 | `POST /params` | `{"pitch": -320, "reverb": 34, "lowpass": 11000}` |
 | `POST /tapstop` | `{"downMs": 380, "holdMs": 70, "upMs": 240}` |
+| `POST /jump` | `{"backMs": 3333, "inMs": 0, "seekAheadMs": 250, "availableMs": 12000}`: jump back in memory (forward when negative), `inMs` from now; `409` when that much song isn't there |
+| `POST /jump/cancel` | call a jump off: one still to come never happens, one waiting on Spotify goes back to live (a new track, a pause) |
 | `POST /reset` | back to neutral |
 | `POST /reconnect` | drop the tap and attach again |
 | `POST /quit` | shut the helper down |
@@ -207,15 +218,20 @@ src/
     neon-glyphs.ts generated tube alphabet (scripts/gen-neon.ts)
     fonts.generated.ts generated subset fonts (scripts/gen-fonts.ts)
 dsp/
+  Sources/SLABCore/
+    Deck.swift         the 45-second memory: jumps, the content clock, finding Spotify again
+    Match.swift        finding one stretch of audio inside another
   Sources/SLABDSP/
-    TapCapture.swift   Core Audio process tap → ring buffer
+    TapCapture.swift   Core Audio process tap → the deck
     DSPGraph.swift     pitch / low-pass / reverb / delay / tape stop
     ControlServer.swift loopback HTTP control surface
     main.swift         CLI, lifecycle, recording mode
+  Tests/SLABCoreTests/ the deck against a simulated Spotify (swift test)
 ```
 
 - **The grid** comes from `Spicetify.getAudioData(uri)` — Spotify's own beats and bars, in seconds. Cached per track.
-- **A chop is a seek** exactly N bars back, to the same place in the bar. No audio processing, no glitch: the groove carries straight through the cut.
+- **A chop is a jump** exactly N bars back, to the same place in the bar, so the groove carries straight through the cut. With the helper it happens in the helper's memory and Spotify is re-seeked behind it; without, it is a Spotify seek.
+- **The deck keeps one content clock across seeks.** Each time it finds Spotify's audio again it knows that audio is a copy of older audio at a fixed offset, so a second chop finds its bar wherever in memory it now lives, and when one copy runs out it carries on in another. On a looped beat, the record still playing on before Spotify's seek takes hold matches memory a bar back; the deck recognises it by following it back to the chop and waits for the seek itself.
 - **The worker clock** exists because Chrome clamps main-thread timers to roughly one second when the Spotify window is occluded. A 40 ms worker tick keeps auto chop and loop on time even when the app is behind another window. If a locked-down client won't start the worker, or it never ticks, the clock drops to a main-thread timer, and a tape stop always finishes on its own timer, so nothing is left half-faded.
 - **The EQ bridge** matches filters by frequency, so a client with a different six-band layout still gets a sane mapping. One dead filter doesn't stop the curve.
 - **The tap** uses a private aggregate device with a tap list of dictionaries (`kAudioSubTapUIDKey`). A list of plain UID strings is accepted by the API and silently attaches nothing — that cost an afternoon.

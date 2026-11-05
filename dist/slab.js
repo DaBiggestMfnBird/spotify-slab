@@ -108,6 +108,164 @@ self.onmessage = (event) => {
     }
   }
 
+  // src/core/dsp.ts
+  var DSP_ORIGIN = "http://127.0.0.1:47832";
+  var status = { checked: false, linked: false };
+  var lastProbe = 0;
+  var misses = 0;
+  var probeSeq = 0;
+  var paramsSeq = 0;
+  var listeners = /* @__PURE__ */ new Set();
+  var PROBE_LINKED_MS = 4e3;
+  var PROBE_ABSENT_MS = 3e4;
+  var PROBE_FAST_TRIES = 3;
+  function onDspChange(listener2) {
+    listeners.add(listener2);
+    listener2(status);
+    return () => listeners.delete(listener2);
+  }
+  function dspStatus() {
+    return status;
+  }
+  function publish(next) {
+    const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio || next.jump !== status.jump;
+    status = next;
+    if (changed) for (const listener2 of listeners) listener2(status);
+  }
+  async function request(path, init, timeout = 700) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(`${DSP_ORIGIN}${path}`, {
+        ...init,
+        signal: controller.signal,
+        cache: "no-store"
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function probeDsp(force = false, eager = false) {
+    const now = Date.now();
+    const every = status.linked || eager || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
+    if (!force && now - lastProbe < every) return status;
+    lastProbe = now;
+    const seq = ++probeSeq;
+    const paramsAtStart = paramsSeq;
+    const payload = await request("/status");
+    if (seq !== probeSeq) return status;
+    if (payload?.ok) {
+      misses = 0;
+      publish({
+        checked: true,
+        linked: true,
+        // Helpers before 0.3.0 don't report these and only ran while tapping.
+        tapping: payload.tapping !== false,
+        audio: payload.audio !== false,
+        version: payload.version,
+        sampleRate: payload.sampleRate,
+        latencyMs: payload.latencyMs,
+        // Params the helper accepted after this probe went out are newer than what it reported.
+        params: paramsSeq === paramsAtStart ? payload.params : status.params,
+        jump: Array.isArray(payload.features) && payload.features.includes("jump"),
+        seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : void 0,
+        wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : void 0
+      });
+    } else {
+      misses += 1;
+      publish({ checked: true, linked: false });
+    }
+    return status;
+  }
+  var pending = null;
+  var waiting = [];
+  var draining = false;
+  function sendDsp(params) {
+    pending = { ...pending, ...params };
+    const result = new Promise((resolve) => waiting.push(resolve));
+    if (!draining) void drain();
+    return result;
+  }
+  async function drain() {
+    draining = true;
+    try {
+      while (pending) {
+        const body = pending;
+        const settle = waiting;
+        pending = null;
+        waiting = [];
+        const payload = await request("/params", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (payload) {
+          misses = 0;
+          paramsSeq += 1;
+          const applied = payload.params;
+          publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body, ...applied } });
+        } else {
+          void probeDsp(true);
+        }
+        for (const resolve of settle) resolve(Boolean(payload));
+      }
+    } finally {
+      draining = false;
+    }
+  }
+  async function dspTapeStop() {
+    const payload = await request(
+      "/tapstop",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 })
+      },
+      // On loopback the answer is near-instant; don't hold the stop up waiting on a stuck helper.
+      300
+    );
+    return Boolean(payload);
+  }
+  var DEFAULT_SEEK_GAP_MS = 250;
+  var SEEK_MARGIN_MS = 40;
+  function canJump() {
+    return status.linked && status.tapping === true && status.audio === true && status.jump === true;
+  }
+  function seekAheadMs() {
+    const gap = status.seekGapMs ?? DEFAULT_SEEK_GAP_MS;
+    return Math.round(Math.max(60, Math.min(800, gap + SEEK_MARGIN_MS)));
+  }
+  var measureTimer = null;
+  async function dspJump(order) {
+    if (!canJump()) return false;
+    const payload = await request(
+      "/jump",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(order)
+      },
+      250
+    );
+    const ok = payload?.ok === true;
+    if (ok) {
+      if (measureTimer !== null) window.clearTimeout(measureTimer);
+      measureTimer = window.setTimeout(() => {
+        measureTimer = null;
+        void probeDsp(true);
+      }, 2600 + (order.inMs ?? 0));
+    }
+    return ok;
+  }
+  async function dspCancelJump() {
+    if (!status.linked || !status.jump) return;
+    await request("/jump/cancel", { method: "POST" }, 250);
+  }
+
   // src/core/grid.ts
   var cache = /* @__PURE__ */ new Map();
   var inflight = /* @__PURE__ */ new Map();
@@ -232,19 +390,143 @@ self.onmessage = (event) => {
     } catch {
     }
   }
+  var MOVED_MS = 600;
+  var HEARD_MARGIN_MS = 350;
+  var RECKON_MS = 8e3;
+  var runFrom = null;
+  var lastAt = 0;
+  var lastTime = 0;
+  var lastPlaying = false;
+  var lastUri = null;
+  var sentTo = 0;
+  var sentAt = 0;
+  var sentKeepsRun = false;
+  var reckon = null;
+  var nextReckon = null;
+  var reckonWentLive = 0;
+  var pendingSend = null;
+  var helperCutUntil = 0;
+  function forgetReckoning() {
+    reckon = null;
+    nextReckon = null;
+  }
+  function dropHelperCut() {
+    if (pendingSend !== null) window.clearTimeout(pendingSend);
+    pendingSend = null;
+    if (Date.now() < helperCutUntil) void dspCancelJump();
+    helperCutUntil = 0;
+  }
+  function watchNeedle() {
+    let playing = false;
+    let at = 0;
+    let uri = null;
+    try {
+      playing = Spicetify.Player.isPlaying();
+      at = Spicetify.Player.getProgress();
+      uri = Spicetify.Player.data?.item?.uri ?? null;
+    } catch {
+      return;
+    }
+    const now = Date.now();
+    if (uri !== lastUri) {
+      runFrom = playing ? at : null;
+      forgetReckoning();
+      if (lastUri !== null) dropHelperCut();
+    } else if (!playing) {
+      forgetReckoning();
+      if (lastPlaying) dropHelperCut();
+    } else if (!lastPlaying) {
+      runFrom = at;
+      forgetReckoning();
+    } else if (Math.abs(at - (lastAt + (now - lastTime))) > MOVED_MS) {
+      const ours = now - sentAt < 2e3 && Math.abs(at - (sentTo + (now - sentAt))) < MOVED_MS;
+      if (!ours) {
+        runFrom = at;
+        forgetReckoning();
+      } else if (!sentKeepsRun) {
+        runFrom = sentTo;
+      }
+    }
+    if (runFrom === null && playing) runFrom = at;
+    lastAt = at;
+    lastTime = now;
+    lastPlaying = playing;
+    lastUri = uri;
+  }
+  function needlePosition() {
+    const now = Date.now();
+    if (nextReckon && now >= nextReckon.time) {
+      reckon = nextReckon;
+      nextReckon = null;
+    }
+    if ((dspStatus().wentLive ?? 0) > reckonWentLive) forgetReckoning();
+    if (reckon && now - reckon.time < RECKON_MS) return reckon.at + (now - reckon.time);
+    const at = Spicetify.Player.getProgress();
+    return canJump() ? at - (dspStatus().latencyMs ?? 0) : at;
+  }
+  function unbrokenMs(heard) {
+    if (runFrom === null) return 0;
+    return Math.max(0, heard - runFrom - HEARD_MARGIN_MS);
+  }
+  function sent(to, keepsRun) {
+    sentTo = to;
+    sentAt = Date.now();
+    sentKeepsRun = keepsRun;
+    if (!keepsRun) {
+      runFrom = to;
+      forgetReckoning();
+    }
+  }
+  async function cut(target, from, inMs = 0) {
+    if (canJump()) {
+      const ahead = seekAheadMs();
+      const asked = Date.now();
+      const jumped = await dspJump({
+        backMs: Math.round(from - target),
+        inMs: Math.round(inMs),
+        seekAheadMs: ahead,
+        availableMs: Math.round(unbrokenMs(from))
+      });
+      if (jumped) {
+        const fires = asked + (Date.now() - asked) / 2 + inMs;
+        const send = () => {
+          pendingSend = null;
+          const to = target + ahead + Math.max(0, Date.now() - fires);
+          sent(to, true);
+          seek(to);
+        };
+        if (pendingSend !== null) window.clearTimeout(pendingSend);
+        pendingSend = null;
+        helperCutUntil = fires + 3e3;
+        reckonWentLive = dspStatus().wentLive ?? 0;
+        nextReckon = { at: target, time: fires };
+        if (inMs > 0) pendingSend = window.setTimeout(send, inMs);
+        else send();
+        return true;
+      }
+    }
+    if (pendingSend !== null) dropHelperCut();
+    const plain = () => {
+      sent(target, false);
+      seek(target);
+    };
+    if (inMs > 0) window.setTimeout(plain, inMs);
+    else plain();
+    return false;
+  }
   async function chopBars(bars, auto = false) {
     if (busy) return false;
     busy = true;
     try {
       const grid = await ensureGrid();
       if (!grid) return false;
-      const now = Spicetify.Player.getProgress();
+      const now = needlePosition();
       const index = barIndexAt(grid, now);
       const span = Math.max(1, Math.round(bars));
       if (index < span) return false;
       const back = index - span;
       const phase = (now - barStartMs(grid, index)) / barLengthMs(grid, index);
-      seek(barStartMs(grid, back) + phase * barLengthMs(grid, back));
+      await cut(barStartMs(grid, back) + phase * barLengthMs(grid, back), now);
       if (auto) return true;
       padJumpAt = Date.now();
       manualBar = index;
@@ -266,10 +548,11 @@ self.onmessage = (event) => {
     return loopUnsub ? loopLeft : 0;
   }
   var LOOP_LEAD_MS = 15;
+  var LOOP_SEND_MS = 200;
   async function loopBars(times = 4) {
     const grid = await ensureGrid();
     if (!grid) return false;
-    const index = barIndexAt(grid, Spicetify.Player.getProgress());
+    const index = barIndexAt(grid, needlePosition());
     if (index < 0) return false;
     cancelLoop();
     const start = barStartMs(grid, index);
@@ -280,12 +563,12 @@ self.onmessage = (event) => {
     const total = Math.max(1, Math.round(times));
     let armed = true;
     loopLeft = total;
-    loopUnsub = subscribe(() => {
+    const tick = () => {
       if (!Spicetify.Player.isPlaying()) {
         cancelLoop();
         return;
       }
-      const at = Spicetify.Player.getProgress();
+      const at = needlePosition();
       if (at < start - 250 || at > end + length) {
         cancelLoop();
         return;
@@ -294,17 +577,27 @@ self.onmessage = (event) => {
         if (at < end - length / 2) armed = true;
         return;
       }
-      if (at < end - LOOP_LEAD_MS) return;
+      const helper = canJump();
+      if (at < end - (helper ? LOOP_SEND_MS : LOOP_LEAD_MS)) return;
       if (loopLeft <= 0) {
         cancelLoop();
         emit("loop", "Loop done");
         return;
       }
-      seek(start + Math.min(Math.max(0, at - end), length / 4));
       armed = false;
       loopLeft -= 1;
       manualBar = index;
-    });
+      const late = Math.max(0, at - end);
+      const to = start + Math.min(late, length / 4);
+      if (helper) {
+        void cut(to, late > 0 ? at : end, late > 0 ? 0 : end - at);
+        return;
+      }
+      sent(to, false);
+      seek(to);
+    };
+    loopUnsub = subscribe(tick);
+    tick();
     emit("loop", `Looping this bar ${total} times`);
     return true;
   }
@@ -377,7 +670,7 @@ self.onmessage = (event) => {
       if (!Spicetify.Player.isPlaying()) return;
       const grid = gridFor();
       if (!grid) return;
-      const index = barIndexAt(grid, Spicetify.Player.getProgress());
+      const index = barIndexAt(grid, needlePosition());
       if (index < 0) return;
       const last = autoLastIndex;
       autoLastIndex = index;
@@ -422,6 +715,9 @@ self.onmessage = (event) => {
     cancelLoop();
     manualBar = -2;
     padJumpAt = 0;
+    forgetReckoning();
+    dropHelperCut();
+    lastUri = null;
     autoBaseline = true;
     autoLastIndex = null;
     autoMaxBar = -1;
@@ -665,126 +961,6 @@ self.onmessage = (event) => {
       localStorage.setItem(KEY, JSON.stringify(state));
     } catch {
     }
-  }
-
-  // src/core/dsp.ts
-  var DSP_ORIGIN = "http://127.0.0.1:47832";
-  var status = { checked: false, linked: false };
-  var lastProbe = 0;
-  var misses = 0;
-  var probeSeq = 0;
-  var paramsSeq = 0;
-  var listeners = /* @__PURE__ */ new Set();
-  var PROBE_LINKED_MS = 4e3;
-  var PROBE_ABSENT_MS = 3e4;
-  var PROBE_FAST_TRIES = 3;
-  function onDspChange(listener2) {
-    listeners.add(listener2);
-    listener2(status);
-    return () => listeners.delete(listener2);
-  }
-  function dspStatus() {
-    return status;
-  }
-  function publish(next) {
-    const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio;
-    status = next;
-    if (changed) for (const listener2 of listeners) listener2(status);
-  }
-  async function request(path, init, timeout = 700) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    try {
-      const response = await fetch(`${DSP_ORIGIN}${path}`, {
-        ...init,
-        signal: controller.signal,
-        cache: "no-store"
-      });
-      if (!response.ok) return null;
-      return await response.json();
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  async function probeDsp(force = false, eager = false) {
-    const now = Date.now();
-    const every = status.linked || eager || misses < PROBE_FAST_TRIES ? PROBE_LINKED_MS : PROBE_ABSENT_MS;
-    if (!force && now - lastProbe < every) return status;
-    lastProbe = now;
-    const seq = ++probeSeq;
-    const paramsAtStart = paramsSeq;
-    const payload = await request("/status");
-    if (seq !== probeSeq) return status;
-    if (payload?.ok) {
-      misses = 0;
-      publish({
-        checked: true,
-        linked: true,
-        // Helpers before 0.3.0 don't report these and only ran while tapping.
-        tapping: payload.tapping !== false,
-        audio: payload.audio !== false,
-        version: payload.version,
-        sampleRate: payload.sampleRate,
-        latencyMs: payload.latencyMs,
-        // Params the helper accepted after this probe went out are newer than what it reported.
-        params: paramsSeq === paramsAtStart ? payload.params : status.params
-      });
-    } else {
-      misses += 1;
-      publish({ checked: true, linked: false });
-    }
-    return status;
-  }
-  var pending = null;
-  var waiting = [];
-  var draining = false;
-  function sendDsp(params) {
-    pending = { ...pending, ...params };
-    const result = new Promise((resolve) => waiting.push(resolve));
-    if (!draining) void drain();
-    return result;
-  }
-  async function drain() {
-    draining = true;
-    try {
-      while (pending) {
-        const body = pending;
-        const settle = waiting;
-        pending = null;
-        waiting = [];
-        const payload = await request("/params", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        });
-        if (payload) {
-          misses = 0;
-          paramsSeq += 1;
-          const applied = payload.params;
-          publish({ ...status, checked: true, linked: true, params: { ...status.params, ...body, ...applied } });
-        } else {
-          void probeDsp(true);
-        }
-        for (const resolve of settle) resolve(Boolean(payload));
-      }
-    } finally {
-      draining = false;
-    }
-  }
-  async function dspTapeStop() {
-    const payload = await request(
-      "/tapstop",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ downMs: 380, holdMs: 70, upMs: 240 })
-      },
-      // On loopback the answer is near-instant; don't hold the stop up waiting on a stuck helper.
-      300
-    );
-    return Boolean(payload);
   }
 
   // src/core/moderneq.ts
@@ -2244,9 +2420,9 @@ ${NEON_CSS}
   function deviceSentence(raw, max = DEVICE_NAME_MAX) {
     const name = raw.trim().replace(/[.\s]+$/, "") || "another device";
     if (name.length <= max) return `${name}.`;
-    const cut = name.slice(0, max);
-    const word = cut.lastIndexOf(" ");
-    return `${(word > 12 ? cut.slice(0, word) : cut).trimEnd()}\u2026`;
+    const cut2 = name.slice(0, max);
+    const word = cut2.lastIndexOf(" ");
+    return `${(word > 12 ? cut2.slice(0, word) : cut2).trimEnd()}\u2026`;
   }
   function formatCents(cents) {
     if (cents === 0) return "0";
@@ -2317,7 +2493,7 @@ ${NEON_CSS}
   }
   function progressMs() {
     try {
-      return Spicetify.Player?.getProgress?.() ?? 0;
+      return needlePosition();
     } catch {
       return 0;
     }
@@ -3429,11 +3605,11 @@ ${NEON_CSS}
      * syncDspParams() gets the panel's values through when they drift.
      */
     helperParams() {
-      const sent = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+      const sent2 = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
       const got = dspStatus().params ?? {};
       const pick = (key) => {
         const value = got[key];
-        return typeof value === "number" && Number.isFinite(value) ? value : sent[key];
+        return typeof value === "number" && Number.isFinite(value) ? value : sent2[key];
       };
       return { pitch: pick("pitch"), reverb: pick("reverb"), delayMix: pick("delayMix"), lowpass: pick("lowpass") };
     }
@@ -3843,6 +4019,7 @@ ${NEON_CSS}
     }
     refresh() {
       if (this.disposed) return;
+      watchNeedle();
       void probeDsp(false, !this.panel.hidden);
       this.retryGrid();
       this.syncDspParams();
@@ -3973,7 +4150,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.5.0";
+  var VERSION = "0.6.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {
