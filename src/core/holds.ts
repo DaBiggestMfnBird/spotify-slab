@@ -4,7 +4,7 @@
  * Let go and the mood is back. The helper does the ramps; SLAB says what is down.
  */
 
-import { canHold, dspHold, type HoldOverlay } from "./dsp";
+import { canHold, dspHold, dspStatus, type HoldOverlay } from "./dsp";
 
 export type HoldName = "screw" | "trunk" | "echo";
 
@@ -81,9 +81,12 @@ export function press(name: HoldName, options: PressOptions = {}): boolean {
     return true;
 }
 
+/** A helper whose echo is a send throws it: the send is cut at once and the tail rings out on its own. */
+const THROW_MS = 60;
+
 export function release(name: HoldName): void {
     if (!down.delete(name)) return;
-    void dspHold(overlay(), RAMP[name].off);
+    void dspHold(overlay(), name === "echo" && dspStatus().throw ? THROW_MS : RAMP[name].off);
     keepAlive();
 }
 

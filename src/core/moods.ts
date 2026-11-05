@@ -36,6 +36,10 @@ const dry: DspParams = {
     delayMix: 0,
     lowpass: 20_000,
     gain: 0,
+    wow: 0,
+    hiss: 0,
+    crackle: 0,
+    crush: 0,
 };
 
 export const MOODS: Mood[] = [

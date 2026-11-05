@@ -1,5 +1,6 @@
 import type { SavedMoodState, SlabState } from "../types";
 import { BANDS, MINE_ID, moodById, setMine } from "./moods";
+import { CLEAN_TAPE, readTape } from "./tape";
 
 const KEY = "slab:state:v1";
 
@@ -13,6 +14,7 @@ const DEFAULTS: SlabState = {
     bank: "chop",
     screwDepth: 5,
     mine: null,
+    tape: CLEAN_TAPE,
 };
 
 /** The one rule for a pitch value: ±1200 cents, on the slider's 10-cent grid. */
@@ -48,7 +50,12 @@ function readMine(raw: unknown): SavedMoodState | null {
             delayMix: finite(dsp.delayMix, 0),
             lowpass: finite(dsp.lowpass, 20_000),
             gain: finite(dsp.gain, 0),
+            wow: Math.max(0, Math.min(1, finite(dsp.wow, 0))),
+            hiss: Math.max(0, Math.min(1, finite(dsp.hiss, 0))),
+            crackle: Math.max(0, Math.min(1, finite(dsp.crackle, 0))),
+            crush: Math.max(0, Math.min(1, finite(dsp.crush, 0))),
         },
+        ...(saved.tape ? { tape: readTape(saved.tape) } : {}),
     };
 }
 
@@ -57,7 +64,7 @@ export function loadState(): SlabState {
         const raw = localStorage.getItem(KEY);
         if (!raw) {
             setMine(null);
-            return { ...DEFAULTS };
+            return { ...DEFAULTS, tape: { ...CLEAN_TAPE } };
         }
         const parsed = JSON.parse(raw) as Partial<SlabState>;
         const mine = readMine(parsed.mine);
@@ -78,16 +85,17 @@ export function loadState(): SlabState {
                 parsed.eqOwner === "slab" || parsed.eqOwner === "modern"
                     ? parsed.eqOwner
                     : DEFAULTS.eqOwner,
-            bank: parsed.bank === "screw" ? "screw" : "chop",
+            bank: parsed.bank === "screw" || parsed.bank === "tape" ? parsed.bank : "chop",
             screwDepth:
                 typeof parsed.screwDepth === "number" && parsed.screwDepth >= SCREW_MIN && parsed.screwDepth <= SCREW_MAX
                     ? Math.round(parsed.screwDepth)
                     : DEFAULTS.screwDepth,
             mine,
+            tape: readTape(parsed.tape),
         };
     } catch {
         setMine(null);
-        return { ...DEFAULTS };
+        return { ...DEFAULTS, tape: { ...CLEAN_TAPE } };
     }
 }
 
