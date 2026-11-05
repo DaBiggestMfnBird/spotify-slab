@@ -58,6 +58,10 @@ public final class Deck: @unchecked Sendable {
     private var detached: Detached?
     private var rejoin: Rejoin?
     private var catching = false
+    /// A backspin in progress: the record runs backwards until the jump it lands on fires.
+    private(set) var spin: Spin?
+    /// The lag before the spin, which is what the panel shows; the head stands still while it turns.
+    private var spinLag = 0
 
     /// Stretches of ring whose place on the content clock is known, oldest first.
     private(set) var segments: [Segment] = []
@@ -93,6 +97,17 @@ public final class Deck: @unchecked Sendable {
     struct Rejoin {
         let delta: Int
         let from: Int
+    }
+
+    /// The record turning backwards under a hand: `position` is where the stylus is, between frames.
+    struct Spin {
+        var position: Double
+        var elapsed: Int
+        let frames: Int
+        /// The fastest it runs backwards, in times normal speed.
+        let speed: Double
+        /// It never runs back past where this copy of the song begins.
+        let floor: Double
     }
 
     /// A stretch of the ring whose content sits on the content clock at `position - delta`.
@@ -180,12 +195,25 @@ public final class Deck: @unchecked Sendable {
     public func read(into dstL: UnsafeMutablePointer<Float>, _ dstR: UnsafeMutablePointer<Float>, frames: Int) -> Int {
         lock.lock()
         defer { lock.unlock() }
-        if detached == nil { ride() }
+        if detached == nil, spin == nil { ride() }
         var produced = 0
         for k in 0..<frames {
             if let jump = pending, played >= jump.at {
                 pending = nil
-                perform(jump)
+                let landing = spin != nil
+                spin = nil
+                perform(jump, lag: landing ? spinLag : nil)
+                // The spin has wound down to nothing: the chop comes up out of silence, not out of it.
+                if landing { fadeFrom = Int.max / 2 }
+            }
+            if var turning = spin {
+                let (l, r) = spinSample(&turning)
+                spin = turning
+                dstL[k] = l
+                dstR[k] = r
+                played += 1
+                produced += 1
+                continue
             }
             if let state = detached { steer(state) }
             if head >= written {
@@ -239,6 +267,31 @@ public final class Deck: @unchecked Sendable {
         guard lag > maxLag, fadeLeft == 0 else { return }
         dropped += lag - targetLag
         crossfade(to: written - targetLag)
+    }
+
+    /// One frame of a backspin. The hand catches the record and drags it back, fast, then it slows
+    /// under the hand and fades as it stops: the jump it lands on comes in on the beat.
+    private func spinSample(_ turning: inout Spin) -> (Float, Float) {
+        let x = Double(turning.elapsed) / Double(turning.frames)
+        let velocity: Double
+        if x < 0.12 {
+            // From playing forward to running back at full speed, smoothly: no click where it turns.
+            let s = x / 0.12
+            velocity = 1 - (1 + turning.speed) * (s * s * (3 - 2 * s))
+        } else {
+            velocity = -turning.speed * pow(1 - (x - 0.12) / 0.88, 1.4)
+        }
+        let gain = Float(x < 0.8 ? 1 : max(0, 1 - (x - 0.8) / 0.2))
+        let p = max(turning.floor, min(Double(written - 2), turning.position))
+        let i = Int(p.rounded(.down))
+        let f = Float(p - Double(i))
+        let a = i % capacity
+        let b = (i + 1) % capacity
+        let l = (left[a] * (1 - f) + left[b] * f) * gain
+        let r = (right[a] * (1 - f) + right[b] * f) * gain
+        turning.position = max(turning.floor, turning.position + velocity)
+        turning.elapsed += 1
+        return (l, r)
     }
 
     private func crossfade(to target: Int, sameSound: Bool = false) {
@@ -312,6 +365,32 @@ public final class Deck: @unchecked Sendable {
         pending = Jump(at: played + delay, back: backFrames, seekAhead: max(0, seekAheadFrames))
     }
 
+    /// A backspin into a chop: the record spins back for `spinFrames` from now, then lands
+    /// `backFrames` before where the spin began on the content clock, and waits for Spotify there
+    /// as a jump does. `backFrames` of a bar less the spin keeps the landing on the beat.
+    public func scheduleSpin(backFrames: Int, spinFrames: Int, seekAheadFrames: Int, availableFrames: Int, speed: Double = 3.5) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard written > 0, head < written else { throw JumpRefusal.nothingPlaying }
+        guard backFrames > 0, backFrames <= availableFrames, backFrames < capacity - Int(sampleRate * 2) else {
+            throw JumpRefusal.tooFarBack
+        }
+        guard target(back: backFrames) != nil else { throw JumpRefusal.notInMemory }
+        // The spin runs back over what was just heard, never past where this copy of the song begins.
+        var floor = Double(max(0, written - capacity + fadeFrames))
+        for segment in segments.reversed() where head >= segment.start && head < (segment.end ?? Int.max) {
+            floor = max(floor, Double(segment.start))
+            break
+        }
+        let frames = max(fadeFrames * 4, spinFrames)
+        spinLag = detached?.lag ?? max(0, written - head)
+        spin = Spin(position: Double(head), elapsed: 0, frames: frames, speed: max(1, speed), floor: floor)
+        pending = Jump(at: played + frames, back: backFrames, seekAhead: max(0, seekAheadFrames))
+    }
+
+    /// Where a backspin's stylus is, while one turns.
+    var spinPosition: Double? { locked { spin?.position } }
+
     /// Calls a jump off: one still to come never happens, and one that has happened stops waiting
     /// for Spotify and goes back to live at once. For a new track or a pause, where Spotify's
     /// audio is never coming back to meet it.
@@ -319,6 +398,7 @@ public final class Deck: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         pending = nil
+        spin = nil
         if detached != nil { goLive() }
     }
 
@@ -342,9 +422,9 @@ public final class Deck: @unchecked Sendable {
         return nil
     }
 
-    private func perform(_ jump: Jump) {
+    private func perform(_ jump: Jump, lag lagBefore: Int? = nil) {
         guard let to = target(back: jump.back) else { return }
-        let lag = detached?.lag ?? max(0, written - head)
+        let lag = lagBefore ?? detached?.lag ?? max(0, written - head)
         // What the tap writes from here on is Spotify being re-seeked: unknown until it is found again.
         if let open = segments.indices.last, segments[open].end == nil {
             segments[open].end = written
@@ -444,6 +524,11 @@ public final class Deck: @unchecked Sendable {
         guard rejoin == nil else {
             lock.unlock()
             return .locked
+        }
+        // Mid-spin the head stands still; what Spotify sends is matched once the spin has landed.
+        guard spin == nil else {
+            lock.unlock()
+            return .waiting
         }
         let w = written
         let deckClock = head - headDelta
