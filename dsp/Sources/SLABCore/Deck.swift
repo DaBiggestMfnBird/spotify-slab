@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Accelerate)
+import Accelerate
+#endif
 
 /// The helper's copy of the record.
 ///
@@ -537,11 +540,14 @@ public final class Deck: @unchecked Sendable {
 
         let probeLength = 4_096
         guard w - state.since >= Int(sampleRate * 0.05) + probeLength else { return .waiting }
+        // Everything is compared below 4 kHz: see `bandKernel`.
+        let kernel = Self.bandKernel(sampleRate: sampleRate)
+        let mono = { (start: Int, count: Int) in self.monoCopy(from: start, count: count, upTo: w, kernel: kernel) }
 
         // The newest audio, and the moment of the song the deck was playing when it began to
         // arrive. Spotify, aimed a little ahead of the jump, comes back somewhere near that.
         let probeStart = w - probeLength
-        let probe = monoCopy(from: probeStart, count: probeLength)
+        let probe = mono(probeStart, probeLength)
         let deckAtProbe = deckClock - probeLength
         let lowClock = deckAtProbe - Int(sampleRate * 0.5)
         let highClock = deckAtProbe + Int(sampleRate * 0.8)
@@ -554,7 +560,7 @@ public final class Deck: @unchecked Sendable {
             let lo = max(segment.start, lowClock + segment.delta, oldest)
             let hi = min(end - probeLength, highClock + segment.delta)
             guard hi > lo else { continue }
-            let region = monoCopy(from: lo, count: hi - lo + probeLength)
+            let region = mono(lo, hi - lo + probeLength)
             guard let match = Match.best(probe: probe, region: region, expected: deckAtProbe + segment.delta - lo),
                   match.score >= 0.97
             else { continue }
@@ -565,6 +571,16 @@ public final class Deck: @unchecked Sendable {
         }
         guard let match = best else { return .waiting }
 
+        // Spotify's copy at a steady level: a fade-in after its seek, or its silence still in the
+        // probe, is waited out, and the level it settles at is the level the rest of it must have.
+        guard let memoryAtProbe = Self.position(ofClock: match.clock, length: probeLength, in: known, oldest: oldest) else { return .waiting }
+        let memoryProbe = mono(memoryAtProbe, probeLength)
+        let quarter = probeLength / 4
+        guard let level = Self.gain(Array(probe.suffix(quarter)), Array(memoryProbe.suffix(quarter))),
+              let overall = Self.gain(probe, memoryProbe),
+              Self.within(overall, of: level, db: 0.5)
+        else { return .waiting }
+
         // How far ahead of the deck Spotify came back, against how far ahead it was aimed, is what
         // its restart cost.
         let ahead = match.clock - deckAtProbe
@@ -573,13 +589,16 @@ public final class Deck: @unchecked Sendable {
         guard gapFrames > -Int(sampleRate * 0.03) else { return .waiting }
         let delta = probeStart - match.clock
 
-        // How far back Spotify's copy runs, a block at a time.
+        // How far back Spotify's copy runs, a block at a time: the same sound, at the same level.
+        let alike = { (theirs: [Float], ours: [Float]) -> Bool in
+            Match.similarity(theirs, ours) >= 0.97 && Self.gain(theirs, ours).map { Self.within($0, of: level, db: 1) } == true
+        }
         var from = probeStart
         while from - state.since >= 64 {
             let start = max(state.since, from - 1_024)
             let length = from - start
             guard let memory = Self.position(ofClock: start - delta, length: length, in: known, oldest: oldest),
-                  Match.similarity(monoCopy(from: start, count: length), monoCopy(from: memory, count: length)) >= 0.97
+                  alike(mono(start, length), mono(memory, length))
             else { break }
             from = start
         }
@@ -591,7 +610,7 @@ public final class Deck: @unchecked Sendable {
         for _ in 0..<16 {
             guard from + 64 <= probeStart,
                   let memory = Self.position(ofClock: from - delta, length: 64, in: known, oldest: oldest),
-                  Match.similarity(monoCopy(from: from, count: 64), monoCopy(from: memory, count: 64)) < 0.97
+                  !alike(mono(from, 64), mono(memory, 64))
             else { break }
             from += 64
         }
@@ -617,20 +636,67 @@ public final class Deck: @unchecked Sendable {
         return nil
     }
 
-    /// The two channels mixed to one. Read without the lock: everything asked for was written
-    /// before the caller looked at `written`, and the tap is nowhere near overwriting it.
-    private func monoCopy(from start: Int, count: Int) -> [Float] {
+    /// The two channels mixed to one and filtered through `kernel`, centred: `count` frames from
+    /// `start`, using the frames either side of them, and treating anything at or past `limit` (not
+    /// written yet) as silence. Read without the lock: everything asked for was written before the
+    /// caller looked at `written`, and the tap is nowhere near overwriting it.
+    private func monoCopy(from start: Int, count: Int, upTo limit: Int, kernel: [Float]) -> [Float] {
         guard count > 0, start >= 0 else { return [] }
+        let half = kernel.count / 2
+        let span = count + 2 * half
+        var raw = [Float](repeating: 0, count: span)
+        raw.withUnsafeMutableBufferPointer { o in
+            for i in 0..<span {
+                let position = start - half + i
+                guard position >= 0, position < limit else { continue }
+                let at = position % capacity
+                o[i] = (left[at] + right[at]) * 0.5
+            }
+        }
         var out = [Float](repeating: 0, count: count)
-        out.withUnsafeMutableBufferPointer { o in
-            var i = 0
-            while i < count {
-                let at = (start + i) % capacity
-                let chunk = min(count - i, capacity - at)
-                for j in 0..<chunk { o[i + j] = (left[at + j] + right[at + j]) * 0.5 }
-                i += chunk
+        raw.withUnsafeBufferPointer { r in
+            kernel.withUnsafeBufferPointer { k in
+                out.withUnsafeMutableBufferPointer { o in
+                    guard let rBase = r.baseAddress, let kBase = k.baseAddress, let oBase = o.baseAddress else { return }
+                    #if canImport(Accelerate)
+                    vDSP_conv(rBase, 1, kBase, 1, oBase, 1, vDSP_Length(count), vDSP_Length(kernel.count))
+                    #else
+                    for i in 0..<count { oBase[i] = Match.dot(rBase + i, kBase, kernel.count) }
+                    #endif
+                }
             }
         }
         return out
+    }
+
+    /// A low-pass at 4 kHz, 33 taps, Hann-windowed: what realignment compares. Spotify's 44.1 kHz
+    /// stream is resampled for most Macs' 48 kHz output, and after a seek the resampler restarts at
+    /// another phase, so its copy of the song can fall up to half a sample between the frames memory
+    /// holds. Full band, that drops a trap record's bright hi-hats below any threshold worth trusting;
+    /// below 4 kHz the same sound still scores 0.99 and a different place still scores nothing.
+    static func bandKernel(sampleRate: Double) -> [Float] {
+        let half = 16
+        let cutoff = 4_000 / sampleRate
+        var kernel = (-half...half).map { k -> Double in
+            let x = Double(k)
+            let sinc = k == 0 ? 2 * cutoff : sin(2 * .pi * cutoff * x) / (.pi * x)
+            return sinc * (0.5 + 0.5 * cos(.pi * x / Double(half + 1)))
+        }
+        let sum = kernel.reduce(0, +)
+        kernel = kernel.map { $0 / sum }
+        return kernel.map { Float($0) }
+    }
+
+    /// How much louder `a` is than `b` (1 for the same level); nil when either is silent.
+    static func gain(_ a: [Float], _ b: [Float]) -> Float? {
+        let aa = Match.dot(a, a)
+        let bb = Match.dot(b, b)
+        guard aa > 1e-9, bb > 1e-9 else { return nil }
+        return (aa / bb).squareRoot()
+    }
+
+    /// `value` is within `db` decibels of `reference`.
+    static func within(_ value: Float, of reference: Float, db: Float) -> Bool {
+        abs(20 * log10(value / reference)) <= db
     }
 }
