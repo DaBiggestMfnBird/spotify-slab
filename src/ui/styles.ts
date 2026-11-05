@@ -761,6 +761,9 @@ ${NEON_CSS}
 .slab-panel:not([data-bank="screw"]):not([data-bank="tape"]) :is(.slab-pads[data-bank="screw"], .slab-pads[data-bank="tape"], .slab-auto[data-for="screw"], .slab-auto[data-for="tape"]),
 .slab-panel[data-bank="screw"] :is(.slab-pads[data-bank="chop"], .slab-pads[data-bank="tape"], .slab-auto[data-for="chop"], .slab-auto[data-for="tape"]),
 .slab-panel[data-bank="tape"] :is(.slab-pads[data-bank="chop"], .slab-pads[data-bank="screw"], .slab-auto[data-for="chop"], .slab-auto[data-for="screw"]) { display: none; }
+/* In the Chop bank, DJ mode's row stands in for Auto chop's while it plays. */
+.slab-panel[data-dj="on"] .slab-auto[data-for="chop"]:not(.slab-dj-row),
+.slab-panel:not([data-dj="on"]) .slab-dj-row { display: none; }
 /* The tape is set and left, not played from the keys: no number in the corner. */
 .slab-key:empty { display: none; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }

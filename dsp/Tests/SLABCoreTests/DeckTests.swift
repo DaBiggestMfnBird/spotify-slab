@@ -10,10 +10,11 @@ private func songSample(_ position: Int) -> Float {
     return Float(x % 1_000_000) / 1_000_000 - 0.5
 }
 
-/// A record that sounds like one: a kick and an 808, chords, a voice and bright trap hi-hats,
-/// defined between the samples (`frame` can be fractional), so Spotify's copy can come back a
-/// fraction of a sample off, as a restarted resampler leaves it. It never repeats exactly.
-private func music(_ frame: Double) -> Float {
+/// A record that sounds like one: a kick and an 808, chords, a voice and trap hi-hats, defined
+/// between the samples (`frame` can be fractional), so Spotify's copy can come back a fraction of
+/// a sample off, as a restarted resampler leaves it. It never repeats exactly. In a breakdown the
+/// kick and the 808 drop out, and the hats ride over the chords and the voice.
+private func music(_ frame: Double, hats hatLevel: Double = 0.05, breakdown: Bool = false) -> Float {
     let t: Double = frame / 48_000
     let beat: Double = 60.0 / 140
     let twoPi: Double = 2 * .pi
@@ -51,8 +52,9 @@ private func music(_ frame: Double) -> Float {
     for (k, hz) in partials.enumerated() {
         metal += sin(twoPi * hz * t + Double(k) * 1.7)
     }
-    let hats: Double = 0.05 * metal * hit(inHat, decay: 0.025)
-    let mix: Double = 0.7 * kick + bass + chords + voice + hats
+    let hats: Double = hatLevel * metal * hit(inHat, decay: 0.025)
+    let low: Double = breakdown ? 0 : 0.7 * kick + bass
+    let mix: Double = low + chords + voice + hats
     return Float(mix * 0.5)
 }
 
@@ -529,12 +531,21 @@ final class DeckTests: XCTestCase {
 
     func testRealignsWhenSpotifysCopyIsHalfASampleOff() throws {
         // Spotify's 44.1 kHz stream resampled for a 48 kHz Mac: after the seek the resampler starts
-        // at another phase, and on a trap record's hi-hats no frame matches memory exactly.
-        let rig = Rig(song: { music(Double($0)) })
-        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5) }
+        // at another phase, and no frame matches memory exactly. On a stretch with no 808 and the hats
+        // as loud as the chords and the voice, the whole band scored 0.96 at best, under the bar, and
+        // the chop went live. Below 4 kHz it scores 0.9996.
+        let rig = Rig(song: { music(Double($0), hats: 0.12, breakdown: true) })
+        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5, hats: 0.12, breakdown: true) }
         // Never a skip or a repeat from the chop on, through the crossover onto Spotify's copy.
         XCTAssertNil(rig.drift(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames))
         XCTAssertEqual(try XCTUnwrap(rig.deck.seekGapMs), 220, accuracy: 15)
+    }
+
+    func testRealignsOnAFullMixHalfASampleOff() throws {
+        // The same with the kick and the 808 under it.
+        let rig = Rig(song: { music(Double($0)) })
+        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5) }
+        XCTAssertNil(rig.drift(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames))
     }
 
     func testCrossesOverOnlyOnceSpotifyHasFadedBackIn() throws {

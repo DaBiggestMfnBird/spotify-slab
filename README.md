@@ -104,7 +104,14 @@ The `DJ` switch in the header hands the record to SLAB. It puts it on **full scr
 | The hook (the song's loudest sections) | Screw held down over a bar |
 | A breakdown (its quietest) | The trunk shut for two bars |
 
-How much of each depends on what kind of record it is, from the artist's genres on Spotify, or with none, from the tempo. Houston and Southern rap get worked hardest, trap gets spun and looped, slow jams get their lines run back and long Screw holds, band and dance records more echoes and loops. The header says how it's reading the record: *DJ on: full screw, Houston*.
+How much of each depends on what kind of record it is. Houston and Southern rap get worked hardest, trap gets spun and looped, slow jams get their lines run back and long Screw holds, band and dance records more echoes and loops. The header says how it's reading the record: *DJ on: full screw, Houston*. It reads it, in order, from:
+
+1. **The kind you picked** for the artist, if you did.
+2. **The artist's genres** on Spotify, asked once per artist and kept. Spotify has marked artist genres deprecated and leaves more of them empty, so nothing leans on them alone.
+3. **How the track sounds**, from Spotify's audio features: rapped or sung, loud or soft, made to dance to or not.
+4. **Its tempo**, when Spotify says nothing else.
+
+While DJ mode is on, the Chop bank's last row is the DJ's, laid out like Auto chop's: **[−] [Houston / plays steady] [+]**. The press plays the record as the next kind, *Playing UGK as trap from now on*, and every UGK record after it; round the kinds back to what it read and the pick is let go. **−** and **+** set how hard it plays: *light* cuts on the bigger phrase lines and leaves room between moves, *hard* cuts every two bars and takes nearly every chance it gets.
 
 ![DJ mode on: the header reads DJ on: full screw, Houston, and the record sits seven semitones down](docs/dj.png)
 
@@ -272,7 +279,7 @@ src/
     keep.ts        moods kept for artists
     tape.ts        the Tape bank: rooms and layers over the mood
     dj.ts          DJ mode: what it plays, bar by bar
-    genre.ts       what kind of record it is, from the artist's genres
+    genre.ts       what kind of record it is: your pick, the artist's genres, the sound, the tempo
     style.ts       how you play, learned from your pads
     clock.ts       worker ticker (main-thread timers get clamped when hidden)
     state.ts       localStorage persistence
@@ -293,15 +300,18 @@ dsp/
     TapeColor.swift    hiss, crackle and crush, on the audio thread
   Sources/SLABDSP/
     TapCapture.swift   Core Audio process tap → the deck
-    DSPGraph.swift     pitch / low-pass / reverb / delay / tape stop
+    DSPGraph.swift     pitch / low-pass / reverb / delay / tape stop; renders offline for tests
     ControlServer.swift loopback HTTP control surface
     main.swift         CLI, lifecycle, recording mode
   Tests/SLABCoreTests/ the deck against a simulated Spotify (swift test)
+  Tests/SLABDSPTests/  the helper's own audio graph, rendered offline and measured (swift test)
 ```
 
 - **The grid** comes from `Spicetify.getAudioData(uri)` — Spotify's own beats and bars, in seconds. Cached per track.
 - **A chop is a jump** exactly N bars back, to the same place in the bar, so the groove carries straight through the cut. With the helper it happens in the helper's memory and Spotify is re-seeked behind it; without, it is a Spotify seek.
 - **The deck keeps one content clock across seeks.** Each time it finds Spotify's audio again it knows that audio is a copy of older audio at a fixed offset, so a second chop finds its bar wherever in memory it now lives, and when one copy runs out it carries on in another. On a looped beat, the record still playing on before Spotify's seek takes hold matches memory a bar back; the deck recognises it by following it back to the chop and waits for the seek itself.
+- **Finding Spotify again is done below 4 kHz.** Most Macs run at 48 kHz and Spotify's stream is 44.1, so after a seek the resampler can start at another phase and Spotify's copy falls up to half a sample between the frames memory holds. Full band, a bright passage (hats over a melody, no 808) scored that under the bar and the chop went live; below 4 kHz the same sound scores 0.9996 and another place still nothing. The copy is also held to the level it settles at, so the deck never crosses over while Spotify is still fading back in, and the decoder's first frames after a seek are passed over.
+- **The helper's graph is measured, not only compiled.** `DSPGraph` builds offline too, with no audio device, its ramps stepped by the audio rendered. The tests put real audio through the same nodes the app plays Spotify through and measure what comes out: the pitch, the Screw ride, the Trunk's lid, the Echo's repeats on the beat (the hit itself unchanged, so the send never doubles it) and a thrown echo ringing out, wow, hiss, crush, and DJ mode's full screw without clipping.
 - **The worker clock** exists because Chrome clamps main-thread timers to roughly one second when the Spotify window is occluded. A 40 ms worker tick keeps auto chop and loop on time even when the app is behind another window. If a locked-down client won't start the worker, or it never ticks, the clock drops to a main-thread timer, and a tape stop always finishes on its own timer, so nothing is left half-faded.
 - **The EQ bridge** matches filters by frequency, so a client with a different six-band layout still gets a sane mapping. One dead filter doesn't stop the curve.
 - **The tap** uses a private aggregate device with a tap list of dictionaries (`kAudioSubTapUIDKey`). A list of plain UID strings is accepted by the API and silently attaches nothing — that cost an afternoon.

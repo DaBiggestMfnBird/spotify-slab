@@ -15,7 +15,7 @@ import {
     tapeStop,
     watchNeedle,
 } from "../core/chops";
-import { djRunning, djStyleName, djYield, onDj, startDj, stopDj } from "../core/dj";
+import { HANDS, djRunning, djStyleName, djYield, nextDjStyle, onDj, setDjHand, startDj, stopDj } from "../core/dj";
 import { canHold, canTape, type DspParams, dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
 import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } from "../core/eq";
 import {
@@ -35,6 +35,7 @@ import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MINE_ID, MOODS, curvePath, mineMood, moodById, setMine } from "../core/moods";
 import { SCREW_MAX, SCREW_MIN, clampPitch, saveState } from "../core/state";
 import { isMove } from "../core/style";
+import type { StyleId } from "../core/genre";
 import { CLEAN_TAPE, isClean, nextRoom, roomName, type TapeLayer, withTape } from "../core/tape";
 import type { Grid, SlabState } from "../types";
 import {
@@ -88,6 +89,16 @@ const TAGLINE = "Slow, loud and bangin’";
 /** Full screw: DJ mode's sound, the Screwed mood ridden seven semitones down on a worn tape. */
 const DJ_MOOD = "screwed";
 const DJ_PITCH = -700;
+/** What the DJ plays a record as, for a sentence. */
+const PLAYED_AS: Record<StyleId, string> = {
+    houston: "Houston",
+    trap: "trap",
+    rap: "rap",
+    slowjam: "a slow jam",
+    band: "a band record",
+    dance: "a dance record",
+    pop: "pop",
+};
 const CHIP_TITLE = "SLAB, Third Coast playback moods";
 
 /** Pixels per cent. The track is laid out so 100 cents is exactly 12 px. */
@@ -447,6 +458,12 @@ export class Deck {
     private bankButtons = new Map<Bank, HTMLButtonElement>();
     private roomSub: HTMLElement | null = null;
     private djButton: HTMLButtonElement;
+    /** While DJ mode is on, the Chop bank's last row is the DJ's: how hard it plays, and what as. */
+    private djStyleButton: HTMLButtonElement;
+    private djStyleNameEl: HTMLSpanElement;
+    private djHandEl: HTMLSpanElement;
+    private handDown: HTMLButtonElement;
+    private handUp: HTMLButtonElement;
     /** When a hand last played a pad: what happens just after is the hand's, not the DJ's. */
     private lastManualAt = 0;
     private cleanButton: HTMLButtonElement | null = null;
@@ -717,6 +734,24 @@ export class Deck {
             title: "DJ mode: SLAB works the record itself, on full screw. A Chop or Screw pad of yours takes it back for eight bars.",
             onclick: () => this.toggleDj(),
         }, h("span", {}, "DJ"));
+        // While it plays, the Chop bank's last row is the DJ's, laid out like Auto chop's: the press
+        // says what kind of record it plays it as (press for the next, kept for the artist), and
+        // −/+ set how hard it plays.
+        this.djStyleNameEl = h("span", { class: "slab-auto-name" });
+        this.djHandEl = h("span", { class: "slab-every" });
+        this.djStyleButton = h("button", {
+            class: "slab-press slab-auto-press slab-dj-style",
+            type: "button",
+            onclick: () => this.cycleDjStyle(),
+        }, h("span", { class: "slab-auto-words" }, this.djStyleNameEl, this.djHandEl));
+        this.handDown = h("button", { class: "slab-press slab-step", type: "button", "aria-label": "DJ plays less" }, h("span", {}, "−"));
+        this.handUp = h("button", { class: "slab-press slab-step", type: "button", "aria-label": "DJ plays more" }, h("span", {}, "+"));
+        this.press(this.handDown, () => {
+            if (!isOff(this.handDown)) this.setDjHandLevel(this.state.djHand - 1);
+        });
+        this.press(this.handUp, () => {
+            if (!isOff(this.handUp)) this.setDjHandLevel(this.state.djHand + 1);
+        });
 
         this.panel = this.buildPanel();
 
@@ -763,6 +798,7 @@ export class Deck {
         this.renderTape();
         this.renderKeep();
         onDj((label) => this.flashActivity(label, false));
+        setDjHand(this.state.djHand);
         if (this.state.dj) startDj();
         this.renderDj();
         this.renderPitch();
@@ -1241,7 +1277,8 @@ export class Deck {
             this.bankButton("screw", "Screw"),
             this.bankButton("tape", "Tape"),
         );
-        const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth, tapeControl);
+        const djRow = h("div", { class: "slab-auto slab-dj-row", "data-for": "chop" }, this.handDown, this.djStyleButton, this.handUp);
+        const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, djRow, depth, tapeControl);
 
         // The scuff plate: stainless, ribbed along its length, a Phillips head at
         // each end, and the status stamped into the smooth field between the ribs.
@@ -1464,11 +1501,41 @@ export class Deck {
         this.flashActivity("DJ on: full screw");
     }
 
-    /** The switch, and in the tagline's place, what the DJ makes of the record. */
+    /** The next kind of record for the DJ to play this as; kept for the artist. */
+    private cycleDjStyle(): void {
+        if (isOff(this.djStyleButton)) return;
+        const next = nextDjStyle();
+        if (!next) return;
+        this.renderDj();
+        const artist = currentArtist();
+        this.flashActivity(artist?.name ? `Playing ${artist.name} as ${PLAYED_AS[next]} from now on` : `Playing it as ${PLAYED_AS[next]}`);
+    }
+
+    /** How hard the DJ plays, 1 to 4. */
+    private setDjHandLevel(level: number): void {
+        const next = Math.max(1, Math.min(HANDS.length, Math.round(level)));
+        if (next === this.state.djHand) return;
+        this.state.djHand = next;
+        saveState(this.state);
+        setDjHand(next);
+        this.renderDj();
+        this.announceSettled(() => `Plays ${HANDS[next - 1]}`);
+    }
+
+    /** The switch, in the tagline's place what the DJ makes of the record, and the DJ's row. */
     private renderDj(): void {
         setAttr(this.djButton, "aria-checked", this.state.dj ? "true" : "false");
+        setData(this.panel, "dj", this.state.dj ? "on" : "off");
         const style = djStyleName();
         setText(this.tagEl, this.state.dj ? (style ? `DJ on: full screw, ${style}` : "DJ on: full screw") : TAGLINE);
+        const name = style ? style[0].toUpperCase() + style.slice(1) : "Reading it";
+        const hand = `plays ${HANDS[this.state.djHand - 1]}`;
+        setText(this.djStyleNameEl, name);
+        setText(this.djHandEl, hand);
+        setAttr(this.djStyleButton, "aria-label", style ? `${name}, ${hand}: press to play it as another kind of record` : `${name}, ${hand}`);
+        setOff(this.djStyleButton, !style);
+        setOff(this.handDown, this.state.djHand <= 1);
+        setOff(this.handUp, this.state.djHand >= HANDS.length);
     }
 
     /** What the helper plays: the mood, through the tape, at the slider's pitch. */
