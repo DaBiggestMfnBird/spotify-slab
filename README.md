@@ -108,7 +108,7 @@ How much of each depends on what kind of record it is, from the artist's genres 
 
 ![DJ mode on: the header reads DJ on: full screw, Houston, and the record sits seven semitones down](docs/dj.png)
 
-It also leans toward how you play. Every pad you hit is counted, by kind of record and where in the phrase you hit it, and DJ mode makes more of those moves in those places. Any pad of yours takes the record back for eight bars. It decides one bar at a time, never acts on a bar it just replayed, and the same track gets the same mix. Switch it off and your sound comes back as it was. Auto chop rests while DJ mode is on.
+It also leans toward how you play. The chops, loops, lines, spins and holds you play yourself are counted, by kind of record and where in the phrase you play them, and DJ mode makes more of those moves in those places. Any pad of yours from the Chop or Screw bank takes the record back for eight bars; the tape pads leave it with the DJ. It decides one bar at a time, never acts on a bar it just replayed, and the same track gets the same mix. Pause, and whatever it had planned is called off. Switch it off and your sound comes back as it was. A mood kept for an artist waits while DJ mode is on, and goes on when you switch it off. Auto chop rests while DJ mode is on.
 
 Auto chop cuts on the phrase lines this music is built on: with every 4 bars, at the top of bars 5, 9, 13 and so on, replaying the bar that ended the phrase. Only bars reached for the first time count, so the replayed bar, your own chops and a running loop can never set it off again. The stepper shows how many bars until the next cut.
 

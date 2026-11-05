@@ -34,7 +34,7 @@ import { loadLines } from "../core/lyrics";
 import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MINE_ID, MOODS, curvePath, mineMood, moodById, setMine } from "../core/moods";
 import { SCREW_MAX, SCREW_MIN, clampPitch, saveState } from "../core/state";
-import type { Move } from "../core/style";
+import { isMove } from "../core/style";
 import { CLEAN_TAPE, isClean, nextRoom, roomName, type TapeLayer, withTape } from "../core/tape";
 import type { Grid, SlabState } from "../types";
 import {
@@ -88,19 +88,6 @@ const TAGLINE = "Slow, loud and bangin’";
 /** Full screw: DJ mode's sound, the Screwed mood ridden seven semitones down on a worn tape. */
 const DJ_MOOD = "screwed";
 const DJ_PITCH = -700;
-
-/** The pads a hand plays, by what DJ mode learns them as. */
-const MOVE_OF: Record<string, Move> = {
-    chop1: "chop1",
-    chop2: "chop2",
-    chop4: "chop4",
-    loop: "loop",
-    line: "line",
-    spin: "spin",
-    screw: "screw",
-    trunk: "trunk",
-    echo: "echo",
-};
 const CHIP_TITLE = "SLAB, Third Coast playback moods";
 
 /** Pixels per cent. The track is laid out so 100 cents is exactly 12 px. */
@@ -727,7 +714,7 @@ export class Deck {
             role: "switch",
             "aria-checked": String(state.dj),
             "aria-label": "DJ mode",
-            title: "DJ mode: SLAB works the record itself, on full screw. Any pad of yours takes it back for eight bars.",
+            title: "DJ mode: SLAB works the record itself, on full screw. A Chop or Screw pad of yours takes it back for eight bars.",
             onclick: () => this.toggleDj(),
         }, h("span", {}, "DJ"));
 
@@ -1458,6 +1445,8 @@ export class Deck {
             } else {
                 saveState(this.state);
             }
+            // An artist who came on while the DJ had the record gets their kept mood now.
+            this.applyKept(false);
             this.renderDj();
             this.renderAutoState();
             this.flashActivity("DJ off: the record is yours");
@@ -1665,8 +1654,12 @@ export class Deck {
         this.renderKeep();
     }
 
-    /** A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change. */
+    /**
+     * A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change.
+     * While DJ mode has the record it stays on full screw, and the kept mood waits for it to go off.
+     */
     private applyKept(say: boolean): void {
+        if (this.state.dj) return;
         const artist: Artist | null = currentArtist();
         const kept = keptFor(artist);
         if (!artist || !kept) return;
@@ -2651,20 +2644,20 @@ export class Deck {
         this.releases.push(release);
     }
 
-    /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     /** A pad played by hand: DJ mode steps back for eight bars, and learns where you play. */
     private handPlayed(def: PadDef): void {
         this.lastManualAt = Date.now();
-        const move = MOVE_OF[def.id];
-        if (move) djYield(move);
+        // The tape is set and left, not played: it leaves the record with the DJ.
+        if (def.bank !== "tape") djYield(isMove(def.id) ? def.id : undefined);
     }
 
+    /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     private firePad(pad: HTMLButtonElement, def: PadDef): void {
-        if (!isOff(pad)) this.handPlayed(def);
         if (isOff(pad)) {
             this.flashActivity(def.available ? (def.unavailable?.() ?? NEEDS_HELPER) : NO_GRID);
             return;
         }
+        this.handPlayed(def);
         void Promise.resolve(def.run()).then((ran) => {
             if (this.disposed) return;
             if (ran) this.hitPad(pad);

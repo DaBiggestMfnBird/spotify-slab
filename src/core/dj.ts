@@ -6,7 +6,7 @@
  * section's last bar looped, an echo thrown into the next section, a spin back, Screw
  * held over the hook, the trunk shut on a breakdown. How much of each depends on what
  * kind of record it is (see genre.ts), and leans toward the moves you make yourself
- * (style.ts). Any pad you hit takes the record back for eight bars.
+ * (style.ts). Any pad of yours from the Chop or Screw bank takes the record back for eight bars.
  *
  * It decides bar by bar, as each new bar is reached for the first time, so a bar it
  * replayed never sets it off again, and its dice are seeded by the track: the same
@@ -107,11 +107,19 @@ function letUpMine(): void {
     mine.clear();
 }
 
-/** Does `fn` when the needle reaches `at` (a song position), if the DJ is still playing by then. */
+function playing(): boolean {
+    try {
+        return Spicetify.Player.isPlaying();
+    } catch {
+        return false;
+    }
+}
+
+/** Does `fn` when the needle reaches `at` (a song position), if the DJ is still on and the record still playing. */
 function at(when: number, fn: () => void): void {
     const wait = Math.max(0, when - needlePosition());
     timers.push(window.setTimeout(() => {
-        if (running) fn();
+        if (running && playing()) fn();
     }, wait));
 }
 
@@ -184,7 +192,7 @@ export function stopDj(): void {
 
 /**
  * A pad of your own: the record is yours for the next eight bars, and whatever the DJ had
- * planned or was holding is called off. It's counted, so the DJ learns where you play.
+ * planned or was holding is called off. A move is counted, so the DJ learns where you play.
  */
 export function djYield(move?: Move): void {
     const grid = gridFor();
@@ -200,10 +208,8 @@ export function djYield(move?: Move): void {
 
 function tick(): void {
     if (!running) return;
-    let playing = false;
     let track: string | null = null;
     try {
-        playing = Spicetify.Player.isPlaying();
         track = Spicetify.Player.data?.item?.uri ?? null;
     } catch {
         return;
@@ -212,7 +218,13 @@ function tick(): void {
         void prepare(track);
         return;
     }
-    if (!playing || !styleReady) return;
+    if (!playing()) {
+        // Stopped: nothing planned plays into the silence, and nothing the DJ holds stays down.
+        clearTimers();
+        letUpMine();
+        return;
+    }
+    if (!styleReady) return;
     const grid = gridFor();
     if (!grid) return;
     const heard = needlePosition();

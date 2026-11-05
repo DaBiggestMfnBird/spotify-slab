@@ -536,11 +536,11 @@ self.onmessage = (event) => {
     helperCutUntil = 0;
   }
   function watchNeedle() {
-    let playing = false;
+    let playing2 = false;
     let at2 = 0;
     let uri2 = null;
     try {
-      playing = Spicetify.Player.isPlaying();
+      playing2 = Spicetify.Player.isPlaying();
       at2 = Spicetify.Player.getProgress();
       uri2 = Spicetify.Player.data?.item?.uri ?? null;
     } catch {
@@ -548,10 +548,10 @@ self.onmessage = (event) => {
     }
     const now = Date.now();
     if (uri2 !== lastUri) {
-      runFrom = playing ? at2 : null;
+      runFrom = playing2 ? at2 : null;
       forgetReckoning();
       if (lastUri !== null) dropHelperCut();
-    } else if (!playing) {
+    } else if (!playing2) {
       forgetReckoning();
       if (lastPlaying) dropHelperCut();
     } else if (!lastPlaying) {
@@ -566,10 +566,10 @@ self.onmessage = (event) => {
         runFrom = sentTo;
       }
     }
-    if (runFrom === null && playing) runFrom = at2;
+    if (runFrom === null && playing2) runFrom = at2;
     lastAt = at2;
     lastTime = now;
-    lastPlaying = playing;
+    lastPlaying = playing2;
     lastUri = uri2;
   }
   function needlePosition() {
@@ -1462,6 +1462,10 @@ self.onmessage = (event) => {
   }
 
   // src/core/style.ts
+  var MOVES = ["chop1", "chop2", "chop4", "loop", "line", "spin", "screw", "trunk", "echo"];
+  function isMove(id) {
+    return MOVES.includes(id);
+  }
   var KEY3 = "slab:style:v1";
   var PHRASE = 8;
   var ENOUGH = 6;
@@ -1552,10 +1556,17 @@ self.onmessage = (event) => {
     for (const name of mine2) release(name);
     mine2.clear();
   }
+  function playing() {
+    try {
+      return Spicetify.Player.isPlaying();
+    } catch {
+      return false;
+    }
+  }
   function at(when, fn) {
     const wait = Math.max(0, when - needlePosition());
     timers.push(window.setTimeout(() => {
-      if (running) fn();
+      if (running && playing()) fn();
     }, wait));
   }
   function dice(bar) {
@@ -1629,10 +1640,8 @@ self.onmessage = (event) => {
   }
   function tick() {
     if (!running) return;
-    let playing = false;
     let track = null;
     try {
-      playing = Spicetify.Player.isPlaying();
       track = Spicetify.Player.data?.item?.uri ?? null;
     } catch {
       return;
@@ -1641,7 +1650,12 @@ self.onmessage = (event) => {
       void prepare(track);
       return;
     }
-    if (!playing || !styleReady) return;
+    if (!playing()) {
+      clearTimers();
+      letUpMine();
+      return;
+    }
+    if (!styleReady) return;
     const grid = gridFor();
     if (!grid) return;
     const heard = needlePosition();
@@ -3266,17 +3280,6 @@ ${NEON_CSS}
   var TAGLINE = "Slow, loud and bangin\u2019";
   var DJ_MOOD = "screwed";
   var DJ_PITCH = -700;
-  var MOVE_OF = {
-    chop1: "chop1",
-    chop2: "chop2",
-    chop4: "chop4",
-    loop: "loop",
-    line: "line",
-    spin: "spin",
-    screw: "screw",
-    trunk: "trunk",
-    echo: "echo"
-  };
   var CHIP_TITLE = "SLAB, Third Coast playback moods";
   var PX_PER_CENT = 12 / 100;
   var RAIL_WIDTH = WHEEL_SIZE + PX_PER_CENT * PITCH_LIMIT * 2;
@@ -3714,7 +3717,7 @@ ${NEON_CSS}
         role: "switch",
         "aria-checked": String(state.dj),
         "aria-label": "DJ mode",
-        title: "DJ mode: SLAB works the record itself, on full screw. Any pad of yours takes it back for eight bars.",
+        title: "DJ mode: SLAB works the record itself, on full screw. A Chop or Screw pad of yours takes it back for eight bars.",
         onclick: () => this.toggleDj()
       }, h("span", {}, "DJ"));
       this.panel = this.buildPanel();
@@ -4359,6 +4362,7 @@ ${NEON_CSS}
         } else {
           saveState(this.state);
         }
+        this.applyKept(false);
         this.renderDj();
         this.renderAutoState();
         this.flashActivity("DJ off: the record is yours");
@@ -4544,8 +4548,12 @@ ${NEON_CSS}
       if (artist && keptFor(artist)) keep(artist, this.state.moodId, this.state.pitch);
       this.renderKeep();
     }
-    /** A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change. */
+    /**
+     * A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change.
+     * While DJ mode has the record it stays on full screw, and the kept mood waits for it to go off.
+     */
     applyKept(say2) {
+      if (this.state.dj) return;
       const artist = currentArtist();
       const kept = keptFor(artist);
       if (!artist || !kept) return;
@@ -5382,19 +5390,18 @@ ${NEON_CSS}
       });
       this.releases.push(release3);
     }
-    /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     /** A pad played by hand: DJ mode steps back for eight bars, and learns where you play. */
     handPlayed(def) {
       this.lastManualAt = Date.now();
-      const move = MOVE_OF[def.id];
-      if (move) djYield(move);
+      if (def.bank !== "tape") djYield(isMove(def.id) ? def.id : void 0);
     }
+    /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     firePad(pad, def) {
-      if (!isOff(pad)) this.handPlayed(def);
       if (isOff(pad)) {
         this.flashActivity(def.available ? def.unavailable?.() ?? NEEDS_HELPER : NO_GRID);
         return;
       }
+      this.handPlayed(def);
       void Promise.resolve(def.run()).then((ran) => {
         if (this.disposed) return;
         if (ran) this.hitPad(pad);
@@ -5516,9 +5523,9 @@ ${NEON_CSS}
       if (!playingNow || this.panel.hidden) this.stopBigWheel();
       if (this.panel.hidden) return;
       this.renderHelperLine();
-      const playing = isPlaying();
-      setData(this.panel, "playing", playing ? "true" : "false");
-      setText(this.playEl, playing ? "Playing" : "Paused");
+      const playing2 = isPlaying();
+      setData(this.panel, "playing", playing2 ? "true" : "false");
+      setText(this.playEl, playing2 ? "Playing" : "Paused");
       const grid = gridFor();
       setData(this.panel, "grid", grid ? "true" : "false");
       if (!grid) {
@@ -5556,7 +5563,7 @@ ${NEON_CSS}
       setOff(this.switchEl, autoOff);
       if (autoOff) setAttr(this.switchEl, "aria-describedby", "slab-nogrid");
       else if (this.switchEl.hasAttribute("aria-describedby")) this.switchEl.removeAttribute("aria-describedby");
-      if (playing && grid && this.lampFrame === null) this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
+      if (playing2 && grid && this.lampFrame === null) this.lampFrame = window.requestAnimationFrame(() => this.tickBeat());
     }
     /** Bar, beat lamps and ruler, from where the record actually is. */
     renderBeat(grid) {

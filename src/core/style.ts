@@ -5,7 +5,13 @@
 
 import type { StyleId } from "./genre";
 
-export type Move = "chop1" | "chop2" | "chop4" | "loop" | "line" | "spin" | "screw" | "trunk" | "echo";
+/** The moves DJ mode makes, and learns from yours: the pads of the same names. */
+export const MOVES = ["chop1", "chop2", "chop4", "loop", "line", "spin", "screw", "trunk", "echo"] as const;
+export type Move = (typeof MOVES)[number];
+
+export function isMove(id: string): id is Move {
+    return (MOVES as readonly string[]).includes(id);
+}
 
 const KEY = "slab:style:v1";
 /** Bars in a phrase, for where a move falls in it. */
