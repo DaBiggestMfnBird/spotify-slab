@@ -27,5 +27,11 @@ let package = Package(
             dependencies: ["SLABCore"],
             path: "Tests/SLABCoreTests"
         ),
+        // The helper's own audio graph, rendered offline: the nodes it plays Spotify through, measured.
+        .testTarget(
+            name: "SLABDSPTests",
+            dependencies: ["SLABDSP", "SLABCore"],
+            path: "Tests/SLABDSPTests"
+        ),
     ]
 )

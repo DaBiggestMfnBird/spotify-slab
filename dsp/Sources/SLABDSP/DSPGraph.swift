@@ -46,7 +46,7 @@ struct Hold: Equatable {
 }
 
 final class DSPGraph {
-    private let engine = AVAudioEngine()
+    private let engine: AVAudioEngine
     private let source: AVAudioSourceNode
     private let timePitch = AVAudioUnitTimePitch()
     /// The tape's speed, which wow sets wandering; pitch and time wander together, as on a tape.
@@ -93,13 +93,32 @@ final class DSPGraph {
     /// Peak of the last render block, for the panel's level readout.
     nonisolated(unsafe) static var renderPeak: Float = 0
 
-    init(ring: Deck, sampleRate: Double) {
+    /// Rendering offline, as the tests do: as fast as the machine goes, with no audio device. What
+    /// the live timers step on the clock (the hold's ramp, the wow, a thrown echo's end) steps on
+    /// the audio rendered so far instead, in `renderOffline`.
+    private let offline: Bool
+    private var renderedFrames = 0
+    private var holdRamping = false
+    private var echoRingPending = false
+
+    init(ring: Deck, sampleRate: Double, offline: Bool = false) {
         self.ring = ring
         self.sampleRate = sampleRate
+        self.offline = offline
 
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
             fatalError("could not build audio format")
         }
+        let engine = AVAudioEngine()
+        if offline {
+            // Before anything is connected, so the graph never looks for an output device.
+            do {
+                try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
+            } catch {
+                fatalError("could not render offline: \(error)")
+            }
+        }
+        self.engine = engine
         let color = TapeColor(sampleRate: sampleRate)
         self.color = color
 
@@ -174,10 +193,35 @@ final class DSPGraph {
         engine.prepare()
         try engine.start()
         isRunning = true
+        // Offline, the deck is fed as the graph renders: no backlog to drop, and no Spotify to steer by.
+        guard !offline else { return }
         // Capture runs while the engine is being prepared. Drop that backlog so
         // the first thing heard is current, not a second stale.
         ring.trim(keep: 1_024)
         startSteering()
+    }
+
+    /// The graph's clock: the wall clock live, the audio rendered so far offline.
+    private func now() -> Date {
+        offline ? Date(timeIntervalSinceReferenceDate: Double(renderedFrames) / sampleRate) : Date()
+    }
+
+    /// The format `renderOffline` fills.
+    var renderFormat: AVAudioFormat { engine.manualRenderingFormat }
+
+    /// Offline only: renders the next `frames` (at most 4096) into `buffer`, then moves the clock on
+    /// by as much and steps what the live timers would have.
+    func renderOffline(_ frames: Int, into buffer: AVAudioPCMBuffer) throws -> AVAudioEngineManualRenderingStatus {
+        precondition(offline, "renderOffline is for a graph built offline")
+        let status = try engine.renderOffline(AVAudioFrameCount(frames), to: buffer)
+        renderedFrames += frames
+        if holdRamping { stepHold() }
+        if wowDepth > 0 { stepWow() }
+        if echoRingPending, now() >= echoRingUntil {
+            echoRingPending = false
+            mix(current, holdNow)
+        }
+        return status
     }
 
     func stop() {
@@ -261,6 +305,7 @@ final class DSPGraph {
 
     /// Wow: the tape's speed wandering a fraction of a percent, slow and never quite the same twice.
     private func setWow(_ amount: Float) {
+        let wasOn = wowDepth > 0
         wowDepth = max(0, min(1, amount))
         if wowDepth == 0 {
             wowTimer?.cancel()
@@ -270,8 +315,9 @@ final class DSPGraph {
             return
         }
         varispeed.bypass = false
-        guard wowTimer == nil else { return }
-        wowStart = Date()
+        guard !wasOn else { return }
+        wowStart = now()
+        guard !offline else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(10), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in self?.stepWow() }
@@ -280,7 +326,7 @@ final class DSPGraph {
     }
 
     private func stepWow() {
-        let t = Date().timeIntervalSince(wowStart)
+        let t = now().timeIntervalSince(wowStart)
         let wander = 0.78 * sin(2 * .pi * 0.62 * t) + 0.22 * sin(2 * .pi * 1.73 * t + 1.1)
         varispeed.rate = Float(1 + 0.0028 * Double(wowDepth) * wander)
     }
@@ -291,7 +337,7 @@ final class DSPGraph {
         timePitch.pitch = max(-2400, min(2400, p.pitch + h.pitchOffset))
         // While a thrown echo rings out it keeps its own time and feedback; only the send was cut.
         let echo = h.echoMix > 0
-        let ringing = !echo && Date() < echoRingUntil ? echoRing : nil
+        let ringing = !echo && now() < echoRingUntil ? echoRing : nil
         delay.delayTime = max(0.01, min(2.0, echo ? h.echoTime : ringing?.time ?? p.delayTime))
         delay.feedback = max(0, min(95, echo ? max(p.delayFeedback, h.echoFeedback) : ringing?.feedback ?? p.delayFeedback))
         send.outputVolume = max(0, min(1, max(p.delayMix, h.echoMix) / 100))
@@ -330,15 +376,20 @@ final class DSPGraph {
             let feedback = max(0.05, Double(holdFrom.echoFeedback) / 100)
             let seconds = min(8, max(1, holdFrom.echoTime * log(0.001) / log(feedback)))
             echoRing = (holdFrom.echoTime, holdFrom.echoFeedback)
-            echoRingUntil = Date().addingTimeInterval(seconds)
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.05) { [weak self] in
-                guard let self, Date() >= self.echoRingUntil else { return }
-                self.mix(self.current, self.holdNow)
+            echoRingUntil = now().addingTimeInterval(seconds)
+            if offline {
+                echoRingPending = true
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.05) { [weak self] in
+                    guard let self, Date() >= self.echoRingUntil else { return }
+                    self.mix(self.current, self.holdNow)
+                }
             }
         }
-        holdStart = Date()
+        holdStart = now()
         holdSeconds = max(0, Double(ms) / 1000)
-        if holdTimer == nil {
+        holdRamping = true
+        if holdTimer == nil, !offline {
             let timer = DispatchSource.makeTimerSource(queue: .main)
             timer.schedule(deadline: .now() + .milliseconds(10), repeating: .milliseconds(10), leeway: .milliseconds(2))
             timer.setEventHandler { [weak self] in self?.stepHold() }
@@ -352,7 +403,7 @@ final class DSPGraph {
     private func armHoldWatch() {
         holdWatch?.cancel()
         holdWatch = nil
-        guard holdTo != .none else { return }
+        guard holdTo != .none, !offline else { return }
         let watch = DispatchSource.makeTimerSource(queue: .main)
         watch.schedule(deadline: .now() + Self.holdLifetime)
         watch.setEventHandler { [weak self] in
@@ -364,7 +415,7 @@ final class DSPGraph {
     }
 
     private func stepHold() {
-        let t = holdSeconds > 0 ? min(1, Date().timeIntervalSince(holdStart) / holdSeconds) : 1
+        let t = holdSeconds > 0 ? min(1, now().timeIntervalSince(holdStart) / holdSeconds) : 1
         let s = Float(t)
         var h = Hold.none
         h.pitchOffset = holdFrom.pitchOffset + (holdTo.pitchOffset - holdFrom.pitchOffset) * s
@@ -379,6 +430,7 @@ final class DSPGraph {
         holdNow = t >= 1 ? holdTo : h
         mix(current, holdNow)
         if t >= 1 {
+            holdRamping = false
             holdTimer?.cancel()
             holdTimer = nil
         }
