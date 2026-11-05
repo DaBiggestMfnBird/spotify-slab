@@ -170,14 +170,23 @@ private final class Rig {
     /// what's heard isn't the song straight on from `position` (to within a sample, below 4 kHz),
     /// or nil. A skip or a repeat of more than a sample anywhere moves the best match off.
     func drift(from index: Int, playing position: Int) -> Int? {
-        let smooth = { (values: [Float]) -> [Float] in
-            (0..<(values.count - 11)).map { i in values[i..<(i + 12)].reduce(0, +) / 12 }
+        // The deck's own 4 kHz filter: a plain average lets bright hats through, and on a copy half a
+        // sample off they alone would pull a perfect join under the bar.
+        let kernel = Deck.bandKernel(sampleRate: rate)
+        let taps = kernel.count
+        let band = { (values: [Float]) -> [Float] in
+            (0...(values.count - taps)).map { i in
+                var sum: Float = 0
+                for j in 0..<taps { sum += values[i + j] * kernel[j] }
+                return sum
+            }
         }
+        let span = 512 + taps - 1
         var at = index
-        while at + 512 + 24 <= heard.count {
-            let ours = smooth(Array(heard[at..<(at + 512 + 11)]))
+        while at + span + 8 <= heard.count {
+            let ours = band(Array(heard[at..<(at + span)]))
             let lagScores = (-4...4).map { lag -> (Int, Float) in
-                let theirs = smooth((0..<(512 + 11)).map { song(position + at - index + lag + $0) })
+                let theirs = band((0..<span).map { song(position + at - index + lag + $0) })
                 return (lag, Match.similarity(ours, theirs))
             }
             let best = lagScores.max { $0.1 < $1.1 }!

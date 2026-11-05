@@ -113,6 +113,8 @@ How much of each depends on what kind of record it is. Houston and Southern rap 
 
 While DJ mode is on, the Chop bank's last row is the DJ's, laid out like Auto chop's: **[−] [Houston / plays steady] [+]**. The press plays the record as the next kind, *Playing UGK as trap from now on*, and every UGK record after it; round the kinds back to what it read and the pick is let go. **−** and **+** set how hard it plays: *light* cuts on the bigger phrase lines and leaves room between moves, *hard* cuts every two bars and takes nearly every chance it gets.
 
+![The Chop bank with DJ mode on: its last row reads minus, Houston plays steady, plus](docs/dj-row.png)
+
 ![DJ mode on: the header reads DJ on: full screw, Houston, and the record sits seven semitones down](docs/dj.png)
 
 It also leans toward how you play. The chops, loops, lines, spins and holds you play yourself are counted, by kind of record and where in the phrase you play them, and DJ mode makes more of those moves in those places. Any pad of yours from the Chop or Screw bank takes the record back for eight bars; the tape pads leave it with the DJ. It decides one bar at a time, never acts on a bar it just replayed, and the same track gets the same mix. Pause, and whatever it had planned is called off. Switch it off and your sound comes back as it was. A mood kept for an artist waits while DJ mode is on, and goes on when you switch it off. Auto chop rests while DJ mode is on.
