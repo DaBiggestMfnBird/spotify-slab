@@ -7,9 +7,20 @@
  * Screw did this with two turntables and a pause button.
  */
 
+import type { Grid } from "../types";
 import { subscribe } from "./clock";
-import { canJump, dspCancelJump, dspJump, dspStatus, seekAheadMs } from "./dsp";
-import { barIndexAt, barLengthMs, barStartMs, gridFor, loadGrid } from "./grid";
+import { canJump, canSpin, dspCancelJump, dspJump, dspSpin, dspStatus, seekAheadMs } from "./dsp";
+import {
+    barIndexAt,
+    barLengthMs,
+    barStartMs,
+    beatIndexAt,
+    beatLengthMs,
+    beatStartMs,
+    gridFor,
+    loadGrid,
+} from "./grid";
+import { lineJustHeard, loadLines } from "./lyrics";
 
 export type ChopKind = "chop" | "loop" | "stop" | "auto";
 
@@ -196,16 +207,19 @@ function sent(to: number, keepsRun: boolean): void {
  * sent a little past the target to catch up out of earshot. Without it, Spotify is seeked.
  * True when the helper took it.
  */
-async function cut(target: number, from: number, inMs = 0): Promise<boolean> {
-    if (canJump()) {
+async function cut(target: number, from: number, inMs = 0, spin = false): Promise<boolean> {
+    if (spin ? canSpin() : canJump()) {
         const ahead = seekAheadMs();
         const asked = Date.now();
-        const jumped = await dspJump({
+        const order = {
             backMs: Math.round(from - target),
-            inMs: Math.round(inMs),
             seekAheadMs: ahead,
             availableMs: Math.round(unbrokenMs(from)),
-        });
+        };
+        // A spin turns from now and lands `inMs` from now; a jump waits `inMs`, then lands.
+        const jumped = spin
+            ? await dspSpin({ ...order, spinMs: Math.round(inMs) })
+            : await dspJump({ ...order, inMs: Math.round(inMs) });
         if (jumped) {
             // The helper counted `inMs` from when the order reached it, about halfway through the
             // round trip; reckoning from the answer would make every loop pass that much long.
@@ -263,6 +277,107 @@ export async function chopBars(bars: number, auto = false): Promise<boolean> {
         padJumpAt = Date.now();
         manualBar = index;
         emit("chop", `${span} bar${span === 1 ? "" : "s"} back`);
+        return true;
+    } finally {
+        busy = false;
+    }
+}
+
+/** A line that started longer ago than this is behind an instrumental stretch: nothing to run back. */
+const LINE_REACH_MS = 15_000;
+
+/**
+ * Where the beat grid puts `at`'s place in its beat, in the beat at or before `start`: the same
+ * place in the beat, so the groove carries through, and never past the line's first word.
+ */
+function onTheBeat(grid: Grid, at: number, start: number): number {
+    const here = beatIndexAt(grid, at);
+    let there = beatIndexAt(grid, start);
+    if (here < 0 || there < 0) return start;
+    const phase = (at - beatStartMs(grid, here)) / beatLengthMs(grid, here);
+    let target = beatStartMs(grid, there) + phase * beatLengthMs(grid, there);
+    if (target > start + 25 && there > 0) {
+        there -= 1;
+        target = beatStartMs(grid, there) + phase * beatLengthMs(grid, there);
+    }
+    return target;
+}
+
+function quote(words: string): string {
+    return words.length > 34 ? `${words.slice(0, 33).trimEnd()}…` : words;
+}
+
+/**
+ * Run the line back: back to the start of the lyric line just heard, at the same place in the
+ * beat, the way Screw ran a vocal back. Synced lyrics come from Spotify; a track without them,
+ * or a stretch with no singing, gets a bar chop instead.
+ */
+export async function runLineBack(): Promise<boolean> {
+    if (busy) return false;
+    const grid = await ensureGrid();
+    if (!grid) return false;
+    const lines = await loadLines();
+    const heard = needlePosition();
+    const line = lines ? lineJustHeard(lines, heard) : null;
+    if (!line || heard - line.startMs > LINE_REACH_MS) {
+        const did = await chopBars(1, true);
+        if (did) {
+            padJumpAt = Date.now();
+            manualBar = barIndexAt(grid, heard);
+            emit("chop", lines ? "No line here, so a bar back" : "No synced lyrics, so a bar back");
+        }
+        return did;
+    }
+    busy = true;
+    try {
+        const target = onTheBeat(grid, heard, line.startMs);
+        // Barely into it: nothing worth running back yet.
+        if (heard - target < 250) return false;
+        await cut(target, heard);
+        padJumpAt = Date.now();
+        manualBar = barIndexAt(grid, heard);
+        emit("chop", `Back to “${quote(line.words)}”`);
+        return true;
+    } finally {
+        busy = false;
+    }
+}
+
+/** A backspin turns for a beat, inside these bounds: shorter is a scratch, longer drags. */
+const SPIN_MIN_MS = 350;
+const SPIN_MAX_MS = 650;
+
+/**
+ * Backspin into a chop: the helper spins the record back for about a beat, then it lands a bar
+ * back from where it would have been, on the beat. Without a helper that can, a bar chop.
+ */
+export async function spinBack(): Promise<boolean> {
+    if (!canSpin()) {
+        const did = await chopBars(1, true);
+        if (did) {
+            padJumpAt = Date.now();
+            emit("chop", dspStatus().linked ? "1 bar back. Spinning needs a newer SLAB DSP." : "1 bar back. Spinning needs SLAB DSP.");
+        }
+        return did;
+    }
+    if (busy) return false;
+    busy = true;
+    try {
+        const grid = await ensureGrid();
+        if (!grid) return false;
+        const heard = needlePosition();
+        const beat = beatLengthMs(grid, Math.max(0, beatIndexAt(grid, heard)));
+        const turn = Math.max(SPIN_MIN_MS, Math.min(SPIN_MAX_MS, beat));
+        // Where the record will be when the spin ends, and a bar back from there, same place in the bar.
+        const end = heard + turn;
+        const index = barIndexAt(grid, end);
+        if (index < 1) return false;
+        const phase = (end - barStartMs(grid, index)) / barLengthMs(grid, index);
+        const target = barStartMs(grid, index - 1) + phase * barLengthMs(grid, index - 1);
+        await cut(target, heard, turn, true);
+        padJumpAt = Date.now();
+        manualBar = index;
+        emit("chop", "Spun back a bar");
         return true;
     } finally {
         busy = false;

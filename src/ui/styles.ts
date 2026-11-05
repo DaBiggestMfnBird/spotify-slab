@@ -291,7 +291,7 @@ ${NEON_CSS}
 /* A short window gets the compact sign and one line under it. */
 .slab-panel[data-short="true"] .slab-stage { min-height: 70px; }
 .slab-panel[data-short="true"] .slab-sub { display: none; }
-.slab-panel[data-short="true"] .slab-mood { min-height: 34px; grid-template-rows: minmax(26px, auto); }
+.slab-panel[data-short="true"] .slab-mood { min-height: 32px; grid-template-rows: minmax(24px, auto); }
 .slab-panel[data-short="true"] .slab-mood-cents {
   position: absolute;
   width: 1px;
@@ -299,7 +299,8 @@ ${NEON_CSS}
   overflow: hidden;
   clip-path: inset(50%);
 }
-.slab-panel[data-short="true"] .slab-mood-curve { height: 26px; }
+.slab-panel[data-short="true"] .slab-mood-curve { height: 24px; }
+.slab-panel[data-short="true"] .slab-lock svg { height: 24px; }
 .slab-panel[data-short="true"] .slab-sill-plate { min-height: 20px; }
 
 /* Pitch. */
@@ -384,14 +385,16 @@ ${NEON_CSS}
 .slab-press:active:not([aria-disabled="true"]),
 .slab-press[data-hit="true"]:not([aria-disabled="true"]),
 .slab-press[data-latched="true"],
-.slab-auto-press[aria-checked="true"] {
+.slab-auto-press[aria-checked="true"],
+.slab-bank[aria-checked="true"] {
   transform: translateY(2px);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7), 0 0 0 #0B0203;
 }
 .slab-press:active:not([aria-disabled="true"])::after,
 .slab-press[data-hit="true"]:not([aria-disabled="true"])::after,
 .slab-press[data-latched="true"]::after,
-.slab-auto-press[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
+.slab-auto-press[aria-checked="true"]::after,
+.slab-bank[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
 .slab-press[aria-disabled="true"] {
   filter: saturate(0.45) brightness(0.62);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
@@ -590,22 +593,37 @@ ${NEON_CSS}
  * same paint, a seam round it, and a pinstripe pulled by hand along its top
  * and down its leading edge. The picked one sits recessed in the vinyl.
  */
-.slab-moods {
+.slab-doors {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(4, auto);
   gap: 4px;
   margin-top: 8px;
+}
+/* The seven moods are one radio group; Keep is a switch, so it takes the eighth door's place beside it. */
+.slab-moods {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-template-rows: subgrid;
+}
+.slab-keep { grid-column: 2; grid-row: 4; }
+@supports not (grid-template-rows: subgrid) {
+  .slab-doors { display: block; position: relative; }
+  .slab-moods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .slab-keep { position: absolute; right: 0; bottom: 0; width: calc(50% - 2px); }
 }
 .slab-mood {
   --stripe: var(--gold);
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
-  grid-template-rows: minmax(18px, auto) minmax(16px, auto);
+  grid-template-rows: minmax(17px, auto) minmax(13px, auto);
   column-gap: 6px;
   align-items: center;
-  min-height: 42px;
-  padding: 4px 8px 4px 14px;
+  min-height: 36px;
+  padding: 3px 8px 3px 14px;
   text-align: left;
   border-radius: 4px;
   background: rgba(255, 210, 210, 0.04);
@@ -627,7 +645,24 @@ ${NEON_CSS}
 .slab-mood-curve { grid-column: 2; grid-row: 1 / 3; overflow: visible; color: var(--wall-soft); }
 .slab-mood-zero { fill: none; stroke: currentColor; stroke-opacity: 0.3; stroke-width: 1; }
 .slab-mood-line { fill: none; stroke: currentColor; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
-.slab-mood-cents { grid-column: 1; grid-row: 2; color: var(--wall-soft); }
+.slab-mood-cents { grid-column: 1; grid-row: 2; font-size: 13px; line-height: 13px; color: var(--wall-soft); }
+/* An empty Mine says what a tap does, across the whole door. */
+.slab-mine[data-empty="true"] .slab-mood-cents { grid-column: 1 / 3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Keep: a name that can be long, cut short on one line, and the lock knob where a curve would be. */
+.slab-keep { grid-template-columns: minmax(0, 1fr) 22px; }
+.slab-keep .slab-mood-name, .slab-keep .slab-mood-cents { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slab-lock { grid-column: 2; grid-row: 1 / 3; display: flex; align-items: center; justify-content: center; }
+.slab-lock svg { display: block; height: 28px; width: auto; overflow: visible; }
+.slab-lock-pin { transition: transform 120ms cubic-bezier(.3, 1.6, .5, 1); }
+.slab-keep[aria-pressed="true"] .slab-lock-pin { transform: translateY(9px); }
+.slab-keep[aria-pressed="true"] {
+  --stripe: var(--wall);
+  background: linear-gradient(180deg, #1E070A, #2A0C10);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 214, 214, 0.25);
+  transform: none;
+}
+.slab-keep[aria-disabled="true"] { filter: saturate(0.45) brightness(0.7); }
+.slab-keep[aria-disabled="true"]:hover { transform: none; background: rgba(255, 210, 210, 0.04); }
 .slab-mood[aria-checked="true"] {
   --stripe: var(--wall);
   background: linear-gradient(180deg, #1E070A, #2A0C10);
@@ -714,7 +749,11 @@ ${NEON_CSS}
   margin-top: 8px;
 }
 .slab-pad { --roll: 27px; height: 54px; gap: 1px; }
-.slab-pad[data-pad="stop"] { grid-column: 6; }
+.slab-pad:is([data-pad="stop"], [data-pad="spin"]) { grid-column: 6; }
+.slab-panel:not([data-bank="screw"]) .slab-pads[data-bank="screw"],
+.slab-panel[data-bank="screw"] .slab-pads[data-bank="chop"],
+.slab-panel:not([data-bank="screw"]) .slab-auto[data-for="screw"],
+.slab-panel[data-bank="screw"] .slab-auto[data-for="chop"] { display: none; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
 .slab-pad small { font-size: 12px; line-height: 14px; color: var(--wall-soft); }
 /* The number key that plays it, small in the corner like a pad number on a sampler. */
@@ -728,20 +767,32 @@ ${NEON_CSS}
   color: var(--wall-soft);
 }
 
-.slab-auto {
+/* Under the pads: which bank shows, then that bank's own control. */
+.slab-bankrow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   height: 44px;
   padding-top: 4px;
 }
-.slab-auto-press { --roll: 30px; min-width: 104px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
-.slab-auto-on { display: none; }
-.slab-auto-press[aria-checked="true"] .slab-auto-on { display: inline; }
-.slab-stepper { display: flex; align-items: center; gap: 6px; }
-.slab-every { width: 150px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
+.slab-banks { display: flex; gap: 3px; flex: none; }
+.slab-bank { --roll: 30px; height: 30px; min-width: 52px; padding: 0 10px; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-auto {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.slab-auto-press { --roll: 30px; min-width: 92px; height: 30px; padding: 0 10px; flex: none; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-stepper { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.slab-every { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; font-size: 13px; line-height: 14px; color: var(--wall-soft); }
+.slab-every-n, .slab-every-next { white-space: nowrap; }
+.slab-every-next { font-size: 12px; }
+.slab-every-next:empty { display: none; }
 .slab-panel[data-auto="on"] .slab-every { color: var(--wall); }
-.slab-step { --roll: 30px; width: 34px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
+.slab-step { --roll: 30px; flex: none; width: 30px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
 
 /*
  * The scuff plate: stainless, ribbed along its length at top and bottom, a
@@ -866,7 +917,7 @@ ${NEON_CSS}
   /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
   --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
   color: var(--gas-core);
   text-shadow: var(--neon-text);
 }
@@ -887,7 +938,7 @@ ${NEON_CSS}
   26% { text-shadow: none; }
   44%, 100% { text-shadow: var(--neon-text); }
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press, .slab-bank) {
   animation: slab-neon-strike 420ms linear 1;
 }
 

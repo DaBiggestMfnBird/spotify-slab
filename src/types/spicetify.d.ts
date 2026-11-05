@@ -77,6 +77,10 @@ interface SlabSpicetify {
     };
     getAudioData(uri?: string): Promise<SlabAudioAnalysis>;
     showNotification?(message: string, isError?: boolean, timeout?: number): void;
+    /** The client's own authenticated requests, for its lyrics among other things. */
+    CosmosAsync?: {
+        get(url: string, body?: unknown, headers?: Record<string, string>): Promise<unknown>;
+    };
 }
 
 declare const Spicetify: SlabSpicetify;

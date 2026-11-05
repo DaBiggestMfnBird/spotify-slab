@@ -89,7 +89,43 @@ export const MOODS: Mood[] = [
     },
 ];
 
+/** The seventh door: a sound you kept as your own. */
+export const MINE_ID = "mine";
+
+/** What is kept in Mine: the curve and the helper's settings as they were, the pitch included. */
+export interface SavedMood {
+    /** The mood it was made from, so the sign can say so. */
+    from: string;
+    gains: number[];
+    dsp: DspParams;
+}
+
+let mine: Mood | null = null;
+
+/** Puts a kept sound in the Mine door, or empties it. */
+export function setMine(saved: SavedMood | null): void {
+    if (!saved) {
+        mine = null;
+        return;
+    }
+    const base = MOODS.find((mood) => mood.id === saved.from);
+    mine = {
+        id: MINE_ID,
+        name: "Mine",
+        sub: base ? `your own, made from ${base.name}` : "your own",
+        gains: saved.gains.slice(0, BANDS.length),
+        dsp: { ...saved.dsp },
+        note: "",
+    };
+}
+
+/** The sound in the Mine door, or null while it's empty. */
+export function mineMood(): Mood | null {
+    return mine;
+}
+
 export function moodById(id: string): Mood {
+    if (id === MINE_ID && mine) return mine;
     return MOODS.find((mood) => mood.id === id) ?? MOODS[MOODS.length - 1];
 }
 

@@ -245,6 +245,11 @@ final class DSPGraph {
     }
 
     private func startHold(_ target: Hold, ms: Int) {
+        // The same hold again is SLAB saying it's still down: keep it, and whatever ramp it's on.
+        if target == holdTo, target != .none {
+            armHoldWatch()
+            return
+        }
         holdFrom = holdNow
         holdTo = target
         // An echo coming in takes its time and feedback at once and only its level ramps.
@@ -262,19 +267,21 @@ final class DSPGraph {
             holdTimer = timer
         }
         stepHold()
+        armHoldWatch()
+    }
 
+    private func armHoldWatch() {
         holdWatch?.cancel()
         holdWatch = nil
-        if target != .none {
-            let watch = DispatchSource.makeTimerSource(queue: .main)
-            watch.schedule(deadline: .now() + Self.holdLifetime)
-            watch.setEventHandler { [weak self] in
-                slabLog("a hold went unrefreshed; letting go")
-                self?.startHold(.none, ms: 300)
-            }
-            watch.resume()
-            holdWatch = watch
+        guard holdTo != .none else { return }
+        let watch = DispatchSource.makeTimerSource(queue: .main)
+        watch.schedule(deadline: .now() + Self.holdLifetime)
+        watch.setEventHandler { [weak self] in
+            slabLog("a hold went unrefreshed; letting go")
+            self?.startHold(.none, ms: 300)
         }
+        watch.resume()
+        holdWatch = watch
     }
 
     private func stepHold() {

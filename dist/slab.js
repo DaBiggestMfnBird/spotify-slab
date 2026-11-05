@@ -119,18 +119,18 @@ self.onmessage = (event) => {
   var PROBE_LINKED_MS = 4e3;
   var PROBE_ABSENT_MS = 3e4;
   var PROBE_FAST_TRIES = 3;
-  function onDspChange(listener2) {
-    listeners.add(listener2);
-    listener2(status);
-    return () => listeners.delete(listener2);
+  function onDspChange(listener3) {
+    listeners.add(listener3);
+    listener3(status);
+    return () => listeners.delete(listener3);
   }
   function dspStatus() {
     return status;
   }
   function publish(next) {
-    const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio || next.jump !== status.jump;
+    const changed = next.checked !== status.checked || next.linked !== status.linked || next.version !== status.version || next.tapping !== status.tapping || next.audio !== status.audio || next.jump !== status.jump || next.spin !== status.spin || next.hold !== status.hold;
     status = next;
-    if (changed) for (const listener2 of listeners) listener2(status);
+    if (changed) for (const listener3 of listeners) listener3(status);
   }
   async function request(path, init, timeout = 700) {
     const controller = new AbortController();
@@ -172,6 +172,8 @@ self.onmessage = (event) => {
         // Params the helper accepted after this probe went out are newer than what it reported.
         params: paramsSeq === paramsAtStart ? payload.params : status.params,
         jump: Array.isArray(payload.features) && payload.features.includes("jump"),
+        spin: Array.isArray(payload.features) && payload.features.includes("spin"),
+        hold: Array.isArray(payload.features) && payload.features.includes("hold"),
         seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : void 0,
         wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : void 0
       });
@@ -265,6 +267,38 @@ self.onmessage = (event) => {
     if (!status.linked || !status.jump) return;
     await request("/jump/cancel", { method: "POST" }, 250);
   }
+  function canSpin() {
+    return canJump() && status.spin === true;
+  }
+  async function dspSpin(order) {
+    if (!canSpin()) return false;
+    const payload = await request(
+      "/spin",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) },
+      250
+    );
+    const ok = payload?.ok === true;
+    if (ok) {
+      if (measureTimer !== null) window.clearTimeout(measureTimer);
+      measureTimer = window.setTimeout(() => {
+        measureTimer = null;
+        void probeDsp(true);
+      }, 2600 + order.spinMs);
+    }
+    return ok;
+  }
+  function canHold() {
+    return status.linked && status.tapping === true && status.audio === true && status.hold === true;
+  }
+  var holdChain = Promise.resolve();
+  function dspHold(overlay2, ms) {
+    const body = JSON.stringify({ ...overlay2, ms: Math.round(ms) });
+    const sent2 = holdChain.then(
+      () => request("/hold", { method: "POST", headers: { "Content-Type": "application/json" }, body }, 400)
+    );
+    holdChain = sent2.catch(() => null);
+    return sent2.then((payload) => payload?.ok === true);
+  }
 
   // src/core/grid.ts
   var cache = /* @__PURE__ */ new Map();
@@ -348,6 +382,17 @@ self.onmessage = (event) => {
   function beatIndexAt(grid, ms) {
     return indexAt(grid.beats, ms);
   }
+  function beatStartMs(grid, index) {
+    const clamped = Math.max(0, Math.min(grid.beats.length - 1, index));
+    return grid.beats[clamped];
+  }
+  function beatLengthMs(grid, index) {
+    const start = beatStartMs(grid, index);
+    const next = grid.beats[index + 1];
+    if (next !== void 0) return next - start;
+    const previous = grid.beats[index - 1];
+    return previous !== void 0 ? start - previous : 500;
+  }
   function barLengthMs(grid, index) {
     const start = barStartMs(grid, index);
     const next = grid.bars[index + 1];
@@ -358,6 +403,74 @@ self.onmessage = (event) => {
   }
   function barCount(grid) {
     return grid.bars.length;
+  }
+
+  // src/core/lyrics.ts
+  var JUST_BEGUN_MS = 450;
+  var CACHE_LIMIT2 = 24;
+  var cache2 = /* @__PURE__ */ new Map();
+  var inflight2 = /* @__PURE__ */ new Map();
+  function remember2(uri, lines) {
+    cache2.delete(uri);
+    cache2.set(uri, lines);
+    while (cache2.size > CACHE_LIMIT2) {
+      const oldest = cache2.keys().next().value;
+      if (oldest === void 0) break;
+      cache2.delete(oldest);
+    }
+  }
+  function currentUri2() {
+    return Spicetify.Player.data?.item?.uri ?? null;
+  }
+  async function loadLines(uri) {
+    const target = uri ?? currentUri2();
+    if (!target) return null;
+    if (cache2.has(target)) {
+      const cached = cache2.get(target) ?? null;
+      remember2(target, cached);
+      return cached;
+    }
+    const running2 = inflight2.get(target);
+    if (running2) return running2;
+    const id = /^spotify:track:([A-Za-z0-9]+)$/.exec(target)?.[1];
+    const cosmos = Spicetify.CosmosAsync;
+    if (!id || !cosmos) {
+      remember2(target, null);
+      return null;
+    }
+    const request2 = (async () => {
+      try {
+        const body = await cosmos.get(
+          `https://spclient.wg.spotify.com/color-lyrics/v2/track/${id}?format=json&vocalRemoval=false&market=from_token`
+        );
+        const lyrics = body?.lyrics;
+        if (lyrics?.syncType !== "LINE_SYNCED" || !Array.isArray(lyrics.lines)) {
+          remember2(target, null);
+          return null;
+        }
+        const lines = lyrics.lines.map((line) => ({ startMs: Number(line.startTimeMs), words: String(line.words ?? "").trim() })).filter((line) => Number.isFinite(line.startMs) && line.words !== "" && line.words !== "\u266A").sort((a, b) => a.startMs - b.startMs);
+        const result = lines.length >= 2 ? lines : null;
+        remember2(target, result);
+        return result;
+      } catch {
+        remember2(target, null);
+        return null;
+      } finally {
+        inflight2.delete(target);
+      }
+    })();
+    inflight2.set(target, request2);
+    return request2;
+  }
+  function lineJustHeard(lines, ms) {
+    let index = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startMs > ms) break;
+      index = i;
+    }
+    if (index < 0) return null;
+    if (ms - lines[index].startMs < JUST_BEGUN_MS && index > 0) index -= 1;
+    return lines[index];
   }
 
   // src/core/chops.ts
@@ -477,16 +590,16 @@ self.onmessage = (event) => {
       forgetReckoning();
     }
   }
-  async function cut(target, from, inMs = 0) {
-    if (canJump()) {
+  async function cut(target, from, inMs = 0, spin = false) {
+    if (spin ? canSpin() : canJump()) {
       const ahead = seekAheadMs();
       const asked = Date.now();
-      const jumped = await dspJump({
+      const order = {
         backMs: Math.round(from - target),
-        inMs: Math.round(inMs),
         seekAheadMs: ahead,
         availableMs: Math.round(unbrokenMs(from))
-      });
+      };
+      const jumped = spin ? await dspSpin({ ...order, spinMs: Math.round(inMs) }) : await dspJump({ ...order, inMs: Math.round(inMs) });
       if (jumped) {
         const fires = asked + (Date.now() - asked) / 2 + inMs;
         const send = () => {
@@ -531,6 +644,84 @@ self.onmessage = (event) => {
       padJumpAt = Date.now();
       manualBar = index;
       emit("chop", `${span} bar${span === 1 ? "" : "s"} back`);
+      return true;
+    } finally {
+      busy = false;
+    }
+  }
+  var LINE_REACH_MS = 15e3;
+  function onTheBeat(grid, at, start) {
+    const here = beatIndexAt(grid, at);
+    let there = beatIndexAt(grid, start);
+    if (here < 0 || there < 0) return start;
+    const phase = (at - beatStartMs(grid, here)) / beatLengthMs(grid, here);
+    let target = beatStartMs(grid, there) + phase * beatLengthMs(grid, there);
+    if (target > start + 25 && there > 0) {
+      there -= 1;
+      target = beatStartMs(grid, there) + phase * beatLengthMs(grid, there);
+    }
+    return target;
+  }
+  function quote(words) {
+    return words.length > 34 ? `${words.slice(0, 33).trimEnd()}\u2026` : words;
+  }
+  async function runLineBack() {
+    if (busy) return false;
+    const grid = await ensureGrid();
+    if (!grid) return false;
+    const lines = await loadLines();
+    const heard = needlePosition();
+    const line = lines ? lineJustHeard(lines, heard) : null;
+    if (!line || heard - line.startMs > LINE_REACH_MS) {
+      const did = await chopBars(1, true);
+      if (did) {
+        padJumpAt = Date.now();
+        manualBar = barIndexAt(grid, heard);
+        emit("chop", lines ? "No line here, so a bar back" : "No synced lyrics, so a bar back");
+      }
+      return did;
+    }
+    busy = true;
+    try {
+      const target = onTheBeat(grid, heard, line.startMs);
+      if (heard - target < 250) return false;
+      await cut(target, heard);
+      padJumpAt = Date.now();
+      manualBar = barIndexAt(grid, heard);
+      emit("chop", `Back to \u201C${quote(line.words)}\u201D`);
+      return true;
+    } finally {
+      busy = false;
+    }
+  }
+  var SPIN_MIN_MS = 350;
+  var SPIN_MAX_MS = 650;
+  async function spinBack() {
+    if (!canSpin()) {
+      const did = await chopBars(1, true);
+      if (did) {
+        padJumpAt = Date.now();
+        emit("chop", dspStatus().linked ? "1 bar back. Spinning needs a newer SLAB DSP." : "1 bar back. Spinning needs SLAB DSP.");
+      }
+      return did;
+    }
+    if (busy) return false;
+    busy = true;
+    try {
+      const grid = await ensureGrid();
+      if (!grid) return false;
+      const heard = needlePosition();
+      const beat = beatLengthMs(grid, Math.max(0, beatIndexAt(grid, heard)));
+      const turn = Math.max(SPIN_MIN_MS, Math.min(SPIN_MAX_MS, beat));
+      const end = heard + turn;
+      const index = barIndexAt(grid, end);
+      if (index < 1) return false;
+      const phase = (end - barStartMs(grid, index)) / barLengthMs(grid, index);
+      const target = barStartMs(grid, index - 1) + phase * barLengthMs(grid, index - 1);
+      await cut(target, heard, turn, true);
+      padJumpAt = Date.now();
+      manualBar = index;
+      emit("chop", "Spun back a bar");
       return true;
     } finally {
       busy = false;
@@ -791,7 +982,28 @@ self.onmessage = (event) => {
       note: "Returns every filter to the gains it had when SLAB loaded, and the helper to dry."
     }
   ];
+  var MINE_ID = "mine";
+  var mine = null;
+  function setMine(saved) {
+    if (!saved) {
+      mine = null;
+      return;
+    }
+    const base = MOODS.find((mood) => mood.id === saved.from);
+    mine = {
+      id: MINE_ID,
+      name: "Mine",
+      sub: base ? `your own, made from ${base.name}` : "your own",
+      gains: saved.gains.slice(0, BANDS.length),
+      dsp: { ...saved.dsp },
+      note: ""
+    };
+  }
+  function mineMood() {
+    return mine;
+  }
   function moodById(id) {
+    if (id === MINE_ID && mine) return mine;
     return MOODS.find((mood) => mood.id === id) ?? MOODS[MOODS.length - 1];
   }
   function curvePath(gains, width = 62, height = 18) {
@@ -932,27 +1144,66 @@ self.onmessage = (event) => {
     open: false,
     every: 4,
     pitch: 0,
-    eqOwner: "auto"
+    eqOwner: "auto",
+    bank: "chop",
+    screwDepth: 5,
+    mine: null
   };
   function clampPitch(value) {
     if (!Number.isFinite(value)) return 0;
     return Math.max(-1200, Math.min(1200, Math.round(value / 10) * 10));
   }
+  var SCREW_MIN = 1;
+  var SCREW_MAX = 12;
+  function finite(value, fallback) {
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  }
+  function readMine(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const saved = raw;
+    if (typeof saved.from !== "string" || !Array.isArray(saved.gains) || saved.gains.length !== BANDS.length) return null;
+    if (!saved.gains.every((gain) => typeof gain === "number" && Number.isFinite(gain))) return null;
+    const dsp = saved.dsp ?? {};
+    return {
+      from: saved.from,
+      gains: saved.gains.map((gain) => Math.max(-12, Math.min(12, gain))),
+      dsp: {
+        pitch: clampPitch(finite(dsp.pitch, 0)),
+        reverb: finite(dsp.reverb, 0),
+        reverbPreset: typeof dsp.reverbPreset === "string" ? dsp.reverbPreset : "largeHall2",
+        delayTime: finite(dsp.delayTime, 0.36),
+        delayFeedback: finite(dsp.delayFeedback, 0),
+        delayMix: finite(dsp.delayMix, 0),
+        lowpass: finite(dsp.lowpass, 2e4),
+        gain: finite(dsp.gain, 0)
+      }
+    };
+  }
   function loadState() {
     try {
       const raw = localStorage.getItem(KEY);
-      if (!raw) return { ...DEFAULTS };
+      if (!raw) {
+        setMine(null);
+        return { ...DEFAULTS };
+      }
       const parsed = JSON.parse(raw);
+      const mine2 = readMine(parsed.mine);
+      setMine(mine2);
+      const moodId = typeof parsed.moodId === "string" && (parsed.moodId !== MINE_ID || mine2) ? parsed.moodId : DEFAULTS.moodId;
       return {
-        moodId: typeof parsed.moodId === "string" ? parsed.moodId : DEFAULTS.moodId,
+        moodId,
         auto: parsed.auto === true,
         open: parsed.open === true,
         every: typeof parsed.every === "number" && parsed.every >= 1 && parsed.every <= 16 ? parsed.every : DEFAULTS.every,
         // State saved before the slider existed has no pitch; the mood's is the truth.
-        pitch: typeof parsed.pitch === "number" ? clampPitch(parsed.pitch) : moodById(parsed.moodId ?? DEFAULTS.moodId).dsp.pitch,
-        eqOwner: parsed.eqOwner === "slab" || parsed.eqOwner === "modern" ? parsed.eqOwner : DEFAULTS.eqOwner
+        pitch: typeof parsed.pitch === "number" ? clampPitch(parsed.pitch) : moodById(moodId).dsp.pitch,
+        eqOwner: parsed.eqOwner === "slab" || parsed.eqOwner === "modern" ? parsed.eqOwner : DEFAULTS.eqOwner,
+        bank: parsed.bank === "screw" ? "screw" : "chop",
+        screwDepth: typeof parsed.screwDepth === "number" && parsed.screwDepth >= SCREW_MIN && parsed.screwDepth <= SCREW_MAX ? Math.round(parsed.screwDepth) : DEFAULTS.screwDepth,
+        mine: mine2
       };
     } catch {
+      setMine(null);
       return { ...DEFAULTS };
     }
   }
@@ -961,6 +1212,130 @@ self.onmessage = (event) => {
       localStorage.setItem(KEY, JSON.stringify(state));
     } catch {
     }
+  }
+
+  // src/core/holds.ts
+  var RAMP = {
+    screw: { on: 650, off: 220 },
+    trunk: { on: 90, off: 45 },
+    echo: { on: 40, off: 900 }
+  };
+  var TRUNK_HZ = 420;
+  var TRUNK_LIFT_DB = 3;
+  var ECHO_MIX = 38;
+  var ECHO_FEEDBACK = 48;
+  var REFRESH_MS = 4e3;
+  var down = /* @__PURE__ */ new Set();
+  var screwCents = -500;
+  var echoSeconds = 0.4;
+  var refresh = null;
+  var listener2 = null;
+  function onHoldChange(fn) {
+    listener2 = fn;
+  }
+  function overlay() {
+    const o = {};
+    if (down.has("screw")) o.pitchOffset = screwCents;
+    if (down.has("trunk")) {
+      o.lowpassCap = TRUNK_HZ;
+      o.gainBoost = TRUNK_LIFT_DB;
+    }
+    if (down.has("echo")) {
+      o.echoMix = ECHO_MIX;
+      o.echoFeedback = ECHO_FEEDBACK;
+      o.echoTime = echoSeconds;
+    }
+    return o;
+  }
+  function keepAlive() {
+    if (down.size && refresh === null) {
+      refresh = window.setInterval(() => void dspHold(overlay(), 0), REFRESH_MS);
+    } else if (!down.size && refresh !== null) {
+      window.clearInterval(refresh);
+      refresh = null;
+    }
+    listener2?.(down);
+  }
+  function press(name, options = {}) {
+    if (!canHold()) return false;
+    if (down.has(name)) return true;
+    if (name === "screw" && typeof options.cents === "number") screwCents = Math.min(-100, options.cents);
+    if (name === "echo" && typeof options.beatMs === "number" && options.beatMs > 0) {
+      const beat = options.beatMs / 1e3;
+      echoSeconds = beat > 0.75 ? beat / 2 : beat;
+    }
+    down.add(name);
+    void dspHold(overlay(), RAMP[name].on);
+    keepAlive();
+    return true;
+  }
+  function release(name) {
+    if (!down.delete(name)) return;
+    void dspHold(overlay(), RAMP[name].off);
+    keepAlive();
+  }
+  function releaseAll() {
+    if (!down.size) return;
+    down.clear();
+    void dspHold({}, 150);
+    keepAlive();
+  }
+
+  // src/core/keep.ts
+  var KEY2 = "slab:keep:v1";
+  var LIMIT = 200;
+  var memory = null;
+  function load() {
+    if (memory) return memory;
+    memory = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(KEY2) ?? "{}");
+      for (const [uri, kept] of Object.entries(parsed)) {
+        if (typeof kept?.moodId === "string" && typeof kept.pitch === "number") {
+          memory[uri] = {
+            name: typeof kept.name === "string" ? kept.name : "",
+            moodId: kept.moodId,
+            pitch: kept.pitch,
+            at: typeof kept.at === "number" ? kept.at : 0
+          };
+        }
+      }
+    } catch {
+    }
+    return memory;
+  }
+  function save() {
+    if (!memory) return;
+    const entries = Object.entries(memory).sort((a, b) => b[1].at - a[1].at).slice(0, LIMIT);
+    memory = Object.fromEntries(entries);
+    try {
+      localStorage.setItem(KEY2, JSON.stringify(memory));
+    } catch {
+    }
+  }
+  function currentArtist() {
+    try {
+      const metadata = Spicetify.Player.data?.item?.metadata;
+      const uri = metadata?.artist_uri;
+      if (!uri || !uri.startsWith("spotify:artist:")) return null;
+      return { uri, name: metadata?.artist_name ?? "" };
+    } catch {
+      return null;
+    }
+  }
+  function keptFor(artist) {
+    if (!artist) return null;
+    return load()[artist.uri] ?? null;
+  }
+  function keep(artist, moodId, pitch) {
+    load()[artist.uri] = { name: artist.name, moodId, pitch, at: Date.now() };
+    save();
+  }
+  function forget(artist) {
+    const kept = load();
+    if (!(artist.uri in kept)) return;
+    delete kept[artist.uri];
+    save();
   }
 
   // src/core/moderneq.ts
@@ -1647,7 +2022,7 @@ ${NEON_CSS}
 /* A short window gets the compact sign and one line under it. */
 .slab-panel[data-short="true"] .slab-stage { min-height: 70px; }
 .slab-panel[data-short="true"] .slab-sub { display: none; }
-.slab-panel[data-short="true"] .slab-mood { min-height: 34px; grid-template-rows: minmax(26px, auto); }
+.slab-panel[data-short="true"] .slab-mood { min-height: 32px; grid-template-rows: minmax(24px, auto); }
 .slab-panel[data-short="true"] .slab-mood-cents {
   position: absolute;
   width: 1px;
@@ -1655,7 +2030,8 @@ ${NEON_CSS}
   overflow: hidden;
   clip-path: inset(50%);
 }
-.slab-panel[data-short="true"] .slab-mood-curve { height: 26px; }
+.slab-panel[data-short="true"] .slab-mood-curve { height: 24px; }
+.slab-panel[data-short="true"] .slab-lock svg { height: 24px; }
 .slab-panel[data-short="true"] .slab-sill-plate { min-height: 20px; }
 
 /* Pitch. */
@@ -1740,14 +2116,16 @@ ${NEON_CSS}
 .slab-press:active:not([aria-disabled="true"]),
 .slab-press[data-hit="true"]:not([aria-disabled="true"]),
 .slab-press[data-latched="true"],
-.slab-auto-press[aria-checked="true"] {
+.slab-auto-press[aria-checked="true"],
+.slab-bank[aria-checked="true"] {
   transform: translateY(2px);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7), 0 0 0 #0B0203;
 }
 .slab-press:active:not([aria-disabled="true"])::after,
 .slab-press[data-hit="true"]:not([aria-disabled="true"])::after,
 .slab-press[data-latched="true"]::after,
-.slab-auto-press[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
+.slab-auto-press[aria-checked="true"]::after,
+.slab-bank[aria-checked="true"]::after { opacity: 1; transition-duration: 0ms; }
 .slab-press[aria-disabled="true"] {
   filter: saturate(0.45) brightness(0.62);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
@@ -1946,22 +2324,37 @@ ${NEON_CSS}
  * same paint, a seam round it, and a pinstripe pulled by hand along its top
  * and down its leading edge. The picked one sits recessed in the vinyl.
  */
-.slab-moods {
+.slab-doors {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(4, auto);
   gap: 4px;
   margin-top: 8px;
+}
+/* The seven moods are one radio group; Keep is a switch, so it takes the eighth door's place beside it. */
+.slab-moods {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-template-rows: subgrid;
+}
+.slab-keep { grid-column: 2; grid-row: 4; }
+@supports not (grid-template-rows: subgrid) {
+  .slab-doors { display: block; position: relative; }
+  .slab-moods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .slab-keep { position: absolute; right: 0; bottom: 0; width: calc(50% - 2px); }
 }
 .slab-mood {
   --stripe: var(--gold);
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
-  grid-template-rows: minmax(18px, auto) minmax(16px, auto);
+  grid-template-rows: minmax(17px, auto) minmax(13px, auto);
   column-gap: 6px;
   align-items: center;
-  min-height: 42px;
-  padding: 4px 8px 4px 14px;
+  min-height: 36px;
+  padding: 3px 8px 3px 14px;
   text-align: left;
   border-radius: 4px;
   background: rgba(255, 210, 210, 0.04);
@@ -1983,7 +2376,24 @@ ${NEON_CSS}
 .slab-mood-curve { grid-column: 2; grid-row: 1 / 3; overflow: visible; color: var(--wall-soft); }
 .slab-mood-zero { fill: none; stroke: currentColor; stroke-opacity: 0.3; stroke-width: 1; }
 .slab-mood-line { fill: none; stroke: currentColor; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
-.slab-mood-cents { grid-column: 1; grid-row: 2; color: var(--wall-soft); }
+.slab-mood-cents { grid-column: 1; grid-row: 2; font-size: 13px; line-height: 13px; color: var(--wall-soft); }
+/* An empty Mine says what a tap does, across the whole door. */
+.slab-mine[data-empty="true"] .slab-mood-cents { grid-column: 1 / 3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Keep: a name that can be long, cut short on one line, and the lock knob where a curve would be. */
+.slab-keep { grid-template-columns: minmax(0, 1fr) 22px; }
+.slab-keep .slab-mood-name, .slab-keep .slab-mood-cents { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slab-lock { grid-column: 2; grid-row: 1 / 3; display: flex; align-items: center; justify-content: center; }
+.slab-lock svg { display: block; height: 28px; width: auto; overflow: visible; }
+.slab-lock-pin { transition: transform 120ms cubic-bezier(.3, 1.6, .5, 1); }
+.slab-keep[aria-pressed="true"] .slab-lock-pin { transform: translateY(9px); }
+.slab-keep[aria-pressed="true"] {
+  --stripe: var(--wall);
+  background: linear-gradient(180deg, #1E070A, #2A0C10);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 214, 214, 0.25);
+  transform: none;
+}
+.slab-keep[aria-disabled="true"] { filter: saturate(0.45) brightness(0.7); }
+.slab-keep[aria-disabled="true"]:hover { transform: none; background: rgba(255, 210, 210, 0.04); }
 .slab-mood[aria-checked="true"] {
   --stripe: var(--wall);
   background: linear-gradient(180deg, #1E070A, #2A0C10);
@@ -2070,7 +2480,11 @@ ${NEON_CSS}
   margin-top: 8px;
 }
 .slab-pad { --roll: 27px; height: 54px; gap: 1px; }
-.slab-pad[data-pad="stop"] { grid-column: 6; }
+.slab-pad:is([data-pad="stop"], [data-pad="spin"]) { grid-column: 6; }
+.slab-panel:not([data-bank="screw"]) .slab-pads[data-bank="screw"],
+.slab-panel[data-bank="screw"] .slab-pads[data-bank="chop"],
+.slab-panel:not([data-bank="screw"]) .slab-auto[data-for="screw"],
+.slab-panel[data-bank="screw"] .slab-auto[data-for="chop"] { display: none; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
 .slab-pad small { font-size: 12px; line-height: 14px; color: var(--wall-soft); }
 /* The number key that plays it, small in the corner like a pad number on a sampler. */
@@ -2084,20 +2498,32 @@ ${NEON_CSS}
   color: var(--wall-soft);
 }
 
-.slab-auto {
+/* Under the pads: which bank shows, then that bank's own control. */
+.slab-bankrow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   height: 44px;
   padding-top: 4px;
 }
-.slab-auto-press { --roll: 30px; min-width: 104px; height: 30px; padding: 0 14px; flex-direction: row; font-weight: 600; font-size: 14px; }
-.slab-auto-on { display: none; }
-.slab-auto-press[aria-checked="true"] .slab-auto-on { display: inline; }
-.slab-stepper { display: flex; align-items: center; gap: 6px; }
-.slab-every { width: 150px; text-align: center; white-space: nowrap; color: var(--wall-soft); }
+.slab-banks { display: flex; gap: 3px; flex: none; }
+.slab-bank { --roll: 30px; height: 30px; min-width: 52px; padding: 0 10px; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-auto {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.slab-auto-press { --roll: 30px; min-width: 92px; height: 30px; padding: 0 10px; flex: none; flex-direction: row; font-weight: 600; font-size: 14px; }
+.slab-stepper { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.slab-every { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; font-size: 13px; line-height: 14px; color: var(--wall-soft); }
+.slab-every-n, .slab-every-next { white-space: nowrap; }
+.slab-every-next { font-size: 12px; }
+.slab-every-next:empty { display: none; }
 .slab-panel[data-auto="on"] .slab-every { color: var(--wall); }
-.slab-step { --roll: 30px; width: 34px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
+.slab-step { --roll: 30px; flex: none; width: 30px; height: 30px; font-weight: 600; font-size: 16px; line-height: 1; }
 
 /*
  * The scuff plate: stainless, ribbed along its length at top and bottom, a
@@ -2222,7 +2648,7 @@ ${NEON_CSS}
   /* The glass colour run a little hotter, so a secondary word still clears 4.5:1 on the paint. */
   --neon-soft: color-mix(in srgb, var(--gas-glass) 62%, #FFFFFF);
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-scale-end, .slab-mood-name, .slab-bpm b, .slab-bar, .slab-every, .slab-flash, .slab-pad b, .slab-auto-press, .slab-bank, .slab-step, .slab-nudge, .slab-normal):not(.slab-press[aria-disabled="true"], .slab-press[aria-disabled="true"] *, .slab-keep[aria-disabled="true"] *) {
   color: var(--gas-core);
   text-shadow: var(--neon-text);
 }
@@ -2243,7 +2669,7 @@ ${NEON_CSS}
   26% { text-shadow: none; }
   44%, 100% { text-shadow: var(--neon-text); }
 }
-.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press) {
+.slab-panel[data-gas="on"] :is(.slab-tag, .slab-pitch-label, .slab-mood-name, .slab-bpm b, .slab-pad b, .slab-auto-press, .slab-bank) {
   animation: slab-neon-strike 420ms linear 1;
 }
 
@@ -2534,18 +2960,44 @@ ${NEON_CSS}
   }
   function pinstripe(id) {
     const fade = `slab-stripe-${id}`;
-    return `<svg class="slab-stripe" viewBox="0 0 188 42" width="188" height="42" aria-hidden="true" focusable="false">
+    return `<svg class="slab-stripe" viewBox="0 0 188 ${DOOR_HEIGHT}" width="188" height="${DOOR_HEIGHT}" aria-hidden="true" focusable="false">
   <defs><linearGradient id="${fade}" gradientUnits="userSpaceOnUse" x1="120" y1="0" x2="78" y2="0">
     <stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/>
   </linearGradient></defs>
-  <path d="M120 4.5H11Q4.5 4.5 4.5 11V29" fill="none" stroke="url(#${fade})" stroke-width="1"/>
-  <path d="M108 6.5H11.5Q6.5 6.5 6.5 11.5V25.5" fill="none" stroke="url(#${fade})" stroke-width=".5"/>
-  <path d="M4.5 28.5L6.1 32.2L4.5 37L2.9 32.2Z" fill="currentColor"/>
+  <path d="M120 4.5H11Q4.5 4.5 4.5 11V24" fill="none" stroke="url(#${fade})" stroke-width="1"/>
+  <path d="M108 6.5H11.5Q6.5 6.5 6.5 11.5V21" fill="none" stroke="url(#${fade})" stroke-width=".5"/>
+  <path d="M4.5 23.5L6.1 27.2L4.5 32L2.9 27.2Z" fill="currentColor"/>
 </svg>`;
+  }
+  var LOCK_KNOB = `<svg viewBox="0 0 22 30" width="22" height="30" focusable="false">
+  <defs>
+    <linearGradient id="slab-lock-chrome" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#5E5956"/><stop offset=".34" stop-color="#F6F2EE"/>
+      <stop offset=".62" stop-color="#B7B1AC"/><stop offset="1" stop-color="#4B4643"/>
+    </linearGradient>
+    <clipPath id="slab-lock-hole"><rect x="0" y="0" width="22" height="25"/></clipPath>
+  </defs>
+  <ellipse cx="11" cy="25" rx="7.2" ry="2.4" fill="#120104"/>
+  <g clip-path="url(#slab-lock-hole)"><g class="slab-lock-pin">
+    <rect x="7.2" y="5" width="7.6" height="24" rx="3.8" fill="url(#slab-lock-chrome)" stroke="rgba(0,0,0,.5)" stroke-width=".6"/>
+    <path d="M9 7.6Q11 6.4 13 7.6" fill="none" stroke="#FFFFFF" stroke-opacity=".7" stroke-width=".8" stroke-linecap="round"/>
+  </g></g>
+  <path d="M3.4 25a7.6 2.6 0 0 0 15.2 0" fill="none" stroke="url(#slab-lock-chrome)" stroke-width="1.7"/>
+</svg>`;
+  var DOOR_HEIGHT = 36;
+  var CURVE_WIDTH = 58;
+  var CURVE_HEIGHT = 28;
+  var MINE_HOLD_MS = 650;
+  function doorCurve(gains) {
+    return `<svg class="slab-mood-curve" viewBox="0 0 ${CURVE_WIDTH} ${CURVE_HEIGHT}" width="${CURVE_WIDTH}" height="${CURVE_HEIGHT}" aria-hidden="true" focusable="false">
+          <path class="slab-mood-zero" d="M0 ${CURVE_HEIGHT / 2}H${CURVE_WIDTH}"/>
+          <path class="slab-mood-line" d="${curvePath(gains, CURVE_WIDTH, CURVE_HEIGHT)}"/>
+        </svg>`;
   }
   var MOODS_BY_PITCH = [...MOODS].sort(
     (a, b) => a.dsp.pitch - b.dsp.pitch || Number(a.id === "flat") - Number(b.id === "flat")
   );
+  var NEEDS_HELPER = "That pad needs SLAB DSP running on this Mac.";
   var NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
   var LOOP_TIMES = 4;
   var LOOP_SUB = `${LOOP_TIMES} times`;
@@ -2563,6 +3015,14 @@ ${NEON_CSS}
       this.padTimers = /* @__PURE__ */ new Map();
       this.loopSub = null;
       this.padDefs = /* @__PURE__ */ new Map();
+      /** Pads by the number key that plays them, 1 through 0. */
+      this.padByKey = /* @__PURE__ */ new Map();
+      /** Held pads by the key or pointer holding them down, so the right up lets the right one go. */
+      this.heldBy = /* @__PURE__ */ new Map();
+      this.bankButtons = /* @__PURE__ */ new Map();
+      this.mineButton = null;
+      /** The artist the Keep door last showed, so it is drawn again only when that changes. */
+      this.keepShown = null;
       /** Stops any held-button repeat; run on destroy. */
       this.releases = [];
       this.sillEl = null;
@@ -2620,6 +3080,11 @@ ${NEON_CSS}
         });
       };
       this.onScroll = () => this.renderScrollCue();
+      this.onKeyUp = (event) => this.holdUp(`key:${event.code}`);
+      this.onBlur = () => this.releaseHolds();
+      this.onVisibility = () => {
+        if (document.visibilityState === "hidden") this.releaseHolds();
+      };
       this.state = state;
       this.chip = this.buildChip();
       this.tagEl = h("span", { class: "slab-tag" }, TAGLINE);
@@ -2722,8 +3187,8 @@ ${NEON_CSS}
         "aria-checked": String(state.auto),
         "aria-label": "Auto chop",
         onclick: () => this.toggleAuto()
-      }, h("span", {}, "Auto chop", h("span", { class: "slab-auto-on" }, " on")));
-      this.everyEl = h("span", { class: "slab-every" });
+      }, h("span", {}, "Auto chop"));
+      this.everyEl = h("span", { class: "slab-every" }, h("span", { class: "slab-every-n" }), h("span", { class: "slab-every-next" }));
       this.everyDown = h("button", {
         class: "slab-press slab-step",
         type: "button",
@@ -2740,6 +3205,32 @@ ${NEON_CSS}
       this.press(this.everyUp, () => {
         if (!isOff(this.everyUp)) this.setEvery(this.state.every + 1);
       }, true);
+      this.depthEl = h("span", { class: "slab-every slab-depth-words" });
+      this.depthDown = h("button", {
+        class: "slab-press slab-step",
+        type: "button",
+        "aria-label": "Screw rides less far down"
+      }, h("span", {}, "\u2212"));
+      this.depthUp = h("button", {
+        class: "slab-press slab-step",
+        type: "button",
+        "aria-label": "Screw rides further down"
+      }, h("span", {}, "+"));
+      this.press(this.depthDown, () => {
+        if (!isOff(this.depthDown)) this.setScrewDepth(this.state.screwDepth - 1);
+      }, true);
+      this.press(this.depthUp, () => {
+        if (!isOff(this.depthUp)) this.setScrewDepth(this.state.screwDepth + 1);
+      }, true);
+      this.keepNameEl = h("span", { class: "slab-mood-name" });
+      this.keepSubEl = h("span", { class: "slab-mood-cents" });
+      this.keepButton = h("button", {
+        class: "slab-mood slab-keep",
+        type: "button",
+        "aria-pressed": "false",
+        onclick: () => this.toggleKeep()
+      }, this.keepNameEl, this.keepSubEl, h("span", { class: "slab-lock", "aria-hidden": "true", html: LOCK_KNOB }));
+      this.keepButton.insertAdjacentHTML("afterbegin", pinstripe("keep"));
       this.eqNoteText = h("span", { class: "slab-eq-text" });
       this.eqNoteButton = h("button", {
         class: "slab-press slab-eq-btn",
@@ -2770,6 +3261,14 @@ ${NEON_CSS}
       document.addEventListener("click", this.onDocumentClick, true);
       document.addEventListener("contextmenu", this.onDocumentClick, true);
       document.addEventListener("keydown", this.onKey);
+      document.addEventListener("keyup", this.onKeyUp);
+      window.addEventListener("blur", this.onBlur);
+      document.addEventListener("visibilitychange", this.onVisibility);
+      onHoldChange((held) => {
+        for (const pad of this.pads) {
+          if (pad.dataset.hold === "true") setData(pad, "latched", held.has(pad.dataset.pad) ? "true" : "false");
+        }
+      });
       window.addEventListener("resize", this.onResize);
       this.panel.addEventListener("scroll", this.onScroll, { passive: true });
       if (typeof ResizeObserver === "function") {
@@ -2780,6 +3279,9 @@ ${NEON_CSS}
       else this.panel.hidden = true;
       this.renderMoodState();
       this.renderAutoState();
+      this.renderBank();
+      this.renderDepth();
+      this.renderKeep();
       this.renderPitch();
       this.renderEqNote();
       if (this.modernEq && !this.slabOwnsEq()) void this.restoreModernEqCurve();
@@ -2793,7 +3295,9 @@ ${NEON_CSS}
       });
       void probeDsp(true);
       void this.applyMood(this.state.moodId, false);
+      this.applyKept(false);
       void this.syncGrid();
+      void loadLines();
       this.refresh();
       void Promise.all([
         document.fonts?.load('600 14px "SLAB Barlow"'),
@@ -2816,7 +3320,7 @@ ${NEON_CSS}
       if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
       for (const timer of this.padTimers.values()) window.clearTimeout(timer);
       this.padTimers.clear();
-      for (const release2 of this.releases) release2();
+      for (const release3 of this.releases) release3();
       if (this.lampFrame !== null) window.cancelAnimationFrame(this.lampFrame);
       this.lampFrame = null;
       for (const animation of this.spinAnimations) animation.cancel();
@@ -2828,6 +3332,11 @@ ${NEON_CSS}
       document.removeEventListener("click", this.onDocumentClick, true);
       document.removeEventListener("contextmenu", this.onDocumentClick, true);
       document.removeEventListener("keydown", this.onKey);
+      document.removeEventListener("keyup", this.onKeyUp);
+      window.removeEventListener("blur", this.onBlur);
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.releaseHolds();
+      onHoldChange(null);
       window.removeEventListener("resize", this.onResize);
       this.panel.removeEventListener("scroll", this.onScroll);
       this.sizeWatch?.disconnect();
@@ -2844,6 +3353,9 @@ ${NEON_CSS}
       this.lastGridUri = null;
       this.gridMisses = 0;
       void this.syncGrid();
+      void loadLines();
+      this.keepShown = null;
+      this.applyKept(true);
       this.refresh();
     }
     /**
@@ -3019,13 +3531,24 @@ ${NEON_CSS}
         button.innerHTML = `${pinstripe(mood.id)}
         <span class="slab-mood-name">${mood.name}</span>
         <span class="slab-mood-cents">${formatCents(mood.dsp.pitch)}<span class="slab-sr"> cents</span></span>
-        <svg class="slab-mood-curve" viewBox="0 0 58 32" width="58" height="32" aria-hidden="true" focusable="false">
-          <path class="slab-mood-zero" d="M0 16H58"/>
-          <path class="slab-mood-line" d="${curvePath(mood.gains, 58, 32)}"/>
-        </svg>`;
+        ${doorCurve(mood.gains)}`;
         this.moodButtons.set(mood.id, button);
         moodGrid.append(button);
       }
+      const mine2 = h("button", {
+        class: "slab-mood slab-mine",
+        type: "button",
+        role: "radio",
+        "data-mood": MINE_ID,
+        "aria-checked": "false",
+        tabindex: "-1"
+      });
+      this.mineButton = mine2;
+      this.moodButtons.set(MINE_ID, mine2);
+      this.wireMine(mine2);
+      moodGrid.append(mine2);
+      this.renderMine();
+      const doors = h("div", { class: "slab-doors" }, moodGrid, this.keepButton);
       const readout = h(
         "div",
         { class: "slab-read" },
@@ -3038,16 +3561,17 @@ ${NEON_CSS}
         // What a press just did shows here, right above the pads, then the ruler comes back.
         h("div", { class: "slab-ruler-slot" }, this.rulerEl, this.noGridEl, this.flashEl)
       );
-      const padRow = h("div", { class: "slab-pads", role: "group", "aria-label": "Beat-synced edits" });
       const tooEarly = "Not that much record behind the needle yet.";
-      const padDefs = [
-        { id: "chop1", label: "Chop", sub: "1 bar back", run: () => chopBars(1), miss: tooEarly },
-        { id: "chop2", label: "Chop", sub: "2 bars back", run: () => chopBars(2), miss: tooEarly },
-        { id: "chop4", label: "Chop", sub: "4 bars back", run: () => chopBars(4), miss: tooEarly },
+      const chopDefs = [
+        { id: "chop1", label: "Chop", sub: "1 bar back", key: "1", bank: "chop", run: () => chopBars(1), miss: tooEarly },
+        { id: "chop2", label: "Chop", sub: "2 bars back", key: "2", bank: "chop", run: () => chopBars(2), miss: tooEarly },
+        { id: "chop4", label: "Chop", sub: "4 bars back", key: "3", bank: "chop", run: () => chopBars(4), miss: tooEarly },
         {
           id: "loop",
           label: "Loop",
           sub: LOOP_SUB,
+          key: "4",
+          bank: "chop",
           // A second press ends the loop early.
           run: () => {
             if (!isLooping()) return loopBars(LOOP_TIMES);
@@ -3061,6 +3585,8 @@ ${NEON_CSS}
           id: "stop",
           label: "Stop",
           sub: "Tape stop",
+          key: "5",
+          bank: "chop",
           run: () => {
             if (isStopping()) {
               this.flashActivity("Already stopping");
@@ -3075,26 +3601,63 @@ ${NEON_CSS}
           }
         }
       ];
-      padDefs.forEach((def, index) => {
-        const sub = h("small", {}, def.sub);
-        const pad = h("button", {
-          class: "slab-press slab-pad",
-          type: "button",
-          "data-pad": def.id,
-          "aria-keyshortcuts": String(index + 1)
-        }, h("i", { class: "slab-key", "aria-hidden": "true" }, String(index + 1)), h("b", {}, def.label), sub);
-        if (def.id === "loop") this.loopSub = sub;
-        this.press(pad, () => this.firePad(pad, def));
-        this.padDefs.set(pad, def);
-        this.pads.push(pad);
-        padRow.append(pad);
-      });
+      const screwDefs = [
+        {
+          id: "screw",
+          label: "Screw",
+          sub: "Hold it down",
+          key: "6",
+          bank: "screw",
+          needsHelper: true,
+          run: () => press("screw", { cents: -this.state.screwDepth * 100 }),
+          release: () => release("screw"),
+          miss: NEEDS_HELPER
+        },
+        { id: "line", label: "Line", sub: "Run it back", key: "7", bank: "screw", run: () => runLineBack(), miss: tooEarly },
+        {
+          id: "trunk",
+          label: "Trunk",
+          sub: "Hold it shut",
+          key: "8",
+          bank: "screw",
+          needsHelper: true,
+          run: () => press("trunk"),
+          release: () => release("trunk"),
+          miss: NEEDS_HELPER
+        },
+        {
+          id: "echo",
+          label: "Echo",
+          sub: "Hold it",
+          key: "9",
+          bank: "screw",
+          needsHelper: true,
+          run: () => press("echo", { beatMs: this.beatMs() }),
+          release: () => release("echo"),
+          miss: NEEDS_HELPER
+        },
+        { id: "spin", label: "Spin", sub: "Back a bar", key: "0", bank: "screw", run: () => spinBack(), miss: tooEarly }
+      ];
+      const chopRow = this.padRow("chop", "Cuts", chopDefs);
+      const screwRow = this.padRow("screw", "Holds, a line and a spin", screwDefs);
       const auto = h(
         "div",
-        { class: "slab-auto" },
+        { class: "slab-auto", "data-for": "chop" },
         this.switchEl,
         h("div", { class: "slab-stepper" }, this.everyDown, this.everyEl, this.everyUp)
       );
+      const depth = h(
+        "div",
+        { class: "slab-auto", "data-for": "screw" },
+        h("div", { class: "slab-stepper" }, this.depthDown, this.depthEl, this.depthUp)
+      );
+      const banks = h(
+        "div",
+        { class: "slab-banks", role: "radiogroup", "aria-label": "Pads" },
+        this.bankButton("chop", "Chop"),
+        this.bankButton("screw", "Screw")
+      );
+      const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth);
       this.sillEl = h(
         "div",
         { class: "slab-sill" },
@@ -3102,12 +3665,283 @@ ${NEON_CSS}
         h("span", { class: "slab-screw-at slab-screw-right", html: SILL_SCREW_RIGHT }),
         h("div", { class: "slab-sill-plate" }, this.eqNote, this.helperEl, this.speedEl)
       );
-      const lower = h("div", { class: "slab-lower" }, readout, padRow, auto);
-      const body = h("div", { class: "slab-body" }, head, trim, moodGrid, lower, this.sillEl);
+      const lower = h("div", { class: "slab-lower" }, readout, chopRow, screwRow, bankRow);
+      const body = h("div", { class: "slab-body" }, head, trim, doors, lower, this.sillEl);
       panel.append(h("div", { class: "slab-lip slab-lip-top" }), body, this.statusEl);
       panel.addEventListener("click", (event) => event.stopPropagation());
       panel.addEventListener("keydown", (event) => this.handleTab(event, "panel"));
       return panel;
+    }
+    /** A row of five pads, one bank: four, then the last a hand's width apart. */
+    padRow(bank, label, defs) {
+      const row = h("div", { class: "slab-pads", role: "group", "aria-label": label, "data-bank": bank });
+      for (const def of defs) {
+        const sub = h("small", {}, def.sub);
+        const pad = h("button", {
+          class: "slab-press slab-pad",
+          type: "button",
+          "data-pad": def.id,
+          "aria-keyshortcuts": def.key
+        }, h("i", { class: "slab-key", "aria-hidden": "true" }, def.key), h("b", {}, def.label), sub);
+        if (def.id === "loop") this.loopSub = sub;
+        if (def.release) {
+          setData(pad, "hold", "true");
+          this.wireHold(pad, def);
+        } else {
+          this.press(pad, () => {
+            this.showBank(def.bank);
+            this.firePad(pad, def);
+          });
+        }
+        this.padDefs.set(pad, def);
+        this.padByKey.set(def.key, pad);
+        this.pads.push(pad);
+        row.append(pad);
+      }
+      return row;
+    }
+    /**
+     * A held pad is down for as long as a finger, the pointer or its key is: it comes up on
+     * the matching up, wherever the pointer has wandered by then.
+     */
+    wireHold(pad, def) {
+      pad.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || !event.isPrimary) return;
+        event.preventDefault();
+        try {
+          pad.setPointerCapture(event.pointerId);
+        } catch {
+        }
+        this.holdDown(pad, def, `pointer:${event.pointerId}`);
+      });
+      const up = (event) => this.holdUp(`pointer:${event.pointerId}`);
+      pad.addEventListener("pointerup", up);
+      pad.addEventListener("pointercancel", up);
+      pad.addEventListener("lostpointercapture", up);
+      pad.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        this.holdDown(pad, def, `key:${event.code}`);
+      });
+      pad.addEventListener("keyup", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        this.holdUp(`key:${event.code}`);
+      });
+      pad.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (event.detail !== 0) return;
+        const by = `latch:${def.id}`;
+        if (this.heldBy.has(by)) {
+          this.holdUp(by);
+          this.flashActivity(`${def.label} let go`);
+          return;
+        }
+        this.holdDown(pad, def, by);
+        if (this.heldBy.has(by)) this.flashActivity(`${def.label} held. Press again to let go.`);
+      });
+    }
+    holdDown(pad, def, by) {
+      if (this.heldBy.has(by)) return;
+      this.showBank(def.bank);
+      if (isOff(pad)) {
+        this.flashActivity(def.needsHelper ? NEEDS_HELPER : NO_GRID);
+        return;
+      }
+      if (def.run() !== true) {
+        if (def.miss) this.flashActivity(def.miss);
+        return;
+      }
+      this.heldBy.set(by, pad);
+    }
+    holdUp(by) {
+      const pad = this.heldBy.get(by);
+      if (!pad) return;
+      this.heldBy.delete(by);
+      for (const other of this.heldBy.values()) if (other === pad) return;
+      this.padDefs.get(pad)?.release?.();
+    }
+    /** Every held pad up at once: the window lost the keys, or the panel is going. */
+    releaseHolds() {
+      this.heldBy.clear();
+      releaseAll();
+    }
+    bankButton(bank, label) {
+      const button = h("button", {
+        class: "slab-press slab-bank",
+        type: "button",
+        role: "radio",
+        "data-bank": bank,
+        "aria-checked": "false",
+        tabindex: "-1",
+        onclick: () => this.showBank(bank),
+        onkeydown: (event) => {
+          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+          event.preventDefault();
+          const next = bank === "chop" ? "screw" : "chop";
+          this.showBank(next);
+          this.bankButtons.get(next)?.focus();
+        }
+      }, h("span", {}, label));
+      this.bankButtons.set(bank, button);
+      return button;
+    }
+    /** Shows a bank's pads and its control. Playing a pad from the other bank's key shows that bank. */
+    showBank(bank) {
+      if (this.state.bank !== bank) {
+        this.state.bank = bank;
+        saveState(this.state);
+      }
+      this.renderBank();
+    }
+    renderBank() {
+      const bank = this.state.bank;
+      setData(this.panel, "bank", bank);
+      for (const [id, button] of this.bankButtons) {
+        setAttr(button, "aria-checked", id === bank ? "true" : "false");
+        setAttr(button, "tabindex", id === bank ? "0" : "-1");
+      }
+    }
+    setScrewDepth(depth) {
+      const next = Math.max(SCREW_MIN, Math.min(SCREW_MAX, Math.round(depth)));
+      if (next === this.state.screwDepth) return;
+      this.state.screwDepth = next;
+      saveState(this.state);
+      this.renderDepth();
+      this.announceSettled(() => this.depthEl.textContent ?? "");
+    }
+    renderDepth() {
+      const depth = this.state.screwDepth;
+      setText(this.depthEl, `Screws ${depth} semitone${depth === 1 ? "" : "s"} down`);
+      setOff(this.depthDown, depth <= SCREW_MIN);
+      setOff(this.depthUp, depth >= SCREW_MAX);
+    }
+    /** One beat of the song where the needle is, for the echo; a 90 BPM beat with no grid. */
+    beatMs() {
+      const grid = gridFor();
+      if (!grid) return 667;
+      return beatLengthMs(grid, Math.max(0, beatIndexAt(grid, needlePosition())));
+    }
+    /**
+     * Mine: a tap keeps the sound you hear when it's empty and brings it back when it isn't; a
+     * hold keeps what you hear now over what was in it. Shift+Enter does the hold from the keys.
+     */
+    wireMine(button) {
+      let timer = null;
+      let kept = false;
+      const cancel = () => {
+        if (timer !== null) window.clearTimeout(timer);
+        timer = null;
+      };
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || !event.isPrimary) return;
+        kept = false;
+        cancel();
+        if (!mineMood()) return;
+        timer = window.setTimeout(() => {
+          timer = null;
+          kept = true;
+          this.saveMine(true);
+        }, MINE_HOLD_MS);
+      });
+      for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, cancel);
+      this.releases.push(cancel);
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !event.shiftKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.saveMine(true);
+      });
+      button.addEventListener("click", () => {
+        if (kept) {
+          kept = false;
+          return;
+        }
+        if (mineMood()) void this.applyMood(MINE_ID, true);
+        else this.saveMine(false);
+      });
+    }
+    /** Keeps what you hear now in Mine: this mood's curve and room, and the pitch as the slider has it. */
+    saveMine(over) {
+      const current = moodById(this.state.moodId);
+      const from = current.id === MINE_ID ? this.state.mine?.from ?? "flat" : current.id;
+      const saved = { from, gains: [...current.gains], dsp: { ...current.dsp, pitch: this.state.pitch } };
+      this.state.mine = saved;
+      setMine(saved);
+      this.state.moodId = MINE_ID;
+      saveState(this.state);
+      this.renderMine();
+      this.renderMoodState();
+      this.keepFollows();
+      this.flashActivity(over ? "Mine holds what you hear now" : "Kept what you hear as Mine");
+    }
+    renderMine() {
+      const button = this.mineButton;
+      if (!button) return;
+      const mine2 = mineMood();
+      setData(button, "empty", mine2 ? "false" : "true");
+      button.innerHTML = mine2 ? `${pinstripe(MINE_ID)}
+        <span class="slab-mood-name">Mine</span>
+        <span class="slab-mood-cents">${formatCents(mine2.dsp.pitch)}<span class="slab-sr"> cents</span></span>
+        ${doorCurve(mine2.gains)}` : `${pinstripe(MINE_ID)}
+        <span class="slab-mood-name">Mine</span>
+        <span class="slab-mood-cents">Tap to keep this sound</span>`;
+      setAttr(button, "title", mine2 ? "Your own mood. Hold to keep what you hear now in its place." : "Keeps the mood, pitch and room you hear now as your own.");
+    }
+    /** The Keep door, for whoever is playing: drawn again only when the artist or what's kept changes. */
+    renderKeep() {
+      const artist = currentArtist();
+      const kept = keptFor(artist);
+      const shown = `${artist?.uri ?? ""}|${artist?.name ?? ""}|${kept ? `${kept.moodId}:${kept.pitch}` : ""}`;
+      if (shown === this.keepShown) return;
+      this.keepShown = shown;
+      setAttr(this.keepButton, "aria-pressed", kept ? "true" : "false");
+      if (!artist) {
+        setText(this.keepNameEl, "Keep for an artist");
+        setText(this.keepSubEl, "Nobody playing to keep it for");
+        setOff(this.keepButton, true);
+        setAttr(this.keepButton, "title", "");
+        return;
+      }
+      const name = artist.name || "this artist";
+      setOff(this.keepButton, false);
+      setText(this.keepNameEl, `Keep for ${name}`);
+      setText(this.keepSubEl, kept ? `Locked on ${moodById(kept.moodId).name}` : "Locks this mood to them");
+      setAttr(this.keepButton, "title", kept ? `${name} comes on ${moodById(kept.moodId).name} every time. Press to let it go.` : `Every time ${name} comes on, so does the mood you have now.`);
+    }
+    toggleKeep() {
+      if (isOff(this.keepButton)) return;
+      const artist = currentArtist();
+      if (!artist) return;
+      const name = artist.name || "This artist";
+      if (keptFor(artist)) {
+        forget(artist);
+        this.flashActivity(`${name} plays on whatever's on`);
+      } else {
+        keep(artist, this.state.moodId, this.state.pitch);
+        this.flashActivity(`${name} comes on ${moodById(this.state.moodId).name} from now on`);
+      }
+      this.renderKeep();
+    }
+    /** While a mood is kept for this artist, keeping follows what you pick for them. */
+    keepFollows() {
+      const artist = currentArtist();
+      if (artist && keptFor(artist)) keep(artist, this.state.moodId, this.state.pitch);
+      this.renderKeep();
+    }
+    /** A kept artist's track: their mood goes on. Quietly at boot, said out loud on a track change. */
+    applyKept(say) {
+      const artist = currentArtist();
+      const kept = keptFor(artist);
+      if (!artist || !kept) return;
+      const id = kept.moodId === MINE_ID && !mineMood() ? "flat" : kept.moodId;
+      const pitch = clampPitch(kept.pitch);
+      if (id === this.state.moodId && pitch === this.state.pitch) return;
+      this.state.pitch = pitch;
+      void this.applyMood(id, false);
+      if (say) this.flashActivity(`${moodById(id).name}, kept for ${artist.name || "this artist"}`);
     }
     handleOutside(event) {
       if (this.panel.hidden) return;
@@ -3179,14 +4013,19 @@ ${NEON_CSS}
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
-      const index = Number.parseInt(event.key, 10);
-      if (!Number.isFinite(index) || index < 1 || index > this.pads.length) return;
+      const pad = this.padByKey.get(event.key);
+      if (!pad) return;
       if (isTypingTarget(event.target)) return;
       event.preventDefault();
       if (event.repeat) return;
-      const pad = this.pads[index - 1];
       const def = this.padDefs.get(pad);
-      if (def) this.firePad(pad, def);
+      if (!def) return;
+      if (def.release) {
+        this.holdDown(pad, def, `key:${event.code}`);
+        return;
+      }
+      this.showBank(def.bank);
+      this.firePad(pad, def);
     }
     /**
      * Radiogroup keys: down and right go to the next mood, up and left to the one
@@ -3195,6 +4034,7 @@ ${NEON_CSS}
      */
     handleMoodKey(event) {
       const order = MOODS_BY_PITCH.map((mood) => mood.id);
+      if (mineMood()) order.push(MINE_ID);
       const from = order.indexOf(moodById(this.state.moodId).id);
       let to;
       switch (event.key) {
@@ -3242,6 +4082,7 @@ ${NEON_CSS}
     }
     close() {
       if (this.panel.contains(document.activeElement) && this.chip.isConnected) this.chip.focus({ preventScroll: true });
+      this.releaseHolds();
       this.panel.hidden = true;
       this.state.open = false;
       saveState(this.state);
@@ -3370,6 +4211,7 @@ ${NEON_CSS}
       const mood = moodById(id);
       if (announce) this.state.pitch = mood.dsp.pitch;
       saveState(this.state);
+      if (announce) this.keepFollows();
       this.renderMoodState();
       this.renderPitch(announce);
       this.renderDsp();
@@ -3452,7 +4294,10 @@ ${NEON_CSS}
       this.pendingPitch = null;
       if (value === null) return;
       void sendDsp({ pitch: value });
-      if (persist) saveState(this.state);
+      if (persist) {
+        saveState(this.state);
+        this.keepFollows();
+      }
     }
     /**
      * The wheel's rotation is a function of where it sits, so it always rolls the
@@ -3847,7 +4692,8 @@ ${NEON_CSS}
       const base = `Every ${every} bar${every === 1 ? "" : "s"}`;
       const grid = gridFor();
       const ahead = this.state.auto && grid && isPlaying() ? autoBarsAhead(barIndexAt(grid, progressMs())) : null;
-      setText(this.everyEl, ahead === null ? base : `${base}, ${ahead === 1 ? "next bar" : `next in ${ahead}`}`);
+      setText(this.everyEl.firstElementChild, base);
+      setText(this.everyEl.lastElementChild, ahead === null ? "" : ahead === 1 ? "next bar" : `next in ${ahead}`);
     }
     /**
      * What a press just did, said right above the pads in the ruler's place for
@@ -3873,13 +4719,13 @@ ${NEON_CSS}
     press(button, action, repeat = false) {
       let downAt = 0;
       let holdTimer = null;
-      const release2 = () => {
+      const release3 = () => {
         if (holdTimer !== null) window.clearTimeout(holdTimer);
         holdTimer = null;
       };
       const hold = (event, delay) => {
         holdTimer = window.setTimeout(() => {
-          if (isOff(button)) return release2();
+          if (isOff(button)) return release3();
           action(event);
           hold(event, 70);
         }, delay);
@@ -3890,11 +4736,11 @@ ${NEON_CSS}
         downAt = Date.now();
         action(event);
         if (repeat) {
-          release2();
+          release3();
           hold(event, 420);
         }
       });
-      for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, release2);
+      for (const type of ["pointerup", "pointerleave", "pointercancel"]) button.addEventListener(type, release3);
       button.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
@@ -3909,7 +4755,7 @@ ${NEON_CSS}
         event.stopPropagation();
         if (event.detail === 0 && Date.now() - downAt > 400) action(event);
       });
-      this.releases.push(release2);
+      this.releases.push(release3);
     }
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     firePad(pad, def) {
@@ -4055,12 +4901,16 @@ ${NEON_CSS}
       const speed = this.speedInfo();
       setText(this.speedEl, speed.text);
       setAttr(this.speedEl, "title", speed.hint);
+      const holding = canHold();
       for (const pad of this.pads) {
-        const off = pad.dataset.pad !== "stop" && !grid;
+        const def = this.padDefs.get(pad);
+        const off = def?.needsHelper ? !holding : pad.dataset.pad !== "stop" && !grid;
         setOff(pad, off);
-        if (off) setAttr(pad, "aria-describedby", "slab-nogrid");
+        if (off && !def?.needsHelper) setAttr(pad, "aria-describedby", "slab-nogrid");
         else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
+        setAttr(pad, "title", off && def?.needsHelper ? NEEDS_HELPER : "");
       }
+      this.renderKeep();
       this.renderEvery();
       const left = loopRemaining();
       const looping = isLooping();
@@ -4150,7 +5000,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.6.0";
+  var VERSION = "0.7.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {
@@ -4174,7 +5024,7 @@ ${NEON_CSS}
     }
     return false;
   }
-  function release(claim) {
+  function release2(claim) {
     if (window.__slabClaim === claim) window.__slabClaim = void 0;
   }
   async function boot2(claim) {
@@ -4183,7 +5033,7 @@ ${NEON_CSS}
     );
     if (!player) {
       console.warn(LOG, "player never appeared, giving up");
-      release(claim);
+      release2(claim);
       return;
     }
     const eqApi = await waitFor(() => Spicetify.Platform.EqualizerAPI ?? null, 1e4);
@@ -4230,7 +5080,7 @@ ${NEON_CSS}
     } catch {
     }
     void boot2(claim).catch((error) => {
-      release(claim);
+      release2(claim);
       console.error(LOG, "boot failed", error);
     });
   }
