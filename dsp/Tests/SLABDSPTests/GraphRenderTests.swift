@@ -78,7 +78,14 @@ private func sine(_ hz: Double, _ amplitude: Float = 0.5) -> (Int) -> Float {
 }
 
 private func tones(_ parts: [(hz: Double, amplitude: Float)]) -> (Int) -> Float {
-    { frame in parts.reduce(Float(0)) { $0 + Float(sin(2 * .pi * $1.hz * Double(frame) / rate)) * $1.amplitude } }
+    { frame in
+        var sum: Float = 0
+        for part in parts {
+            let phase: Double = 2 * .pi * part.hz * Double(frame) / rate
+            sum += Float(sin(phase)) * part.amplitude
+        }
+        return sum
+    }
 }
 
 /// A 30 ms hit of a 1 kHz tone at each of `times` (seconds), silence between.
@@ -88,8 +95,9 @@ private func hits(at times: [Double], amplitude: Float = 0.5) -> (Int) -> Float 
     return { frame in
         for start in starts where frame >= start && frame < start + length {
             let k = Double(frame - start)
-            let shape = 0.5 - 0.5 * cos(2 * .pi * k / Double(length))
-            return Float(shape * sin(2 * .pi * 1_000 * k / rate)) * amplitude
+            let shape: Double = 0.5 - 0.5 * cos(2 * .pi * k / Double(length))
+            let tone: Double = sin(2 * .pi * 1_000 * k / rate)
+            return Float(shape * tone) * amplitude
         }
         return 0
     }

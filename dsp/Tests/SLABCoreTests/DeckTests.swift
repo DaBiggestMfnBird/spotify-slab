@@ -14,27 +14,46 @@ private func songSample(_ position: Int) -> Float {
 /// defined between the samples (`frame` can be fractional), so Spotify's copy can come back a
 /// fraction of a sample off, as a restarted resampler leaves it. It never repeats exactly.
 private func music(_ frame: Double) -> Float {
-    let t = frame / 48_000
-    let beat = 60.0 / 140
+    let t: Double = frame / 48_000
+    let beat: Double = 60.0 / 140
+    let twoPi: Double = 2 * .pi
     // A 2 ms rise on every hit, so nothing in it is sharper than a real record's attack.
     func hit(_ since: Double, decay: Double) -> Double {
-        since < 0 ? 0 : min(1, since / 0.002) * exp(-since / decay)
+        if since < 0 { return 0 }
+        let rise: Double = min(1, since / 0.002)
+        return rise * exp(-since / decay)
     }
-    let inBeat = t.truncatingRemainder(dividingBy: beat)
-    let kick = sin(2 * .pi * 52 * inBeat + 9 * (1 - exp(-inBeat / 0.03))) * hit(inBeat, decay: 0.12)
-    let bass = 0.45 * sin(2 * .pi * 48 * t + 0.4 * sin(2 * .pi * 0.25 * t)) * (0.6 + 0.4 * pow(sin(2 * .pi * 0.37 * t), 2))
-    let chords = [(220.0, 0.0), (277.2, 1.0), (329.6, 2.0), (440.0, 0.5)].reduce(0.0) { $0 + 0.05 * sin(2 * .pi * $1.0 * t + $1.1) }
-    // A voice at 180 Hz with 6 Hz of vibrato (its phase, the integral of its pitch).
-    let sung = 180 * t - 0.18 * cos(2 * .pi * 5.3 * t)
-    let voice = (1...18).reduce(0.0) { $0 + sin(2 * .pi * Double($1) * sung) / Double($1) } * 0.05 * (sin(2 * .pi * 0.71 * t) > -0.3 ? 1 : 0.2)
+    // A kick on every beat, falling from about 100 Hz to 52.
+    let inBeat: Double = t.truncatingRemainder(dividingBy: beat)
+    let kickPhase: Double = twoPi * 52 * inBeat + 9 * (1 - exp(-inBeat / 0.03))
+    let kick: Double = sin(kickPhase) * hit(inBeat, decay: 0.12)
+    // An 808 under it, swelling slowly.
+    let bassPhase: Double = twoPi * 48 * t + 0.4 * sin(twoPi * 0.25 * t)
+    let swell: Double = sin(twoPi * 0.37 * t)
+    let bass: Double = 0.45 * sin(bassPhase) * (0.6 + 0.4 * swell * swell)
+    var chords: Double = 0
+    for (hz, offset) in [(220.0, 0.0), (277.2, 1.0), (329.6, 2.0), (440.0, 0.5)] {
+        chords += 0.05 * sin(twoPi * hz * t + offset)
+    }
+    // A voice at 180 Hz with 6 Hz of vibrato (its phase, the integral of its pitch), coming and going.
+    let sung: Double = 180 * t - 0.18 * cos(twoPi * 5.3 * t)
+    var voice: Double = 0
+    for harmonic in 1...18 {
+        let n = Double(harmonic)
+        voice += sin(twoPi * n * sung) / n
+    }
+    let singing: Double = sin(twoPi * 0.71 * t) > -0.3 ? 1 : 0.2
+    voice *= 0.05 * singing
     // Sixteenth-note hats: a cluster of metal between 6 and 14 kHz.
-    let sixteenth = beat / 4
-    let inHat = t.truncatingRemainder(dividingBy: sixteenth)
-    let metal = [6_130.0, 7_090, 7_910, 8_670, 9_430, 10_270, 11_150, 12_010, 12_890, 13_730].enumerated().reduce(0.0) {
-        $0 + sin(2 * .pi * $1.element * t + Double($1.offset) * 1.7)
+    let inHat: Double = t.truncatingRemainder(dividingBy: beat / 4)
+    var metal: Double = 0
+    let partials: [Double] = [6_130, 7_090, 7_910, 8_670, 9_430, 10_270, 11_150, 12_010, 12_890, 13_730]
+    for (k, hz) in partials.enumerated() {
+        metal += sin(twoPi * hz * t + Double(k) * 1.7)
     }
-    let hats = 0.05 * metal * hit(inHat, decay: 0.025)
-    return Float((0.7 * kick + bass + chords + voice + hats) * 0.5)
+    let hats: Double = 0.05 * metal * hit(inHat, decay: 0.025)
+    let mix: Double = 0.7 * kick + bass + chords + voice + hats
+    return Float(mix * 0.5)
 }
 
 /// Spotify on one side of the deck, the speakers on the other, in 512-frame blocks.
