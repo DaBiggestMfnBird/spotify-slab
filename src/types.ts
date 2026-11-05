@@ -41,6 +41,8 @@ export interface SlabState {
     dj: boolean;
     /** The sound from before DJ mode put the record on full screw, to go back to after. */
     djBefore: { moodId: string; pitch: number; tape: TapeState } | null;
+    /** How hard DJ mode plays: 1 light, 2 steady, 3 heavy, 4 hard. */
+    djHand: number;
 }
 
 export interface TapeState {
