@@ -81,7 +81,7 @@ public final class Deck: @unchecked Sendable {
     private static let chopLogSize = 8
     /// The last tightening, so every pass of a loop jumps the same distance, even the passes asked
     /// for while the deck plays from memory.
-    private var lastTight: (asked: Int, made: Int, at: Int)?
+    private var lastTight: (asked: Int, made: Int, alike: Bool, at: Int)?
 
     struct Jump {
         let at: Int
@@ -89,6 +89,9 @@ public final class Deck: @unchecked Sendable {
         /// What SLAB asked for, before the deck tightened it to the record's own beat.
         let asked: Int
         let seekAhead: Int
+        /// Both sides of the cut are the same sound (a loop, a beat jumped by its own length): they
+        /// are crossed straight, since equal power would swell identical audio 3 dB at the join.
+        let alike: Bool
     }
 
     struct Detached {
@@ -412,10 +415,11 @@ public final class Deck: @unchecked Sendable {
     /// `availableFrames` is how much song SLAB knows runs unbroken behind what is heard (since the
     /// track started, the user moved the record, or play resumed); the deck never goes further back.
     public func scheduleJump(backFrames: Int, inFrames: Int = 0, seekAheadFrames: Int, availableFrames: Int) throws {
-        let tight = backFrames > 0 ? tightened(backFrames) : backFrames
+        let tight = backFrames > 0 ? tightened(backFrames) : (frames: backFrames, alike: false)
         lock.lock()
         defer { lock.unlock() }
-        let back = tight <= availableFrames ? tight : backFrames
+        let back = tight.frames <= availableFrames ? tight.frames : backFrames
+        let alike = back == tight.frames && tight.alike
         guard written > 0 else { throw JumpRefusal.nothingPlaying }
         guard back != 0, back <= availableFrames, abs(back) < capacity - Int(sampleRate * 2) else {
             throw JumpRefusal.tooFarBack
@@ -427,7 +431,7 @@ public final class Deck: @unchecked Sendable {
         if !(back > 0 && behind <= 0), target(back: behind) == nil {
             throw JumpRefusal.notInMemory
         }
-        pending = Jump(at: played + delay, back: back, asked: backFrames, seekAhead: max(0, seekAheadFrames))
+        pending = Jump(at: played + delay, back: back, asked: backFrames, seekAhead: max(0, seekAheadFrames), alike: alike)
     }
 
     /// A backspin into a chop: the record spins back for `spinFrames` from now, then lands
@@ -450,7 +454,7 @@ public final class Deck: @unchecked Sendable {
         let frames = max(fadeFrames * 4, spinFrames)
         spinLag = detached?.lag ?? max(0, written - head)
         spin = Spin(position: Double(head), elapsed: 0, frames: frames, speed: max(1, speed), floor: floor)
-        pending = Jump(at: played + frames, back: backFrames, asked: backFrames, seekAhead: max(0, seekAheadFrames))
+        pending = Jump(at: played + frames, back: backFrames, asked: backFrames, seekAhead: max(0, seekAheadFrames), alike: false)
     }
 
     /// Where a backspin's stylus is, while one turns.
@@ -497,7 +501,7 @@ public final class Deck: @unchecked Sendable {
         if let open = segments.indices.last, segments[open].end == nil {
             segments[open].end = written
         }
-        crossfade(to: to.position)
+        crossfade(to: to.position, sameSound: jump.alike)
         headDelta = to.delta
         headEnd = to.end ?? written
         settle(.chopped)
@@ -783,7 +787,8 @@ public final class Deck: @unchecked Sendable {
     /// milliseconds off a record's real beat, and a chop that far off flams: the kick lands twice.
     /// Within 25 ms of `back`, the lag at which the record's attacks line up best, if they clearly do
     /// (a loop, a drum pattern), found to the sample; with nothing that repeats, `back` as asked.
-    func tightened(_ back: Int) -> Int {
+    /// `alike` when the two sides of the cut are near enough the same sound to be crossed straight.
+    func tightened(_ back: Int) -> (frames: Int, alike: Bool) {
         let reach = Int(sampleRate * 0.025)
         lock.lock()
         let w = written
@@ -792,8 +797,8 @@ public final class Deck: @unchecked Sendable {
         let reuse = lastTight
         lock.unlock()
         // Every pass of a loop jumps the same distance: the first pass's tightening is kept a while.
-        if let reuse, abs(reuse.asked - back) <= 1, w - reuse.at < Int(sampleRate * 20) { return reuse.made }
-        guard back > 4 * reach, riding, let liveStart else { return back }
+        if let reuse, abs(reuse.asked - back) <= 1, w - reuse.at < Int(sampleRate * 20) { return (reuse.made, reuse.alike) }
+        guard back > 4 * reach, riding, let liveStart else { return (back, false) }
 
         // Coarse, in half-millisecond steps: the newest 0.75 s of attacks against the same stretch
         // `back` earlier, give or take the reach.
@@ -802,7 +807,7 @@ public final class Deck: @unchecked Sendable {
         let n = Int(sampleRate * 0.75) / step
         let probeStart = w - n * step
         let pastStart = probeStart - back - reachBlocks * step
-        guard pastStart > liveStart, pastStart > w - capacity + Int(sampleRate) else { return back }
+        guard pastStart > liveStart, pastStart > w - capacity + Int(sampleRate) else { return (back, false) }
         let probe = attackEnvelope(from: probeStart, blocks: n, step: step)
         let past = attackEnvelope(from: pastStart, blocks: n + 2 * reachBlocks, step: step)
         var best: (offset: Int, r: Float)?
@@ -812,7 +817,7 @@ public final class Deck: @unchecked Sendable {
         }
         // A clear match, and a peak of its own: one at the edge of the reach is the slope of something
         // further off (a hi-hat pattern the chop isn't in step with), not a beat to tighten to.
-        guard let coarse = best, coarse.r >= 0.65, coarse.offset > 0, coarse.offset < 2 * reachBlocks else { return back }
+        guard let coarse = best, coarse.r >= 0.65, coarse.offset > 0, coarse.offset < 2 * reachBlocks else { return (back, false) }
         let center = back + (reachBlocks - coarse.offset) * step
 
         // Fine, to the sample, by the waveform below 4 kHz around the coarse lag.
@@ -830,11 +835,12 @@ public final class Deck: @unchecked Sendable {
                 made = center + step - k
             }
         }
-        guard abs(made - back) <= reach else { return back }
+        guard abs(made - back) <= reach else { return (back, false) }
+        let alike = top >= 0.9
         lock.lock()
-        lastTight = (asked: back, made: made, at: w)
+        lastTight = (asked: back, made: made, alike: alike, at: w)
         lock.unlock()
-        return made
+        return (made, alike)
     }
 
     /// How hard the record attacks, `step` frames at a time: each frame's change from the one before,

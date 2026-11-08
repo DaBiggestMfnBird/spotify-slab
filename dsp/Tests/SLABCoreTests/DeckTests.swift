@@ -602,9 +602,9 @@ final class DeckTests: XCTestCase {
         let chop = try XCTUnwrap(rig.deck.recentChops.last)
         XCTAssertEqual(chop.askedFrames, asked)
         XCTAssertEqual(chop.madeFrames, period, "tightened to the loop's own length")
-        // So the record carries straight on past the cut: a loop jumped by its own length is itself.
-        let fade = rig.deck.fadeFrames
-        XCTAssertNil(rig.seam(from: index + fade, playing: headBefore + fade))
+        // So the record carries straight on past the cut, through it too: a loop jumped by its own
+        // length is itself, crossed straight, with no swell at the join.
+        XCTAssertNil(rig.seam(from: index, playing: headBefore))
     }
 
     func testARecordThatDoesntRepeatKeepsTheChopAsAsked() throws {
