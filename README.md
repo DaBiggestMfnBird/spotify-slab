@@ -21,6 +21,7 @@ SLAB does the things the client can actually do, and pairs with a small companio
 - **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
 - **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware, and with SLAB DSP running they land the instant you hit them: no waiting on Spotify to seek.
 - **The Screw bank** — the other half of the name, on keys 6 to 0: hold Screw and the pitch rides down like a hand on the pitch fader, Line runs the lyric line you just heard back on the beat, Trunk shuts the lid on the sound, Echo throws it back in time with the song, and Spin backspins the record into a chop. The holds last as long as the pad is down.
+- **The Tape bank** — what the record plays through, over any mood: a room for the reverb, a worn cassette's wow and hiss, a played record's crackle, a cheap sampler's crunch. It stays on until you clean it off.
 - **Your own mood, kept for the artist** — a seventh door, Mine, keeps the sound you have on, and Keep locks a mood to whoever is playing, so UGK always comes on Screwed.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
 - **Auto chop** — cuts on the phrase lines every N bars and shows how far off the next cut is, on a worker clock that survives a backgrounded window.
@@ -69,10 +70,24 @@ Two banks, the two halves of the name. The switch under the pads shows one at a 
 | **Screw, hold it down** | Hold it and the pitch rides down, slow, like a hand on the pitch fader on the hook; let go and it springs back to the mood. How far it rides is the stepper beside the switch, a semitone to an octave. |
 | **Line, run it back** | Back to the start of the lyric line you just heard, at the same place in the beat, the way Screw ran a vocal back. Uses Spotify's synced lyrics; a track without them, or a stretch with no singing, gets a bar chop instead. |
 | **Trunk, hold it shut** | The sound of a slab going by with the trunk shut: muffled and boomy while you hold it, and the lid pops open the moment you let go. |
-| **Echo, hold it** | Throws the record back on the beat while you hold it, timed off the song's own tempo; let go and it rings off. |
+| **Echo, hold it** | Throws the record back on the beat while you hold it, timed off the song's own tempo; let go and the echo that's already going rings out on its own, a dub throw. |
 | **Spin, back a bar** | Backspins the record for a beat and lands a bar back, on the beat, as if the record had kept turning under the spin. |
 
 Screw, Trunk and Echo need SLAB DSP and say so without it. Spin without it is a plain bar chop.
+
+**Tape** (no keys: it's set and left, not played)
+
+| Pad | What the record plays through |
+|---|---|
+| **Room** | Where the reverb lives, over the mood's own: small room, plate, chamber, hall, cathedral, then back to the mood's. A dry mood gets enough reverb to hear the room. |
+| **Wow, worn tape** | The tape's speed wandering a fraction of a percent, so pitch and time warble together the way a worn cassette does. |
+| **Hiss, cassette** | A cassette's hiss under the music, on each channel. |
+| **Crackle, vinyl** | A played record's ticks, and now and then a pop. |
+| **Crush, lo-fi** | A cheap sampler's crunch: held for a few samples and cut to 7 bits. |
+
+The tape stays on over every mood until **Clean tape** takes it off, and Mine keeps it with the rest of the sound. It needs SLAB DSP 0.6 or newer; Room works with any SLAB DSP.
+
+![The three banks: Chop, Screw and Tape](docs/banks.png)
 
 Keyboard `1`–`0` plays the pads while the panel is open. A held key on Chop is one hit, a held key on Screw, Trunk or Echo holds it, and digits typed into Spotify's search or any text field never reach them. If the window loses the keys mid-hold, everything lets go. `Esc` closes the panel from inside it. A pad that can't do anything (no beat grid, or not that much record behind the needle yet) says why instead of doing nothing.
 
@@ -94,6 +109,8 @@ The companion app is what makes the moods real. It taps Spotify's audio with `Au
 | Chops and loops | Instant, from the last 45 seconds it has heard |
 | Backspin | The record run backwards out of memory, landing on a chop |
 | Holds | Screw, Trunk and Echo ramped on top of the mood, and back off it |
+| Tape | Wow on the tape's speed, hiss, crackle and crush, each 0–1 |
+| Echo | A send, fully wet: let go and the tail rings out |
 
 **Requirements:** macOS 14.2 or newer. Apple Silicon or Intel. Spotify desktop.
 
@@ -126,7 +143,7 @@ The helper listens on `http://127.0.0.1:47832`:
 | Route | Purpose |
 |---|---|
 | `GET /status` | version, link state (`tapping`, `audio`), sample rate, level, latency, current params |
-| `POST /params` | `{"pitch": -320, "reverb": 34, "lowpass": 11000}` |
+| `POST /params` | `{"pitch": -320, "reverb": 34, "lowpass": 11000, "wow": 1, "hiss": 1}`: the mood's settings, the tape among them (`wow`, `hiss`, `crackle`, `crush`, 0–1) |
 | `POST /tapstop` | `{"downMs": 380, "holdMs": 70, "upMs": 240}` |
 | `POST /jump` | `{"backMs": 3333, "inMs": 0, "seekAheadMs": 250, "availableMs": 12000}`: jump back in memory (forward when negative), `inMs` from now; `409` when that much song isn't there |
 | `POST /jump/cancel` | call a jump off: one still to come never happens, one waiting on Spotify goes back to live (a new track, a pause) |
@@ -234,6 +251,7 @@ src/
     holds.ts       Screw, Trunk and Echo: what's held on top of the mood
     lyrics.ts      Spotify's synced lyrics, for running a line back
     keep.ts        moods kept for artists
+    tape.ts        the Tape bank: rooms and layers over the mood
     clock.ts       worker ticker (main-thread timers get clamped when hidden)
     state.ts       localStorage persistence
   ui/
@@ -250,6 +268,7 @@ dsp/
   Sources/SLABCore/
     Deck.swift         the 45-second memory: jumps, the content clock, finding Spotify again
     Match.swift        finding one stretch of audio inside another
+    TapeColor.swift    hiss, crackle and crush, on the audio thread
   Sources/SLABDSP/
     TapCapture.swift   Core Audio process tap → the deck
     DSPGraph.swift     pitch / low-pass / reverb / delay / tape stop

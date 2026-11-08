@@ -19,6 +19,12 @@ struct DSPParams: Codable, Equatable {
     var lowpass: Float = 20_000
     /// Output trim in dB.
     var gain: Float = 0
+    /// Tape: a worn cassette's wow (the speed wandering), its hiss, a record's crackle, and a
+    /// cheap sampler's crunch. Each 0...1, 0 = off.
+    var wow: Float = 0
+    var hiss: Float = 0
+    var crackle: Float = 0
+    var crush: Float = 0
 
     static let neutral = DSPParams()
 }
@@ -43,8 +49,15 @@ final class DSPGraph {
     private let engine = AVAudioEngine()
     private let source: AVAudioSourceNode
     private let timePitch = AVAudioUnitTimePitch()
+    /// The tape's speed, which wow sets wandering; pitch and time wander together, as on a tape.
+    private let varispeed = AVAudioUnitVarispeed()
     private let reverb = AVAudioUnitReverb()
+    /// The echo is a send: what goes in is the send's level, and it comes back fully wet. Cut
+    /// the send and what's already in the echo rings on, the way a dub engineer throws one.
+    private let send = AVAudioMixerNode()
     private let delay = AVAudioUnitDelay()
+    /// Hiss, crackle and crush, on the samples straight out of the deck.
+    private let color: TapeColor
     private let eq = AVAudioUnitEQ(numberOfBands: 1)
     private let ring: Deck
     /// Lines the output back up with Spotify after a chop, and closes any lag that left.
@@ -69,6 +82,13 @@ final class DSPGraph {
     /// A hold nobody refreshes lets go by itself: SLAB may have lost the key-up with the window.
     private var holdWatch: DispatchSourceTimer?
     static let holdLifetime: TimeInterval = 10
+    /// A thrown echo ringing out: the time and feedback it keeps until it has died away.
+    private var echoRing: (time: Double, feedback: Float)?
+    private var echoRingUntil = Date.distantPast
+
+    private var wowTimer: DispatchSourceTimer?
+    private var wowStart = Date()
+    private var wowDepth: Float = 0
 
     /// Peak of the last render block, for the panel's level readout.
     nonisolated(unsafe) static var renderPeak: Float = 0
@@ -80,6 +100,8 @@ final class DSPGraph {
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
             fatalError("could not build audio format")
         }
+        let color = TapeColor(sampleRate: sampleRate)
+        self.color = color
 
         source = AVAudioSourceNode(format: format) { _, _, frameCount, ablPtr -> OSStatus in
             let abl = UnsafeMutableAudioBufferListPointer(ablPtr)
@@ -91,6 +113,7 @@ final class DSPGraph {
                 ? (abl[1].mData?.assumingMemoryBound(to: Float.self) ?? l)
                 : l
             _ = ring.read(into: l, r, frames: frames)
+            if r != l { color.process(l, r, frames: frames) }
 
             var peak: Float = 0
             for i in 0..<frames {
@@ -103,7 +126,9 @@ final class DSPGraph {
 
         engine.attach(source)
         engine.attach(timePitch)
+        engine.attach(varispeed)
         engine.attach(reverb)
+        engine.attach(send)
         engine.attach(delay)
         engine.attach(eq)
 
@@ -114,11 +139,20 @@ final class DSPGraph {
         band.bandwidth = 0.5
 
         engine.connect(source, to: timePitch, format: format)
-        engine.connect(timePitch, to: eq, format: format)
+        engine.connect(timePitch, to: varispeed, format: format)
+        engine.connect(varispeed, to: eq, format: format)
         engine.connect(eq, to: reverb, format: format)
-        engine.connect(reverb, to: delay, format: format)
-        engine.connect(delay, to: engine.mainMixerNode, format: format)
-        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: nil)
+        // Dry to the mixer, and a send to the echo, which comes back on its own input.
+        let main = engine.mainMixerNode
+        engine.connect(
+            reverb,
+            to: [AVAudioConnectionPoint(node: main, bus: 0), AVAudioConnectionPoint(node: send, bus: 0)],
+            fromBus: 0,
+            format: format
+        )
+        engine.connect(send, to: delay, format: format)
+        engine.connect(delay, to: main, fromBus: 0, toBus: main.nextAvailableInputBus, format: format)
+        engine.connect(main, to: engine.outputNode, format: nil)
 
         timePitch.rate = 1.0
         timePitch.pitch = 0
@@ -127,8 +161,11 @@ final class DSPGraph {
         reverb.wetDryMix = 0
         delay.delayTime = 0.36
         delay.feedback = 0
-        delay.wetDryMix = 0
+        delay.wetDryMix = 100
         delay.lowPassCutoff = 12_000
+        send.outputVolume = 0
+        varispeed.rate = 1
+        varispeed.bypass = true
         engine.mainMixerNode.outputVolume = 1.0
     }
 
@@ -151,6 +188,8 @@ final class DSPGraph {
         holdTimer = nil
         holdWatch?.cancel()
         holdWatch = nil
+        wowTimer?.cancel()
+        wowTimer = nil
         engine.stop()
         isRunning = false
     }
@@ -215,17 +254,47 @@ final class DSPGraph {
     private func push(_ p: DSPParams) {
         reverb.loadFactoryPreset(Self.preset(named: p.reverbPreset))
         reverb.wetDryMix = max(0, min(100, p.reverb))
+        color.set(TapeColor.Settings(hiss: p.hiss, crackle: p.crackle, crush: p.crush))
+        setWow(p.wow)
         mix(p, holdNow)
+    }
+
+    /// Wow: the tape's speed wandering a fraction of a percent, slow and never quite the same twice.
+    private func setWow(_ amount: Float) {
+        wowDepth = max(0, min(1, amount))
+        if wowDepth == 0 {
+            wowTimer?.cancel()
+            wowTimer = nil
+            varispeed.rate = 1
+            varispeed.bypass = true
+            return
+        }
+        varispeed.bypass = false
+        guard wowTimer == nil else { return }
+        wowStart = Date()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in self?.stepWow() }
+        timer.resume()
+        wowTimer = timer
+    }
+
+    private func stepWow() {
+        let t = Date().timeIntervalSince(wowStart)
+        let wander = 0.78 * sin(2 * .pi * 0.62 * t) + 0.22 * sin(2 * .pi * 1.73 * t + 1.1)
+        varispeed.rate = Float(1 + 0.0028 * Double(wowDepth) * wander)
     }
 
     /// The parts a hold can move, as the mood sets them with the hold on top. Cheap enough to run
     /// every step of a ramp: no reverb preset reload, which would click.
     private func mix(_ p: DSPParams, _ h: Hold) {
         timePitch.pitch = max(-2400, min(2400, p.pitch + h.pitchOffset))
+        // While a thrown echo rings out it keeps its own time and feedback; only the send was cut.
         let echo = h.echoMix > 0
-        delay.delayTime = max(0.01, min(2.0, echo ? h.echoTime : p.delayTime))
-        delay.feedback = max(0, min(95, echo ? max(p.delayFeedback, h.echoFeedback) : p.delayFeedback))
-        delay.wetDryMix = max(0, min(100, max(p.delayMix, h.echoMix)))
+        let ringing = !echo && Date() < echoRingUntil ? echoRing : nil
+        delay.delayTime = max(0.01, min(2.0, echo ? h.echoTime : ringing?.time ?? p.delayTime))
+        delay.feedback = max(0, min(95, echo ? max(p.delayFeedback, h.echoFeedback) : ringing?.feedback ?? p.delayFeedback))
+        send.outputVolume = max(0, min(1, max(p.delayMix, h.echoMix) / 100))
         let band = eq.bands[0]
         let cutoff = max(200, min(20_000, min(p.lowpass, h.lowpassCap)))
         band.bypass = cutoff >= 19_900
@@ -256,6 +325,16 @@ final class DSPGraph {
         if target.echoMix > 0 {
             holdFrom.echoTime = target.echoTime
             holdFrom.echoFeedback = target.echoFeedback
+        } else if holdFrom.echoMix > 0 {
+            // Let go: the send is cut and what's in the echo rings out, until it's under -60 dB.
+            let feedback = max(0.05, Double(holdFrom.echoFeedback) / 100)
+            let seconds = min(8, max(1, holdFrom.echoTime * log(0.001) / log(feedback)))
+            echoRing = (holdFrom.echoTime, holdFrom.echoFeedback)
+            echoRingUntil = Date().addingTimeInterval(seconds)
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.05) { [weak self] in
+                guard let self, Date() >= self.echoRingUntil else { return }
+                self.mix(self.current, self.holdNow)
+            }
         }
         holdStart = Date()
         holdSeconds = max(0, Double(ms) / 1000)

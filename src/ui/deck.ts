@@ -15,7 +15,7 @@ import {
     tapeStop,
     watchNeedle,
 } from "../core/chops";
-import { canHold, dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
+import { canHold, canTape, type DspParams, dspStatus, dspTapeStop, onDspChange, probeDsp, sendDsp } from "../core/dsp";
 import { applyCurve, applyCurveAtFrequencies, eqAvailable, restoreBaseline } from "../core/eq";
 import {
     barCount,
@@ -33,6 +33,7 @@ import { loadLines } from "../core/lyrics";
 import { modernEqBands, modernEqPresent } from "../core/moderneq";
 import { MINE_ID, MOODS, curvePath, mineMood, moodById, setMine } from "../core/moods";
 import { SCREW_MAX, SCREW_MIN, clampPitch, saveState } from "../core/state";
+import { CLEAN_TAPE, isClean, nextRoom, roomName, type TapeLayer, withTape } from "../core/tape";
 import type { Grid, SlabState } from "../types";
 import {
     BIG_WHEEL,
@@ -334,7 +335,7 @@ interface SpeedInfo {
     hint: string;
 }
 
-type Bank = "chop" | "screw";
+type Bank = "chop" | "screw" | "tape";
 
 interface PadDef {
     id: string;
@@ -349,12 +350,25 @@ interface PadDef {
     miss?: string;
     /** A held pad: `run` puts it down, this lets it up. */
     release?: () => void;
-    /** It needs the helper, and does nothing without it. */
-    needsHelper?: boolean;
+    /** It needs the helper (or a newer one) and does nothing without it; this says why. */
+    available?: () => boolean;
+    unavailable?: () => string;
 }
 
 /** Said when a pad that needs the helper is pressed without one. */
 const NEEDS_HELPER = "That pad needs SLAB DSP running on this Mac.";
+const NEEDS_NEWER = "That pad needs a newer SLAB DSP: run bun run dsp:install.";
+
+/** A helper with Spotify's audio coming through it, whatever it can do beyond. */
+function processing(): boolean {
+    const status = dspStatus();
+    return status.linked && status.tapping === true && status.audio === true;
+}
+
+/** Why a tape pad is dark: no helper, or one from before tape. */
+function tapeMissing(): string {
+    return processing() ? NEEDS_NEWER : NEEDS_HELPER;
+}
 
 /** Said once, under the readout, whenever a track has no beat grid. */
 const NO_GRID = "No beat grid here, so only Stop works and auto chop waits.";
@@ -425,6 +439,8 @@ export class Deck {
     /** Held pads by the key or pointer holding them down, so the right up lets the right one go. */
     private heldBy = new Map<string, HTMLButtonElement>();
     private bankButtons = new Map<Bank, HTMLButtonElement>();
+    private roomSub: HTMLElement | null = null;
+    private cleanButton: HTMLButtonElement | null = null;
     private depthEl: HTMLSpanElement;
     private depthDown: HTMLButtonElement;
     private depthUp: HTMLButtonElement;
@@ -608,7 +624,9 @@ export class Deck {
         this.noGridEl = h("p", { class: "slab-nogrid", id: "slab-nogrid" });
 
         // A latching press, in the same tuck and roll as the pads: it stays pushed
-        // in and lit while auto chop runs, and the countdown beside it says so in words.
+        // in and lit while auto chop runs, and its second line says how often, and how
+        // soon the next cut is while it runs.
+        this.everyEl = h("span", { class: "slab-every" });
         this.switchEl = h("button", {
             class: "slab-press slab-auto-press",
             type: "button",
@@ -616,8 +634,7 @@ export class Deck {
             "aria-checked": String(state.auto),
             "aria-label": "Auto chop",
             onclick: () => this.toggleAuto(),
-        }, h("span", {}, "Auto chop"));
-        this.everyEl = h("span", { class: "slab-every" }, h("span", { class: "slab-every-n" }), h("span", { class: "slab-every-next" }));
+        }, h("span", { class: "slab-auto-words" }, h("span", { class: "slab-auto-name" }, "Auto chop"), this.everyEl));
         this.everyDown = h("button", {
             class: "slab-press slab-step",
             type: "button",
@@ -723,6 +740,7 @@ export class Deck {
         this.renderAutoState();
         this.renderBank();
         this.renderDepth();
+        this.renderTape();
         this.renderKeep();
         this.renderPitch();
         this.renderEqNote();
@@ -737,7 +755,7 @@ export class Deck {
             // it comes back, re-push the current mood so the panel and the audio
             // agree without the user having to reselect anything.
             if (status.linked && !wasLinked) {
-                void sendDsp({ ...moodById(this.state.moodId).dsp, pitch: this.state.pitch });
+                void sendDsp(this.sound());
             }
             wasLinked = status.linked;
         });
@@ -1097,7 +1115,8 @@ export class Deck {
                 sub: "Hold it down",
                 key: "6",
                 bank: "screw",
-                needsHelper: true,
+                available: canHold,
+                unavailable: () => NEEDS_HELPER,
                 run: () => pressHold("screw", { cents: -this.state.screwDepth * 100 }),
                 release: () => releaseHold("screw"),
                 miss: NEEDS_HELPER,
@@ -1109,7 +1128,8 @@ export class Deck {
                 sub: "Hold it shut",
                 key: "8",
                 bank: "screw",
-                needsHelper: true,
+                available: canHold,
+                unavailable: () => NEEDS_HELPER,
                 run: () => pressHold("trunk"),
                 release: () => releaseHold("trunk"),
                 miss: NEEDS_HELPER,
@@ -1120,35 +1140,83 @@ export class Deck {
                 sub: "Hold it",
                 key: "9",
                 bank: "screw",
-                needsHelper: true,
+                available: canHold,
+                unavailable: () => NEEDS_HELPER,
                 run: () => pressHold("echo", { beatMs: this.beatMs() }),
                 release: () => releaseHold("echo"),
                 miss: NEEDS_HELPER,
             },
             { id: "spin", label: "Spin", sub: "Back a bar", key: "0", bank: "screw", run: () => spinBack(), miss: tooEarly },
         ];
+        // The tape: what the record plays through, over any mood, on until turned off. No keys:
+        // these are set and left, not played.
+        const tapeLayer = (id: TapeLayer, label: string, sub: string): PadDef => ({
+            id,
+            label,
+            sub,
+            key: "",
+            bank: "tape",
+            available: canTape,
+            unavailable: tapeMissing,
+            run: () => {
+                const next = { ...this.state.tape };
+                next[id] = !next[id];
+                this.setTape(next);
+                this.flashActivity(`${label} ${next[id] ? "on" : "off"}`);
+                return true;
+            },
+        });
+        const tapeDefs: PadDef[] = [
+            {
+                id: "room",
+                label: "Room",
+                sub: roomName(this.state.tape.room),
+                key: "",
+                bank: "tape",
+                available: processing,
+                unavailable: () => NEEDS_HELPER,
+                run: () => {
+                    const room = nextRoom(this.state.tape.room);
+                    this.setTape({ ...this.state.tape, room });
+                    this.flashActivity(room ? `In the ${roomName(room).toLowerCase()}` : "Back in the mood's own room");
+                    return true;
+                },
+            },
+            tapeLayer("wow", "Wow", "Worn tape"),
+            tapeLayer("hiss", "Hiss", "Cassette"),
+            tapeLayer("crackle", "Crackle", "Vinyl"),
+            tapeLayer("crush", "Crush", "Lo-fi"),
+        ];
         const chopRow = this.padRow("chop", "Cuts", chopDefs);
         const screwRow = this.padRow("screw", "Holds, a line and a spin", screwDefs);
+        const tapeRow = this.padRow("tape", "Tape", tapeDefs);
 
-        const auto = h(
-            "div",
-            { class: "slab-auto", "data-for": "chop" },
-            this.switchEl,
-            h("div", { class: "slab-stepper" }, this.everyDown, this.everyEl, this.everyUp),
-        );
+        const auto = h("div", { class: "slab-auto", "data-for": "chop" }, this.everyDown, this.switchEl, this.everyUp);
         const depth = h(
             "div",
             { class: "slab-auto", "data-for": "screw" },
             h("div", { class: "slab-stepper" }, this.depthDown, this.depthEl, this.depthUp),
         );
-        // Which pads show, the cuts or the screw. Both banks always play from the keys.
+        this.cleanButton = h("button", {
+            class: "slab-press slab-clean",
+            type: "button",
+            onclick: () => this.cleanTape(),
+        }, h("span", {}, "Clean tape"));
+        const tapeControl = h(
+            "div",
+            { class: "slab-auto", "data-for": "tape" },
+            this.cleanButton,
+            h("span", { class: "slab-every slab-tape-note" }, "On over every mood"),
+        );
+        // Which pads show: the cuts, the screw or the tape. The keys always play the first two.
         const banks = h(
             "div",
             { class: "slab-banks", role: "radiogroup", "aria-label": "Pads" },
             this.bankButton("chop", "Chop"),
             this.bankButton("screw", "Screw"),
+            this.bankButton("tape", "Tape"),
         );
-        const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth);
+        const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth, tapeControl);
 
         // The scuff plate: stainless, ribbed along its length, a Phillips head at
         // each end, and the status stamped into the smooth field between the ribs.
@@ -1161,7 +1229,7 @@ export class Deck {
         );
 
         // The body line: one crease across the door, with the deeper coat under it.
-        const lower = h("div", { class: "slab-lower" }, readout, chopRow, screwRow, bankRow);
+        const lower = h("div", { class: "slab-lower" }, readout, chopRow, screwRow, tapeRow, bankRow);
         const body = h("div", { class: "slab-body" }, head, trim, doors, lower, this.sillEl);
         // In a short window the sill stays on the bottom edge and the car scrolls
         // behind it; a lip on the top edge says when something is hidden above.
@@ -1180,9 +1248,10 @@ export class Deck {
                 class: "slab-press slab-pad",
                 type: "button",
                 "data-pad": def.id,
-                "aria-keyshortcuts": def.key,
+                ...(def.key ? { "aria-keyshortcuts": def.key } : {}),
             }, h("i", { class: "slab-key", "aria-hidden": "true" }, def.key), h("b", {}, def.label), sub);
             if (def.id === "loop") this.loopSub = sub;
+            if (def.id === "room") this.roomSub = sub;
             if (def.release) {
                 setData(pad, "hold", "true");
                 this.wireHold(pad, def);
@@ -1193,7 +1262,7 @@ export class Deck {
                 });
             }
             this.padDefs.set(pad, def);
-            this.padByKey.set(def.key, pad);
+            if (def.key) this.padByKey.set(def.key, pad);
             this.pads.push(pad);
             row.append(pad);
         }
@@ -1251,7 +1320,7 @@ export class Deck {
         if (this.heldBy.has(by)) return;
         this.showBank(def.bank);
         if (isOff(pad)) {
-            this.flashActivity(def.needsHelper ? NEEDS_HELPER : NO_GRID);
+            this.flashActivity(def.available ? (def.unavailable?.() ?? NEEDS_HELPER) : NO_GRID);
             return;
         }
         if (def.run() !== true) {
@@ -1294,7 +1363,9 @@ export class Deck {
             onkeydown: (event: KeyboardEvent) => {
                 if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
                 event.preventDefault();
-                const next: Bank = bank === "chop" ? "screw" : "chop";
+                const order: Bank[] = ["chop", "screw", "tape"];
+                const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+                const next = order[(order.indexOf(bank) + step + order.length) % order.length];
                 this.showBank(next);
                 this.bankButtons.get(next)?.focus();
             },
@@ -1328,6 +1399,43 @@ export class Deck {
         saveState(this.state);
         this.renderDepth();
         this.announceSettled(() => this.depthEl.textContent ?? "");
+    }
+
+    /** What the helper plays: the mood, through the tape, at the slider's pitch. */
+    private sound(mood = moodById(this.state.moodId)): DspParams {
+        return { ...withTape(mood.dsp, this.state.tape), pitch: this.state.pitch };
+    }
+
+    private setTape(tape: SlabState["tape"]): void {
+        this.state.tape = { ...tape };
+        saveState(this.state);
+        this.renderTape();
+        void sendDsp(this.sound());
+    }
+
+    private cleanTape(): void {
+        if (isClean(this.state.tape)) {
+            this.flashActivity("The tape is already clean");
+            return;
+        }
+        this.setTape({ ...CLEAN_TAPE });
+        this.flashActivity("Clean tape: the mood as it comes");
+    }
+
+    /** The tape pads stay lit while they're on, and say so to a screen reader; Room says which room it is. */
+    private renderTape(): void {
+        const tape = this.state.tape;
+        for (const pad of this.pads) {
+            const id = pad.dataset.pad;
+            if (id === "room") {
+                setData(pad, "latched", tape.room ? "true" : "false");
+            } else if (id === "wow" || id === "hiss" || id === "crackle" || id === "crush") {
+                setData(pad, "latched", tape[id] ? "true" : "false");
+                setAttr(pad, "aria-pressed", tape[id] ? "true" : "false");
+            }
+        }
+        if (this.roomSub) setText(this.roomSub, roomName(tape.room));
+        if (this.cleanButton) setOff(this.cleanButton, isClean(tape));
     }
 
     private renderDepth(): void {
@@ -1380,16 +1488,28 @@ export class Deck {
                 kept = false;
                 return;
             }
-            if (mineMood()) void this.applyMood(MINE_ID, true);
-            else this.saveMine(false);
+            if (mineMood()) {
+                this.bringBackMineTape();
+                void this.applyMood(MINE_ID, true);
+            } else {
+                this.saveMine(false);
+            }
         });
     }
 
-    /** Keeps what you hear now in Mine: this mood's curve and room, and the pitch as the slider has it. */
+    /** Mine was kept with a tape: picking it puts that tape back on. */
+    private bringBackMineTape(): void {
+        const tape = this.state.mine?.tape;
+        if (!tape) return;
+        this.state.tape = { ...tape };
+        this.renderTape();
+    }
+
+    /** Keeps what you hear now in Mine: this mood's curve and room, the tape, and the pitch as the slider has it. */
     private saveMine(over: boolean): void {
         const current = moodById(this.state.moodId);
         const from = current.id === MINE_ID ? (this.state.mine?.from ?? "flat") : current.id;
-        const saved = { from, gains: [...current.gains], dsp: { ...current.dsp, pitch: this.state.pitch } };
+        const saved = { from, gains: [...current.gains], dsp: { ...current.dsp, pitch: this.state.pitch }, tape: { ...this.state.tape } };
         this.state.mine = saved;
         setMine(saved);
         this.state.moodId = MINE_ID;
@@ -1473,6 +1593,7 @@ export class Deck {
         const pitch = clampPitch(kept.pitch);
         if (id === this.state.moodId && pitch === this.state.pitch) return;
         this.state.pitch = pitch;
+        if (id === MINE_ID) this.bringBackMineTape();
         void this.applyMood(id, false);
         if (say) this.flashActivity(`${moodById(id).name}, kept for ${artist.name || "this artist"}`);
     }
@@ -1813,7 +1934,7 @@ export class Deck {
 
         // The helper applies real pitch / reverb / delay. If it is not running
         // this resolves false and the mood stays EQ-only.
-        void sendDsp({ ...mood.dsp, pitch: this.state.pitch });
+        void sendDsp(this.sound(mood));
 
         if (announce) this.flashActivity(mood.name, speak);
     }
@@ -2083,7 +2204,7 @@ export class Deck {
      * syncDspParams() gets the panel's values through when they drift.
      */
     private helperParams(): { pitch: number; reverb: number; delayMix: number; lowpass: number } {
-        const sent = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+        const sent = this.sound();
         const got = dspStatus().params ?? {};
         const pick = (key: "pitch" | "reverb" | "delayMix" | "lowpass"): number => {
             const value = got[key];
@@ -2368,9 +2489,7 @@ export class Deck {
         const base = `Every ${every} bar${every === 1 ? "" : "s"}`;
         const grid = gridFor();
         const ahead = this.state.auto && grid && isPlaying() ? autoBarsAhead(barIndexAt(grid, progressMs())) : null;
-        // Two lines while it runs: how often, then how soon, each whole.
-        setText(this.everyEl.firstElementChild as HTMLElement, base);
-        setText(this.everyEl.lastElementChild as HTMLElement, ahead === null ? "" : ahead === 1 ? "next bar" : `next in ${ahead}`);
+        setText(this.everyEl, ahead === null ? base.toLowerCase() : `every ${every}, ${ahead === 1 ? "next bar" : `next in ${ahead}`}`);
     }
 
     /**
@@ -2441,7 +2560,7 @@ export class Deck {
     /** Lights the pad only when the edit actually happened, and says why when it couldn't. */
     private firePad(pad: HTMLButtonElement, def: PadDef): void {
         if (isOff(pad)) {
-            this.flashActivity(NO_GRID);
+            this.flashActivity(def.available ? (def.unavailable?.() ?? NEEDS_HELPER) : NO_GRID);
             return;
         }
         void Promise.resolve(def.run()).then((ran) => {
@@ -2474,13 +2593,18 @@ export class Deck {
         const now = Date.now();
         if (now - this.lastDspSync < 3_000) return;
 
-        // The slider is authoritative; the mood only supplies the other params.
-        const want = { ...moodById(this.state.moodId).dsp, pitch: this.state.pitch };
+        // The slider is authoritative; the mood and the tape supply the other params.
+        const want = this.sound();
         const have = status.params ?? {};
+        // A helper from before tape doesn't report it; asking again wouldn't change that.
+        const tapeDrift = status.tape === true && (["wow", "hiss", "crackle", "crush"] as const).some(
+            (key) => Math.abs((have[key] ?? 0) - want[key]) > 0.01,
+        );
         const drifted =
             Math.abs((have.pitch ?? 0) - want.pitch) > 1 ||
             Math.abs((have.reverb ?? 0) - want.reverb) > 1 ||
-            Math.abs((have.lowpass ?? 20_000) - want.lowpass) > 50;
+            Math.abs((have.lowpass ?? 20_000) - want.lowpass) > 50 ||
+            tapeDrift;
         if (!drifted) return;
 
         this.lastDspSync = now;
@@ -2609,15 +2733,14 @@ export class Deck {
         setText(this.speedEl, speed.text);
         setAttr(this.speedEl, "title", speed.hint);
 
-        const holding = canHold();
         for (const pad of this.pads) {
             const def = this.padDefs.get(pad);
-            // The holds need the helper and nothing else; everything else but Stop needs the grid.
-            const off = def?.needsHelper ? !holding : pad.dataset.pad !== "stop" && !grid;
+            // The holds and the tape need the helper and nothing else; everything else but Stop needs the grid.
+            const off = def?.available ? !def.available() : pad.dataset.pad !== "stop" && !grid;
             setOff(pad, off);
-            if (off && !def?.needsHelper) setAttr(pad, "aria-describedby", "slab-nogrid");
+            if (off && !def?.available) setAttr(pad, "aria-describedby", "slab-nogrid");
             else if (pad.hasAttribute("aria-describedby")) pad.removeAttribute("aria-describedby");
-            setAttr(pad, "title", off && def?.needsHelper ? NEEDS_HELPER : "");
+            setAttr(pad, "title", off && def?.available ? (def.unavailable?.() ?? NEEDS_HELPER) : "");
         }
         this.renderKeep();
         this.renderEvery();
