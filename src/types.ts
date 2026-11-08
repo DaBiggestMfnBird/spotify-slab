@@ -5,6 +5,15 @@ export interface Grid {
     beats: number[];
     bars: number[];
     durationMs: number;
+    /** The song's sections as Spotify's analysis hears them: where each starts, and how loud it is. */
+    sections: Section[];
+}
+
+export interface Section {
+    /** ms into the track. */
+    start: number;
+    /** dB, as the analysis reports it; the loudest are the hooks. */
+    loudness: number;
 }
 
 export interface SlabState {
@@ -28,6 +37,10 @@ export interface SlabState {
     mine: SavedMoodState | null;
     /** What the record is played through, over whatever mood is on. */
     tape: TapeState;
+    /** DJ mode: SLAB plays the moves itself. */
+    dj: boolean;
+    /** The sound from before DJ mode put the record on full screw, to go back to after. */
+    djBefore: { moodId: string; pitch: number; tape: TapeState } | null;
 }
 
 export interface TapeState {
