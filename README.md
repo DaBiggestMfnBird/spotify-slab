@@ -22,6 +22,7 @@ SLAB does the things the client can actually do, and pairs with a small companio
 - **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
 - **Auto chop** — cuts on the phrase lines every N bars and shows how far off the next cut is, on a worker clock that survives a backgrounded window.
+- **The trunk lights up** — while the mood can be heard, the nameplate, the sign and every word on the paint burn as neon; paused, they go back to glass and whitewall. Behind the slider, a big 84 wire wheel turns once a bar, read off the beat grid, and its neon ring kicks on every beat.
 - **An honest readout** — the sign and the playbar chip are only lit while the mood can actually be heard, the sill says what the helper and Spotify are doing right now, and when Spotify plays on another device the paint goes to grey primer and the panel names that device.
 
 Tempo is the one thing SLAB does not change. See [why](#tempo-is-locked-on-purpose).

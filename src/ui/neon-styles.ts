@@ -32,6 +32,36 @@ export const NEON_CSS = `
 /* The helper is running with nothing to shift: warm glass, not lit. */
 .slab-panel[data-tube="idle"] .slab-number-tube .slab-tube-gas { opacity: 0.24; }
 
+/* The nameplate on the deck lid, bent in the same glass: a fine tube for small script. */
+.slab-logo-tube { width: 58px; height: 28px; }
+.slab-logo-tube .slab-tube-cast { transform: translate(0.7px, 1.3px); opacity: 0.75; }
+.slab-logo-tube [data-l="shadowWide"] { stroke-width: 3.2; }
+.slab-logo-tube [data-l="shadow"] { stroke-width: 2; }
+.slab-logo-tube [data-l="frost"] { stroke-width: 1.8; }
+.slab-logo-tube [data-l="frostHi"] { stroke-width: 0.55; }
+.slab-logo-tube [data-l="bloom"] { stroke-width: 7.5; }
+.slab-logo-tube [data-l="halo"] { stroke-width: 3.8; }
+.slab-logo-tube [data-l="glass"] { stroke-width: 1.9; }
+.slab-logo-tube [data-l="core"] { stroke-width: 0.8; }
+.slab-panel[data-gas="off"] .slab-logo-tube .slab-tube-gas { visibility: hidden; }
+
+/*
+ * The ring round the big wheel: a thin loop of glass at low current, so it never
+ * outshines the sign, the number or the rail. Each beat drives it up and it
+ * settles before the next (deck.ts sets the opacity from the beat clock).
+ */
+.slab-ring-tube .slab-tube-cast { transform: translate(1px, 2px); opacity: 0.45; }
+.slab-ring-tube [data-l="shadowWide"] { stroke-width: 4; opacity: 0.1; }
+.slab-ring-tube [data-l="shadow"] { stroke-width: 2.2; opacity: 0.3; }
+.slab-ring-tube [data-l="frost"] { stroke-width: 1.8; opacity: 0.4; }
+.slab-ring-tube [data-l="frostHi"] { opacity: 0.35; }
+.slab-ring-tube [data-l="bloom"] { stroke-width: 9; opacity: 0.08; }
+.slab-ring-tube [data-l="halo"] { stroke-width: 4.5; opacity: 0.22; }
+.slab-ring-tube [data-l="glass"] { stroke-width: 1.9; }
+.slab-ring-tube [data-l="core"] { stroke-width: 0.7; }
+.slab-ring-tube .slab-tube-gas { opacity: 0.3; }
+.slab-panel[data-gas="off"] .slab-ring-tube .slab-tube-gas { visibility: hidden; }
+
 /* The number is small glass close to the board: thinner tube, a lighter, shorter shadow. */
 .slab-number-tube .slab-tube-cast { transform: translate(1px, 2px); opacity: 0.6; }
 .slab-number-tube [data-l="frost"], .slab-number-tube [data-l="glass"] { stroke-width: 2.5; }

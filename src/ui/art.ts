@@ -105,6 +105,53 @@ export const WHEEL_KNOCKOFF = `
 </svg>`;
 
 /**
+ * The big wheel on the board behind the slider: the same 84 on Vogues, at the
+ * size you'd see one across the trunk, drawn in the board's own dark so it sits
+ * behind the glass instead of fighting it. Its turning half, the spokes and the
+ * knock-off, goes round once a bar, so the ears come square on every beat.
+ * Everything is scaled from the thumb wheel, so the two are the same wheel.
+ */
+export const BIG_WHEEL_SCALE = 3.1;
+/** The neon ring the board's gas runs through, just outside the tyre. */
+export const BIG_WHEEL_RING = Math.round((TYRE_RADIUS + 1.6) * BIG_WHEEL_SCALE);
+export const BIG_WHEEL_BOX = (BIG_WHEEL_RING + 14) * 2;
+
+function bigWheel(): { base: string; turn: string } {
+    const k = BIG_WHEEL_SCALE;
+    const half = BIG_WHEEL_BOX / 2;
+    const box = `viewBox="${-half} ${-half} ${BIG_WHEEL_BOX} ${BIG_WHEEL_BOX}" width="${BIG_WHEEL_BOX}" height="${BIG_WHEEL_BOX}" aria-hidden="true" focusable="false"`;
+    const base = `
+<svg class="slab-bigwheel-base" ${box}>
+  <circle r="${fmt(TYRE_RADIUS * k)}" fill="#0B0304" opacity=".55"/>
+  <circle r="${fmt(17.6 * k)}" fill="none" stroke="#F4F0E6" stroke-width="${fmt(1.45 * k)}" opacity=".24"/>
+  <circle r="${fmt(16.15 * k)}" fill="none" stroke="#E2B53A" stroke-width="${fmt(0.85 * k)}" opacity=".34"/>
+  <circle r="${fmt(13.3 * k)}" fill="none" stroke="#C9CFD3" stroke-width="${fmt(1.8 * k)}" opacity=".26"/>
+  <circle r="${fmt(12.4 * k)}" fill="#0B0304" opacity=".5"/>
+</svg>`;
+    let spokes = "";
+    for (let i = 0; i < 30; i++) {
+        const a = i * 12;
+        spokes += `<path d="M${polar(12.3 * k, a - 2.9)}L${polar(6.8 * k, a - 3.8)}L${polar(6.8 * k, a + 3.8)}L${polar(12.3 * k, a + 2.9)}Z"/>`;
+    }
+    const turn = `
+<svg class="slab-bigwheel-turn" ${box}>
+  <g fill="#C9CFD3" opacity=".27">${spokes}</g>
+  <circle r="${fmt(7.15 * k)}" fill="none" stroke="#F5F7F8" stroke-width="${fmt(1.1 * k)}" opacity=".3"/>
+  <path d="M${fmt(-7.7 * k)} ${fmt(-2 * k)}L${fmt(-2.6 * k)} ${fmt(-1.45 * k)}L${fmt(2.6 * k)} ${fmt(-1.45 * k)}L${fmt(7.7 * k)} ${fmt(-2 * k)}L${fmt(7.7 * k)} ${fmt(2 * k)}L${fmt(2.6 * k)} ${fmt(1.45 * k)}L${fmt(-2.6 * k)} ${fmt(1.45 * k)}L${fmt(-7.7 * k)} ${fmt(2 * k)}Z" fill="#F1F4F5" opacity=".34"/>
+</svg>`;
+    return { base, turn };
+}
+
+export const BIG_WHEEL = bigWheel();
+
+/** The ring of glass round the big wheel, as one closed tube centred in its box. */
+export function bigWheelRingPath(): string {
+    const c = BIG_WHEEL_BOX / 2;
+    const r = BIG_WHEEL_RING;
+    return `M${fmt(c - r)} ${fmt(c)}A${r} ${r} 0 1 1 ${fmt(c + r)} ${fmt(c)}A${r} ${r} 0 1 1 ${fmt(c - r)} ${fmt(c)}Z`;
+}
+
+/**
  * The playbar chip: the same wheel face-on, drawn like the client's own line
  * icons, with nothing outside the tyre. Off, the band is plain; on, it is the
  * Vogue band, so "on" doesn't depend on colour alone.
