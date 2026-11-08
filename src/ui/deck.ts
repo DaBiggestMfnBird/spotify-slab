@@ -89,6 +89,8 @@ const TAGLINE = "Slow, loud and bangin’";
 /** Full screw: DJ mode's sound, the Screwed mood ridden seven semitones down on a worn tape. */
 const DJ_MOOD = "screwed";
 const DJ_PITCH = -700;
+/** How long the answer to a press holds the readout against what plays on its own. */
+const ANSWER_HOLD_MS = 1_500;
 /** What the DJ plays a record as, for a sentence. */
 const PLAYED_AS: Record<StyleId, string> = {
     houston: "Houston",
@@ -466,6 +468,8 @@ export class Deck {
     private handUp: HTMLButtonElement;
     /** When a hand last played a pad: what happens just after is the hand's, not the DJ's. */
     private lastManualAt = 0;
+    /** When the readout last answered something you did. */
+    private answeredAt = 0;
     private cleanButton: HTMLButtonElement | null = null;
     private depthEl: HTMLSpanElement;
     private depthDown: HTMLButtonElement;
@@ -758,7 +762,7 @@ export class Deck {
         onChop((event) => {
             // Auto chop and DJ mode cut on their own; what they do is shown, not spoken each time.
             const automatic = event.kind === "auto" || (djRunning() && Date.now() - this.lastManualAt > 1_500);
-            this.flashActivity(event.label, !automatic);
+            this.flashActivity(event.label, !automatic, automatic);
             if (automatic) this.hitPad(this.pads[0]);
         });
     }
@@ -797,7 +801,7 @@ export class Deck {
         this.renderDepth();
         this.renderTape();
         this.renderKeep();
-        onDj((label) => this.flashActivity(label, false));
+        onDj((label) => this.flashActivity(label, false, true));
         setDjHand(this.state.djHand);
         if (this.state.dj) startDj();
         this.renderDj();
@@ -2648,9 +2652,13 @@ export class Deck {
 
     /**
      * What a press just did, said right above the pads in the ruler's place for
-     * a moment, so the answer lands where the hand is. Nothing else moves.
+     * a moment, so the answer lands where the hand is. Nothing else moves. What
+     * plays on its own (the DJ, auto chop) waits behind the answer to a press for
+     * a moment, so the answer is read.
      */
-    private flashActivity(text: string, speak = true): void {
+    private flashActivity(text: string, speak = true, onItsOwn = false): void {
+        if (onItsOwn && Date.now() - this.answeredAt < ANSWER_HOLD_MS) return;
+        if (!onItsOwn) this.answeredAt = Date.now();
         this.flashEl.textContent = text;
         setData(this.panel, "flash", "true");
         if (speak) this.announce(text);
