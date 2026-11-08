@@ -1,7 +1,7 @@
 [
   {
     "name": "SLAB",
-    "description": "Third Coast playback moods: six EQ curves from Screwed to Sped Up, chop and loop pads that cut on the bar line, auto chop on the phrase, a real tape stop, and a panel that only lights up when the mood can be heard. On macOS, the free SLAB helper adds true pitch, reverb and delay.",
+    "description": "Third Coast playback moods: Screwed, Chopped, Slowed + Reverb and more, with pads that chop and loop on the bar and run the vocal line back, and a DJ mode that works the record on full screw by itself. On macOS the free SLAB helper makes it real: true pitch and reverb, instant chops, hold-to-screw, trunk and echo, and a tape bank with wow, hiss and crackle.",
     "preview": "preview.png",
     "main": "dist/slab.js",
     "readme": "README.md",
@@ -12,12 +12,14 @@
       }
     ],
     "tags": [
-      "eq",
+      "chopped-and-screwed",
       "hip-hop",
-      "playback",
+      "dj",
       "chop",
       "pitch",
-      "reverb"
+      "reverb",
+      "eq",
+      "lo-fi"
     ]
   }
 ]

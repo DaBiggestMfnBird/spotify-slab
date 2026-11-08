@@ -6,7 +6,7 @@ SLAB is a playback deck for the Houston lineage — the sound DJ Screw built wit
 
 Named for **Slow, Loud And Bangin'**. No samples, no lean imagery, no costume. Just the mix moves.
 
-![SLAB panel](preview.png)
+![The SLAB panel with DJ mode on: Screwed at −700 cents, and the DJ's row under the Chop pads](preview.png)
 
 ---
 
@@ -21,7 +21,7 @@ SLAB does the things the client can actually do, and pairs with a small companio
 - **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
 - **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware, and with SLAB DSP running they land the instant you hit them: no waiting on Spotify to seek.
 - **The Screw bank** — the other half of the name, on keys 6 to 0: hold Screw and the pitch rides down like a hand on the pitch fader, Line runs the lyric line you just heard back on the beat, Trunk shuts the lid on the sound, Echo throws it back in time with the song, and Spin backspins the record into a chop. The holds last as long as the pad is down.
-- **DJ mode** — the `DJ` switch in the header: SLAB puts the record on full screw and works it itself, cutting on the phrase lines, running vocal lines back, looping and spinning out of sections, throwing echoes, riding Screw over the hook. It plays it by what kind of record it is, leans toward how you play, and hands the record back for eight bars whenever you hit a pad.
+- **DJ mode** — the `DJ` switch in the header: SLAB puts the record on full screw and works it itself, cutting on the phrase lines, running vocal lines back, looping and spinning out of sections, throwing echoes, riding Screw over the hook. It reads what kind of record it is (or you tell it, and it's kept for the artist), plays as hard as you set it, leans toward how you play, and hands the record back for eight bars whenever you hit a pad.
 - **The Tape bank** — what the record plays through, over any mood: a room for the reverb, a worn cassette's wow and hiss, a played record's crackle, a cheap sampler's crunch. It stays on until you clean it off.
 - **Your own mood, kept for the artist** — a seventh door, Mine, keeps the sound you have on, and Keep locks a mood to whoever is playing, so UGK always comes on Screwed.
 - **Tape stop** — a real pitch-and-speed spin-down when SLAB DSP is running, a fader pull into pause when it is not.
@@ -52,7 +52,7 @@ These are EQ curves, not presets with names slapped on. The sparkline on each ca
 
 ### The pads
 
-Two banks, the two halves of the name. The switch under the pads shows one at a time; the keys play both, and the panel shows whichever bank you last played.
+Three banks: Chop and Screw, the two halves of the name, and Tape, what the record plays through. The switch under the pads shows one at a time; the keys play Chop and Screw, and the panel shows whichever bank you last played.
 
 **Chop** (keys `1`–`5`)
 
@@ -225,7 +225,7 @@ So SLAB shifts pitch, which is the audible half of a screw record, and leaves te
 
 Search for **SLAB** in the Spicetify Marketplace and install it there.
 
-The extension itself is cross-platform. **SLAB DSP** — the part that adds real pitch, reverb and delay — is macOS 14.2+ only, because it depends on Core Audio process taps. On Windows and Linux the extension runs EQ-only and says so in the panel.
+The extension itself is cross-platform. **SLAB DSP**, the helper that makes the sound real (true pitch, reverb and delay, instant chops, the Screw, Trunk and Echo holds, the backspin and the tape), is macOS 14.2+ only, because it depends on Core Audio process taps. The Marketplace installs the extension; build the helper from this repo with `bun run dsp:install` (see [SLAB DSP](#slab-dsp-macos)). Without it, on any platform, the moods are EQ curves, the pads and DJ mode cut by seeking Spotify, and the panel says what needs the helper.
 
 ### Manual
 
