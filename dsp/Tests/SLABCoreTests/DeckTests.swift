@@ -10,6 +10,54 @@ private func songSample(_ position: Int) -> Float {
     return Float(x % 1_000_000) / 1_000_000 - 0.5
 }
 
+/// A record that sounds like one: a kick and an 808, chords, a voice and trap hi-hats, defined
+/// between the samples (`frame` can be fractional), so Spotify's copy can come back a fraction of
+/// a sample off, as a restarted resampler leaves it. It never repeats exactly. In a breakdown the
+/// kick and the 808 drop out, and the hats ride over the chords and the voice.
+private func music(_ frame: Double, hats hatLevel: Double = 0.05, breakdown: Bool = false) -> Float {
+    let t: Double = frame / 48_000
+    let beat: Double = 60.0 / 140
+    let twoPi: Double = 2 * .pi
+    // A 2 ms rise on every hit, so nothing in it is sharper than a real record's attack.
+    func hit(_ since: Double, decay: Double) -> Double {
+        if since < 0 { return 0 }
+        let rise: Double = min(1, since / 0.002)
+        return rise * exp(-since / decay)
+    }
+    // A kick on every beat, falling from about 100 Hz to 52.
+    let inBeat: Double = t.truncatingRemainder(dividingBy: beat)
+    let kickPhase: Double = twoPi * 52 * inBeat + 9 * (1 - exp(-inBeat / 0.03))
+    let kick: Double = sin(kickPhase) * hit(inBeat, decay: 0.12)
+    // An 808 under it, swelling slowly.
+    let bassPhase: Double = twoPi * 48 * t + 0.4 * sin(twoPi * 0.25 * t)
+    let swell: Double = sin(twoPi * 0.37 * t)
+    let bass: Double = 0.45 * sin(bassPhase) * (0.6 + 0.4 * swell * swell)
+    var chords: Double = 0
+    for (hz, offset) in [(220.0, 0.0), (277.2, 1.0), (329.6, 2.0), (440.0, 0.5)] {
+        chords += 0.05 * sin(twoPi * hz * t + offset)
+    }
+    // A voice at 180 Hz with 6 Hz of vibrato (its phase, the integral of its pitch), coming and going.
+    let sung: Double = 180 * t - 0.18 * cos(twoPi * 5.3 * t)
+    var voice: Double = 0
+    for harmonic in 1...18 {
+        let n = Double(harmonic)
+        voice += sin(twoPi * n * sung) / n
+    }
+    let singing: Double = sin(twoPi * 0.71 * t) > -0.3 ? 1 : 0.2
+    voice *= 0.05 * singing
+    // Sixteenth-note hats: a cluster of metal between 6 and 14 kHz.
+    let inHat: Double = t.truncatingRemainder(dividingBy: beat / 4)
+    var metal: Double = 0
+    let partials: [Double] = [6_130, 7_090, 7_910, 8_670, 9_430, 10_270, 11_150, 12_010, 12_890, 13_730]
+    for (k, hz) in partials.enumerated() {
+        metal += sin(twoPi * hz * t + Double(k) * 1.7)
+    }
+    let hats: Double = hatLevel * metal * hit(inHat, decay: 0.025)
+    let low: Double = breakdown ? 0 : 0.7 * kick + bass
+    let mix: Double = low + chords + voice + hats
+    return Float(mix * 0.5)
+}
+
 /// Spotify on one side of the deck, the speakers on the other, in 512-frame blocks.
 private final class Rig {
     let deck: Deck
@@ -20,6 +68,10 @@ private final class Rig {
     var silenceLeft = 0
     var resumeAt: Int?
     var heard: [Float] = []
+    /// What Spotify sends once a seek takes hold, for a song position and the frames since it
+    /// started sending again; nil for the song exactly as it was.
+    var afterSeek: ((_ position: Int, _ since: Int) -> Float)?
+    private var sinceResume: Int?
 
     init(rate: Double = 48_000, start: Int = 0, prime: Int = 1_024, song: @escaping (Int) -> Float = songSample) {
         self.rate = rate
@@ -39,11 +91,17 @@ private final class Rig {
                 if silenceLeft == 0, let resume = resumeAt {
                     spotify = resume
                     resumeAt = nil
+                    sinceResume = 0
                 }
                 continue
             }
             if let position = spotify {
-                samples[i] = song(position)
+                if let since = sinceResume, let sent = afterSeek {
+                    samples[i] = sent(position, since)
+                    sinceResume = since + 1
+                } else {
+                    samples[i] = song(position)
+                }
                 spotify = position + 1
             }
         }
@@ -106,6 +164,36 @@ private final class Rig {
     func seam(from index: Int, through end: Int? = nil, playing position: Int) -> Int? {
         let last = end ?? heard.count
         return (index..<last).first { abs(heard[$0] - song(position + $0 - index)) > 1e-6 }
+    }
+
+    /// For a copy that isn't sample-identical: the first 512-frame window from `index` on where
+    /// what's heard isn't the song straight on from `position` (to within a sample, below 4 kHz),
+    /// or nil. A skip or a repeat of more than a sample anywhere moves the best match off.
+    func drift(from index: Int, playing position: Int) -> Int? {
+        // The deck's own 4 kHz filter: a plain average lets bright hats through, and on a copy half a
+        // sample off they alone would pull a perfect join under the bar.
+        let kernel = Deck.bandKernel(sampleRate: rate)
+        let taps = kernel.count
+        let band = { (values: [Float]) -> [Float] in
+            (0...(values.count - taps)).map { i in
+                var sum: Float = 0
+                for j in 0..<taps { sum += values[i + j] * kernel[j] }
+                return sum
+            }
+        }
+        let span = 512 + taps - 1
+        var at = index
+        while at + span + 8 <= heard.count {
+            let ours = band(Array(heard[at..<(at + span)]))
+            let lagScores = (-4...4).map { lag -> (Int, Float) in
+                let theirs = band((0..<span).map { song(position + at - index + lag + $0) })
+                return (lag, Match.similarity(ours, theirs))
+            }
+            let best = lagScores.max { $0.1 < $1.1 }!
+            if abs(best.0) > 1 || best.1 < 0.98 { return at }
+            at += 512
+        }
+        return nil
     }
 }
 
@@ -428,6 +516,75 @@ final class DeckTests: XCTestCase {
         XCTAssertNil(rig.seam(from: index + fade, playing: at + 1 + forward + fade))
         // Nothing ahead of what has been heard can be played from memory.
         XCTAssertThrowsError(try rig.deck.scheduleJump(backFrames: -rig.ms(5_000), seekAheadFrames: 0, availableFrames: rig.ms(6_000)))
+    }
+
+    // MARK: Spotify as it really comes back
+
+    /// A chop two seconds back, Spotify sent there and back 200 ms later, sending `afterSeek`.
+    private func chopAndSeek(_ rig: Rig, afterSeek: @escaping (Int, Int) -> Float) throws -> (index: Int, target: Int) {
+        rig.run(rig.ms(4_000))
+        let back = rig.ms(2_000)
+        let ahead = rig.ms(250)
+        let target = rig.deck.head - back
+        let index = rig.heard.count
+        try rig.deck.scheduleJump(backFrames: back, seekAheadFrames: ahead, availableFrames: rig.ms(4_000))
+        rig.run(512)
+        rig.afterSeek = afterSeek
+        rig.seek(to: target + 512 + ahead, lateMs: 20, gapMs: 200)
+        rig.run(rig.ms(1_500), realigning: true)
+        XCTAssertFalse(rig.deck.isDetached, "realigned onto Spotify's audio")
+        XCTAssertEqual(rig.deck.realignments, 1)
+        XCTAssertEqual(rig.deck.fallbacks, 0, "went live instead")
+        return (index, target)
+    }
+
+    func testRealignsWhenSpotifysCopyIsHalfASampleOff() throws {
+        // Spotify's 44.1 kHz stream resampled for a 48 kHz Mac: after the seek the resampler starts
+        // at another phase, and no frame matches memory exactly. On a stretch with no 808 and the hats
+        // as loud as the chords and the voice, the whole band scored 0.96 at best, under the bar, and
+        // the chop went live. Below 4 kHz it scores 0.9996.
+        let rig = Rig(song: { music(Double($0), hats: 0.12, breakdown: true) })
+        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5, hats: 0.12, breakdown: true) }
+        // Never a skip or a repeat from the chop on, through the crossover onto Spotify's copy.
+        XCTAssertNil(rig.drift(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames))
+        XCTAssertEqual(try XCTUnwrap(rig.deck.seekGapMs), 220, accuracy: 15)
+    }
+
+    func testRealignsOnAFullMixHalfASampleOff() throws {
+        // The same with the kick and the 808 under it.
+        let rig = Rig(song: { music(Double($0)) })
+        let chop = try chopAndSeek(rig) { position, _ in music(Double(position) + 0.5) }
+        XCTAssertNil(rig.drift(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames))
+    }
+
+    func testCrossesOverOnlyOnceSpotifyHasFadedBackIn() throws {
+        // Spotify fades its audio in over 30 ms after the seek. Crossing over in the fade would duck
+        // the record; it crosses where Spotify's copy is back at full level.
+        let rig = Rig()
+        let chop = try chopAndSeek(rig) { position, since in
+            songSample(position) * min(1, Float(since) / 1_440)
+        }
+        XCTAssertNil(rig.seam(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames), "heard some of the fade")
+    }
+
+    func testIgnoresTheDecodersFirstFramesAfterTheSeek() throws {
+        // The first 10 ms out of Spotify's decoder after a seek are something else entirely.
+        let rig = Rig()
+        let chop = try chopAndSeek(rig) { position, since in
+            since < 480 ? songSample(position &* 7 &+ 123_457) : songSample(position)
+        }
+        XCTAssertNil(rig.seam(from: chop.index + rig.deck.fadeFrames, playing: chop.target + rig.deck.fadeFrames))
+    }
+
+    func testRealignsWhenSpotifyComesBackAtAnotherLevel() throws {
+        // The volume moved while Spotify seeked: its copy is 2 dB down. Same sound, so it still joins.
+        let rig = Rig()
+        let chop = try chopAndSeek(rig) { position, _ in songSample(position) * 0.794 }
+        // Once across, what's heard is Spotify's copy at its new level, the song straight on.
+        let late = rig.heard.count - rig.ms(200)
+        let position = chop.target + late - chop.index
+        let off = (late..<rig.heard.count).first { abs(rig.heard[$0] - 0.794 * songSample(position + $0 - late)) > 1e-5 }
+        XCTAssertNil(off)
     }
 
     func testMatchPicksTheCopyNearestWhereItShouldBe() {

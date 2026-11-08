@@ -17,6 +17,7 @@ const DEFAULTS: SlabState = {
     tape: CLEAN_TAPE,
     dj: false,
     djBefore: null,
+    djHand: 2,
 };
 
 /** The one rule for a pitch value: ±1200 cents, on the slider's 10-cent grid. */
@@ -99,6 +100,7 @@ export function loadState(): SlabState {
                 parsed.djBefore && typeof parsed.djBefore.moodId === "string" && typeof parsed.djBefore.pitch === "number"
                     ? { moodId: parsed.djBefore.moodId, pitch: clampPitch(parsed.djBefore.pitch), tape: readTape(parsed.djBefore.tape) }
                     : null,
+            djHand: typeof parsed.djHand === "number" && parsed.djHand >= 1 && parsed.djHand <= 4 ? Math.round(parsed.djHand) : DEFAULTS.djHand,
         };
     } catch {
         setMine(null);

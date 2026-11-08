@@ -1204,7 +1204,8 @@ self.onmessage = (event) => {
     mine: null,
     tape: CLEAN_TAPE,
     dj: false,
-    djBefore: null
+    djBefore: null,
+    djHand: 2
   };
   function clampPitch(value) {
     if (!Number.isFinite(value)) return 0;
@@ -1265,7 +1266,8 @@ self.onmessage = (event) => {
         mine: mine3,
         tape: readTape(parsed.tape),
         dj: parsed.dj === true,
-        djBefore: parsed.djBefore && typeof parsed.djBefore.moodId === "string" && typeof parsed.djBefore.pitch === "number" ? { moodId: parsed.djBefore.moodId, pitch: clampPitch(parsed.djBefore.pitch), tape: readTape(parsed.djBefore.tape) } : null
+        djBefore: parsed.djBefore && typeof parsed.djBefore.moodId === "string" && typeof parsed.djBefore.pitch === "number" ? { moodId: parsed.djBefore.moodId, pitch: clampPitch(parsed.djBefore.pitch), tape: readTape(parsed.djBefore.tape) } : null,
+        djHand: typeof parsed.djHand === "number" && parsed.djHand >= 1 && parsed.djHand <= 4 ? Math.round(parsed.djHand) : DEFAULTS.djHand
       };
     } catch {
       setMine(null);
@@ -1280,6 +1282,7 @@ self.onmessage = (event) => {
   }
 
   // src/core/genre.ts
+  var STYLES = ["houston", "trap", "rap", "slowjam", "band", "dance", "pop"];
   var STYLE_NAMES = {
     houston: "Houston",
     trap: "trap",
@@ -1298,11 +1301,39 @@ self.onmessage = (event) => {
     ["band", /rock|metal|punk|indie|grunge|alternative|emo|shoegaze|country|folk/],
     ["pop", /pop/]
   ];
-  var cache3 = /* @__PURE__ */ new Map();
+  var GENRES_KEY = "slab:genres:v1";
+  var GENRES_LIMIT = 500;
+  var EMPTY_AGAIN_MS = 7 * 24 * 36e5;
+  var FAILED_AGAIN_MS = 10 * 6e4;
+  var genres = null;
+  var failed = /* @__PURE__ */ new Map();
   var inflight3 = /* @__PURE__ */ new Map();
+  function genreStore() {
+    if (genres) return genres;
+    genres = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(GENRES_KEY) ?? "{}");
+      for (const [uri2, asked] of Object.entries(parsed ?? {})) {
+        if (Array.isArray(asked?.genres) && typeof asked.at === "number") {
+          genres[uri2] = { genres: asked.genres.filter((g) => typeof g === "string"), at: asked.at };
+        }
+      }
+    } catch {
+    }
+    return genres;
+  }
+  function saveGenres() {
+    const kept = Object.entries(genreStore()).sort((a, b) => b[1].at - a[1].at).slice(0, GENRES_LIMIT);
+    genres = Object.fromEntries(kept);
+    try {
+      localStorage.setItem(GENRES_KEY, JSON.stringify(genres));
+    } catch {
+    }
+  }
   async function artistGenres(artistUri) {
-    const cached = cache3.get(artistUri);
-    if (cached) return cached;
+    const known = genreStore()[artistUri];
+    if (known && (known.genres.length > 0 || Date.now() - known.at < EMPTY_AGAIN_MS)) return known.genres;
+    if (Date.now() - (failed.get(artistUri) ?? -Infinity) < FAILED_AGAIN_MS) return known?.genres ?? [];
     const running3 = inflight3.get(artistUri);
     if (running3) return running3;
     const id = /^spotify:artist:([A-Za-z0-9]+)$/.exec(artistUri)?.[1];
@@ -1311,12 +1342,15 @@ self.onmessage = (event) => {
     const request2 = (async () => {
       try {
         const body = await cosmos.get(`https://api.spotify.com/v1/artists/${id}`);
-        const genres = Array.isArray(body?.genres) ? body.genres.filter((g) => typeof g === "string") : [];
-        cache3.set(artistUri, genres);
-        return genres;
+        if (!body || typeof body !== "object") throw new Error("no artist");
+        const found = Array.isArray(body.genres) ? body.genres.filter((g) => typeof g === "string") : [];
+        genreStore()[artistUri] = { genres: found, at: Date.now() };
+        saveGenres();
+        failed.delete(artistUri);
+        return found;
       } catch {
-        cache3.set(artistUri, []);
-        return [];
+        failed.set(artistUri, Date.now());
+        return known?.genres ?? [];
       } finally {
         inflight3.delete(artistUri);
       }
@@ -1324,13 +1358,86 @@ self.onmessage = (event) => {
     inflight3.set(artistUri, request2);
     return request2;
   }
-  function styleFor(genres, tempo) {
-    const all = genres.join(" | ").toLowerCase();
-    for (const [style2, pattern] of MATCHES) if (pattern.test(all)) return style2;
-    if (tempo > 0 && tempo < 85) return "slowjam";
-    if (tempo >= 130 && tempo <= 165) return "trap";
-    if (tempo >= 118 && tempo < 130) return "dance";
-    return "rap";
+  var sounds = /* @__PURE__ */ new Map();
+  var SOUNDS_LIMIT = 64;
+  function unit(value) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : void 0;
+  }
+  async function trackSound(trackUri) {
+    if (sounds.has(trackUri)) return sounds.get(trackUri) ?? null;
+    const id = /^spotify:track:([A-Za-z0-9]+)$/.exec(trackUri)?.[1];
+    const cosmos = Spicetify.CosmosAsync;
+    if (!id || !cosmos) return null;
+    let sound = null;
+    try {
+      const body = await cosmos.get(
+        `https://spclient.wg.spotify.com/audio-attributes/v1/audio-features/${id}?format=json`
+      );
+      if (body && typeof body === "object") {
+        const read = {
+          speechiness: unit(body.speechiness),
+          energy: unit(body.energy),
+          acousticness: unit(body.acousticness),
+          instrumentalness: unit(body.instrumentalness),
+          danceability: unit(body.danceability)
+        };
+        if (Object.values(read).some((value) => value !== void 0)) sound = read;
+      }
+    } catch {
+    }
+    if (sounds.size >= SOUNDS_LIMIT) {
+      const oldest = sounds.keys().next().value;
+      if (oldest !== void 0) sounds.delete(oldest);
+    }
+    sounds.set(trackUri, sound);
+    return sound;
+  }
+  function styleBySound(sound, tempo) {
+    if (!sound) return null;
+    const { speechiness: speech, energy, acousticness: acoustic, instrumentalness: instrumental, danceability: dance } = sound;
+    if (speech === void 0 && energy === void 0 && dance === void 0) return null;
+    if (speech !== void 0 && speech >= 0.15) return tempo >= 130 && tempo <= 165 ? "trap" : "rap";
+    if (instrumental !== void 0 && instrumental >= 0.5 && dance !== void 0 && dance >= 0.6) return "dance";
+    if (energy !== void 0 && energy < 0.45 && (tempo > 0 && tempo < 100 || (acoustic ?? 0) >= 0.5)) return "slowjam";
+    if (energy !== void 0 && energy >= 0.7 && dance !== void 0 && dance < 0.5) return "band";
+    if (dance !== void 0 && dance >= 0.7 && (energy ?? 0) >= 0.6) return "dance";
+    return "pop";
+  }
+  var PICKS_KEY = "slab:style-picks:v1";
+  var picks = null;
+  function pickStore() {
+    if (picks) return picks;
+    picks = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem(PICKS_KEY) ?? "{}");
+      for (const [uri2, style2] of Object.entries(parsed ?? {})) {
+        if (STYLES.includes(style2)) picks[uri2] = style2;
+      }
+    } catch {
+    }
+    return picks;
+  }
+  function pickedStyle(artistUri) {
+    return pickStore()[artistUri] ?? null;
+  }
+  function pickStyle(artistUri, style2) {
+    const store = pickStore();
+    if (style2) store[artistUri] = style2;
+    else delete store[artistUri];
+    try {
+      localStorage.setItem(PICKS_KEY, JSON.stringify(store));
+    } catch {
+    }
+  }
+  function styleFor(genres2, tempo, sound = null) {
+    const all = genres2.join(" | ").toLowerCase();
+    for (const [style2, pattern] of MATCHES) if (pattern.test(all)) return { style: style2, by: "genres" };
+    const heard = styleBySound(sound, tempo);
+    if (heard) return { style: heard, by: "sound" };
+    if (tempo > 0 && tempo < 85) return { style: "slowjam", by: "tempo" };
+    if (tempo >= 130 && tempo <= 165) return { style: "trap", by: "tempo" };
+    if (tempo >= 118 && tempo < 130) return { style: "dance", by: "tempo" };
+    return { style: "rap", by: "tempo" };
   }
 
   // src/core/holds.ts
@@ -1516,16 +1623,21 @@ self.onmessage = (event) => {
     dance: { phrase: 8, chop: 0.4, chopBars: [[1, 0.3], [2, 0.4], [4, 0.3]], line: 0.25, loop: 0.5, spin: 0.4, echo: 0.4, screw: 0.3, trunk: 0.5 },
     pop: { phrase: 8, chop: 0.5, chopBars: [[1, 0.45], [2, 0.45], [4, 0.1]], line: 0.5, loop: 0.3, spin: 0.2, echo: 0.4, screw: 0.4, trunk: 0.3 }
   };
-  var REST_BARS = 2;
+  var REST_BARS = [3, 2, 1, 1];
   var YIELD_BARS = 8;
   var MOVED_BARS = 5;
   var OWN_JUMP_MS = 1500;
+  var HANDS = ["light", "steady", "heavy", "hard"];
+  var HAND_WEIGHT = [0.55, 1, 1.45, 1.9];
+  var HAND_PHRASE = [2, 1, 1, 0.5];
   var running = false;
   var unsub = null;
   var listener3 = null;
   var uri = null;
   var style = "rap";
+  var detected = "rap";
   var styleReady = false;
+  var hand = 1;
   var lines = null;
   var seed = 1;
   var lastBar = null;
@@ -1544,6 +1656,17 @@ self.onmessage = (event) => {
   }
   function djStyleName() {
     return running && styleReady ? STYLE_NAMES[style] : null;
+  }
+  function setDjHand(level) {
+    hand = Math.max(0, Math.min(HANDS.length - 1, Math.round(level) - 1));
+  }
+  function nextDjStyle() {
+    if (!running || !styleReady) return null;
+    const next = STYLES[(STYLES.indexOf(style) + 1) % STYLES.length];
+    const artist = currentArtist();
+    if (artist) pickStyle(artist.uri, next === detected ? null : next);
+    style = next;
+    return next;
   }
   function say(label) {
     listener3?.(label);
@@ -1584,11 +1707,25 @@ self.onmessage = (event) => {
     for (let i = 0; i < text.length; i++) h2 = Math.imul(h2 ^ text.charCodeAt(i), 16777619);
     return h2 >>> 0;
   }
-  async function trackStyle() {
-    const grid = gridFor() ?? await loadGrid();
+  async function readTrack(track) {
     const artist = currentArtist();
-    const genres = artist ? await artistGenres(artist.uri) : [];
-    return styleFor(genres, grid?.tempo ?? 0);
+    const [grid, genres2, sound] = await Promise.all([
+      gridFor() ?? loadGrid(),
+      artist ? artistGenres(artist.uri) : Promise.resolve([]),
+      track ? trackSound(track) : Promise.resolve(null)
+    ]);
+    return styleFor(genres2, grid?.tempo ?? 0, sound);
+  }
+  async function trackStyle() {
+    const artist = currentArtist();
+    const picked = artist ? pickedStyle(artist.uri) : null;
+    if (picked) return picked;
+    let track = null;
+    try {
+      track = Spicetify.Player.data?.item?.uri ?? null;
+    } catch {
+    }
+    return (await readTrack(track)).style;
   }
   async function prepare(track) {
     uri = track;
@@ -1603,9 +1740,11 @@ self.onmessage = (event) => {
     lines = null;
     seed = hash(track ?? "");
     if (!track) return;
-    const [found, words] = await Promise.all([trackStyle(), loadLines(track)]);
+    const [reading, words] = await Promise.all([readTrack(track), loadLines(track)]);
     if (uri !== track) return;
-    style = found;
+    detected = reading.style;
+    const artist = currentArtist();
+    style = (artist ? pickedStyle(artist.uri) : null) ?? reading.style;
     styleReady = true;
     lines = words;
   }
@@ -1713,7 +1852,7 @@ self.onmessage = (event) => {
     const end = start + length;
     const beat = beatLengthMs(grid, Math.max(0, beatIndexAt(grid, heard)));
     const learnt = bar % PHRASE;
-    const weigh = (move, chance) => Math.min(0.95, chance * lean(style, move, learnt));
+    const weigh = (move, chance) => Math.min(0.95, chance * HAND_WEIGHT[hand] * lean(style, move, learnt));
     const sections = grid.sections;
     const here = sectionIndex(sections, start + length / 2);
     const next = here + 1 < sections.length ? sections[here + 1] : null;
@@ -1726,7 +1865,8 @@ self.onmessage = (event) => {
     const breakdown = here >= 0 && sections.length >= 3 && sections[here].loudness <= median - 4;
     let jumped = false;
     const resting = bar < restUntil;
-    if (bar - lastJumpBar >= 2 && bar >= plan.phrase && bar % plan.phrase === 0) {
+    const phrase = Math.max(2, Math.round(plan.phrase * HAND_PHRASE[hand]));
+    if (bar - lastJumpBar >= 2 && bar >= phrase && bar % phrase === 0) {
       const bars = pick(plan.chopBars, roll());
       const move = bars === 1 ? "chop1" : bars === 2 ? "chop2" : "chop4";
       if (roll() < weigh(move, plan.chop) && bar >= bars) {
@@ -1766,13 +1906,13 @@ self.onmessage = (event) => {
       }
     }
     if (lastOfSection && roll() < weigh("echo", plan.echo)) hold("echo", end - beat, end, "DJ: echo thrown", beat);
-    const screwChance = hook ? plan.screw : sections.length < 3 && bar % plan.phrase === 1 ? plan.screw * 0.4 : 0;
+    const screwChance = hook ? plan.screw : sections.length < 3 && bar % phrase === 1 ? plan.screw * 0.4 : 0;
     if (screwChance > 0 && roll() < weigh("screw", screwChance)) hold("screw", start, end - beat / 4, "DJ: Screw on the hook", beat);
     if (firstOfSection && breakdown && roll() < weigh("trunk", plan.trunk)) {
       hold("trunk", start, start + length * 2 - beat / 4, "DJ: trunk shut", beat);
     }
     if (jumped) {
-      restUntil = bar + REST_BARS + 1;
+      restUntil = bar + REST_BARS[hand] + 1;
       lastJumpBar = bar;
     }
   }
@@ -2009,13 +2149,13 @@ self.onmessage = (event) => {
       });
       pen += glyph.a * scale + tracking;
     }
-    return units.filter((unit) => unit.glyphs.length > 0);
+    return units.filter((unit2) => unit2.glyphs.length > 0);
   }
   function inkBounds(units) {
     let left = Infinity;
     let right = -Infinity;
-    for (const unit of units) {
-      for (const glyph of unit.glyphs) {
+    for (const unit2 of units) {
+      for (const glyph of unit2.glyphs) {
         glyph.lit.match(NUMBER)?.forEach((token, index) => {
           if (index % 2) return;
           const value = Number(token);
@@ -2026,11 +2166,11 @@ self.onmessage = (event) => {
     }
     return [left, right];
   }
-  function chooseSupports(unit) {
-    const holders = unit.glyphs.filter((glyph) => glyph.supports.length > 0);
+  function chooseSupports(unit2) {
+    const holders = unit2.glyphs.filter((glyph) => glyph.supports.length > 0);
     if (holders.length === 0) return [];
     const picked = /* @__PURE__ */ new Set([holders[0], holders[holders.length - 1]]);
-    if (unit.glyphs.length >= 6 && holders.length >= 3) picked.add(holders[Math.floor(holders.length / 2)]);
+    if (unit2.glyphs.length >= 6 && holders.length >= 3) picked.add(holders[Math.floor(holders.length / 2)]);
     return [...picked].map((glyph) => glyph.supports[0]);
   }
   function thread(units, baseline2, drop) {
@@ -2039,16 +2179,16 @@ self.onmessage = (event) => {
     let boots = "";
     let supports = "";
     const rail = baseline2 + drop;
-    for (const unit of units) {
-      if (unit.floating) {
-        for (const glyph of unit.glyphs) {
+    for (const unit2 of units) {
+      if (unit2.floating) {
+        for (const glyph of unit2.glyphs) {
           lit += glyph.lit;
           dark += glyph.dark;
         }
         continue;
       }
       let previous = null;
-      for (const glyph of unit.glyphs) {
+      for (const glyph of unit2.glyphs) {
         if (previous) {
           dark += `M${fmt2(previous[0])} ${fmt2(previous[1])}V${fmt2(rail)}H${fmt2(glyph.entry[0])}V${fmt2(glyph.entry[1])}`;
         }
@@ -2056,14 +2196,14 @@ self.onmessage = (event) => {
         dark += glyph.dark;
         previous = glyph.exit;
       }
-      const start = unit.glyphs[0].entry;
+      const start = unit2.glyphs[0].entry;
       const end = previous;
       const shared = Math.abs(end[0] - start[0]) < SHARED_BOOT;
       const bootAt = shared ? [(start[0] + end[0]) / 2] : [start[0], end[0]];
       dark += `M${fmt2(start[0])} ${fmt2(start[1])}V${fmt2(rail)}M${fmt2(end[0])} ${fmt2(end[1])}V${fmt2(rail)}`;
       if (shared) dark += `M${fmt2(start[0])} ${fmt2(rail)}H${fmt2(end[0])}`;
       for (const x of bootAt) boots += `M${fmt2(x)} ${fmt2(rail)}v${BOOT_LENGTH}`;
-      for (const [x, y] of chooseSupports(unit)) supports += `M${fmt2(x - CLIP)} ${fmt2(y)}H${fmt2(x + CLIP)}`;
+      for (const [x, y] of chooseSupports(unit2)) supports += `M${fmt2(x - CLIP)} ${fmt2(y)}H${fmt2(x + CLIP)}`;
     }
     return { lit, dark, boots, supports };
   }
@@ -2931,6 +3071,9 @@ ${NEON_CSS}
 .slab-panel:not([data-bank="screw"]):not([data-bank="tape"]) :is(.slab-pads[data-bank="screw"], .slab-pads[data-bank="tape"], .slab-auto[data-for="screw"], .slab-auto[data-for="tape"]),
 .slab-panel[data-bank="screw"] :is(.slab-pads[data-bank="chop"], .slab-pads[data-bank="tape"], .slab-auto[data-for="chop"], .slab-auto[data-for="tape"]),
 .slab-panel[data-bank="tape"] :is(.slab-pads[data-bank="chop"], .slab-pads[data-bank="screw"], .slab-auto[data-for="chop"], .slab-auto[data-for="screw"]) { display: none; }
+/* In the Chop bank, DJ mode's row stands in for Auto chop's while it plays. */
+.slab-panel[data-dj="on"] .slab-auto[data-for="chop"]:not(.slab-dj-row),
+.slab-panel:not([data-dj="on"]) .slab-dj-row { display: none; }
 /* The tape is set and left, not played from the keys: no number in the corner. */
 .slab-key:empty { display: none; }
 .slab-pad b { font-weight: 700; font-size: 16px; line-height: 18px; }
@@ -3280,6 +3423,15 @@ ${NEON_CSS}
   var TAGLINE = "Slow, loud and bangin\u2019";
   var DJ_MOOD = "screwed";
   var DJ_PITCH = -700;
+  var PLAYED_AS = {
+    houston: "Houston",
+    trap: "trap",
+    rap: "rap",
+    slowjam: "a slow jam",
+    band: "a band record",
+    dance: "a dance record",
+    pop: "pop"
+  };
   var CHIP_TITLE = "SLAB, Third Coast playback moods";
   var PX_PER_CENT = 12 / 100;
   var RAIL_WIDTH = WHEEL_SIZE + PX_PER_CENT * PITCH_LIMIT * 2;
@@ -3720,6 +3872,21 @@ ${NEON_CSS}
         title: "DJ mode: SLAB works the record itself, on full screw. A Chop or Screw pad of yours takes it back for eight bars.",
         onclick: () => this.toggleDj()
       }, h("span", {}, "DJ"));
+      this.djStyleNameEl = h("span", { class: "slab-auto-name" });
+      this.djHandEl = h("span", { class: "slab-every" });
+      this.djStyleButton = h("button", {
+        class: "slab-press slab-auto-press slab-dj-style",
+        type: "button",
+        onclick: () => this.cycleDjStyle()
+      }, h("span", { class: "slab-auto-words" }, this.djStyleNameEl, this.djHandEl));
+      this.handDown = h("button", { class: "slab-press slab-step", type: "button", "aria-label": "DJ plays less" }, h("span", {}, "\u2212"));
+      this.handUp = h("button", { class: "slab-press slab-step", type: "button", "aria-label": "DJ plays more" }, h("span", {}, "+"));
+      this.press(this.handDown, () => {
+        if (!isOff(this.handDown)) this.setDjHandLevel(this.state.djHand - 1);
+      });
+      this.press(this.handUp, () => {
+        if (!isOff(this.handUp)) this.setDjHandLevel(this.state.djHand + 1);
+      });
       this.panel = this.buildPanel();
       onChop((event) => {
         const automatic = event.kind === "auto" || djRunning() && Date.now() - this.lastManualAt > 1500;
@@ -3758,6 +3925,7 @@ ${NEON_CSS}
       this.renderTape();
       this.renderKeep();
       onDj((label) => this.flashActivity(label, false));
+      setDjHand(this.state.djHand);
       if (this.state.dj) startDj();
       this.renderDj();
       this.renderPitch();
@@ -4185,7 +4353,8 @@ ${NEON_CSS}
         this.bankButton("screw", "Screw"),
         this.bankButton("tape", "Tape")
       );
-      const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, depth, tapeControl);
+      const djRow = h("div", { class: "slab-auto slab-dj-row", "data-for": "chop" }, this.handDown, this.djStyleButton, this.handUp);
+      const bankRow = h("div", { class: "slab-bankrow" }, banks, auto, djRow, depth, tapeControl);
       this.sillEl = h(
         "div",
         { class: "slab-sill" },
@@ -4379,11 +4548,39 @@ ${NEON_CSS}
       this.renderAutoState();
       this.flashActivity("DJ on: full screw");
     }
-    /** The switch, and in the tagline's place, what the DJ makes of the record. */
+    /** The next kind of record for the DJ to play this as; kept for the artist. */
+    cycleDjStyle() {
+      if (isOff(this.djStyleButton)) return;
+      const next = nextDjStyle();
+      if (!next) return;
+      this.renderDj();
+      const artist = currentArtist();
+      this.flashActivity(artist?.name ? `Playing ${artist.name} as ${PLAYED_AS[next]} from now on` : `Playing it as ${PLAYED_AS[next]}`);
+    }
+    /** How hard the DJ plays, 1 to 4. */
+    setDjHandLevel(level) {
+      const next = Math.max(1, Math.min(HANDS.length, Math.round(level)));
+      if (next === this.state.djHand) return;
+      this.state.djHand = next;
+      saveState(this.state);
+      setDjHand(next);
+      this.renderDj();
+      this.announceSettled(() => `Plays ${HANDS[next - 1]}`);
+    }
+    /** The switch, in the tagline's place what the DJ makes of the record, and the DJ's row. */
     renderDj() {
       setAttr(this.djButton, "aria-checked", this.state.dj ? "true" : "false");
+      setData(this.panel, "dj", this.state.dj ? "on" : "off");
       const style2 = djStyleName();
       setText(this.tagEl, this.state.dj ? style2 ? `DJ on: full screw, ${style2}` : "DJ on: full screw" : TAGLINE);
+      const name = style2 ? style2[0].toUpperCase() + style2.slice(1) : "Reading it";
+      const hand2 = `plays ${HANDS[this.state.djHand - 1]}`;
+      setText(this.djStyleNameEl, name);
+      setText(this.djHandEl, hand2);
+      setAttr(this.djStyleButton, "aria-label", style2 ? `${name}, ${hand2}: press to play it as another kind of record` : `${name}, ${hand2}`);
+      setOff(this.djStyleButton, !style2);
+      setOff(this.handDown, this.state.djHand <= 1);
+      setOff(this.handUp, this.state.djHand >= HANDS.length);
     }
     /** What the helper plays: the mood, through the tape, at the slider's pitch. */
     sound(mood = moodById(this.state.moodId)) {
@@ -5642,7 +5839,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.9.0";
+  var VERSION = "0.10.0";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {
