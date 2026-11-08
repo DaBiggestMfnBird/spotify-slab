@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import SLABCore
 
 /// Keeps one live tap attached to the target process for as long as the helper runs.
 ///
@@ -154,11 +155,13 @@ final class Supervisor {
     }
 
     private func attach(pid: pid_t, processObject: AudioObjectID) {
-        let ring = StereoRing(capacity: 48_000 * 2)
+        // The last 45 s of what Spotify played: what chops jump back into.
+        let ring = Deck(seconds: 45)
         let capture = TapCapture(ring: ring)
         do {
             try capture.start(processObjectID: processObject, label: processName)
             guard let format = capture.format else { throw TapError.noStreamFormat }
+            ring.sampleRate = format.sampleRate
 
             let graph = DSPGraph(ring: ring, sampleRate: format.sampleRate)
             graph.prepare(currentParams)

@@ -8,6 +8,7 @@
  */
 
 import { subscribe } from "./clock";
+import { canJump, dspCancelJump, dspJump, dspStatus, seekAheadMs } from "./dsp";
 import { barIndexAt, barLengthMs, barStartMs, gridFor, loadGrid } from "./grid";
 
 export type ChopKind = "chop" | "loop" | "stop" | "auto";
@@ -63,6 +64,181 @@ function seek(ms: number): void {
     }
 }
 
+/*
+ * The needle: what is heard, and how much song has played unbroken behind it.
+ *
+ * With the helper, a chop jumps inside the helper's memory of what Spotify played, so
+ * SLAB tells it how far back that memory runs straight through the song: never across a
+ * new track, a pause (the tap may have caught silence) or the user dragging the record.
+ * And right after such a jump Spotify itself was sent a little past the target, so for a
+ * while its position runs ahead of what is heard; the needle is reckoned from the jump.
+ */
+
+/** A position jump bigger than this, not of SLAB's making, is the user moving the record. */
+const MOVED_MS = 600;
+/** What the helper hears trails Spotify's position by up to about this. */
+const HEARD_MARGIN_MS = 350;
+/** How long a jump's own reckoning of the needle is trusted. */
+const RECKON_MS = 8_000;
+
+/** Song position the unbroken run began at; null until SLAB has seen it play. */
+let runFrom: number | null = null;
+let lastAt = 0;
+let lastTime = 0;
+let lastPlaying = false;
+let lastUri: string | null = null;
+/** The last seek SLAB sent Spotify: where, when, and whether the run carries on through it. */
+let sentTo = 0;
+let sentAt = 0;
+let sentKeepsRun = false;
+/** What was heard at a moment, once a helper jump has put it there; the next one waits its turn. */
+let reckon: { at: number; time: number } | null = null;
+let nextReckon: { at: number; time: number } | null = null;
+/** The helper's give-up count when the reckoning was set: one since means the sound went live. */
+let reckonWentLive = 0;
+/** The Spotify seek that follows a helper jump still to fire, so a newer cut can call it off. */
+let pendingSend: number | null = null;
+/** Until when a helper jump may still be playing from memory, waiting on Spotify. */
+let helperCutUntil = 0;
+
+function forgetReckoning(): void {
+    reckon = null;
+    nextReckon = null;
+}
+
+/** A new track or a pause: whatever the helper is doing with an earlier cut no longer fits. */
+function dropHelperCut(): void {
+    if (pendingSend !== null) window.clearTimeout(pendingSend);
+    pendingSend = null;
+    if (Date.now() < helperCutUntil) void dspCancelJump();
+    helperCutUntil = 0;
+}
+
+/**
+ * Looks at the player: a new track, a resume or the user moving the record starts the run
+ * again from there. Called on every panel tick, open or not.
+ */
+export function watchNeedle(): void {
+    let playing = false;
+    let at = 0;
+    let uri: string | null = null;
+    try {
+        playing = Spicetify.Player.isPlaying();
+        at = Spicetify.Player.getProgress();
+        uri = Spicetify.Player.data?.item?.uri ?? null;
+    } catch {
+        return;
+    }
+    const now = Date.now();
+    if (uri !== lastUri) {
+        runFrom = playing ? at : null;
+        forgetReckoning();
+        if (lastUri !== null) dropHelperCut();
+    } else if (!playing) {
+        forgetReckoning();
+        // Paused while the helper plays a chop from memory: stop now, not when it tires of waiting.
+        if (lastPlaying) dropHelperCut();
+    } else if (!lastPlaying) {
+        runFrom = at;
+        forgetReckoning();
+    } else if (Math.abs(at - (lastAt + (now - lastTime))) > MOVED_MS) {
+        const ours = now - sentAt < 2_000 && Math.abs(at - (sentTo + (now - sentAt))) < MOVED_MS;
+        if (!ours) {
+            runFrom = at;
+            forgetReckoning();
+        } else if (!sentKeepsRun) {
+            runFrom = sentTo;
+        }
+    }
+    if (runFrom === null && playing) runFrom = at;
+    lastAt = at;
+    lastTime = now;
+    lastPlaying = playing;
+    lastUri = uri;
+}
+
+/**
+ * What is heard now, as a song position. Reckoned from the last helper jump while that holds,
+ * otherwise Spotify's position less what the helper's buffer holds back.
+ */
+export function needlePosition(): number {
+    const now = Date.now();
+    if (nextReckon && now >= nextReckon.time) {
+        reckon = nextReckon;
+        nextReckon = null;
+    }
+    // The helper gave up on Spotify and went live: the sound is where Spotify is, not where the jump put it.
+    if ((dspStatus().wentLive ?? 0) > reckonWentLive) forgetReckoning();
+    if (reckon && now - reckon.time < RECKON_MS) return reckon.at + (now - reckon.time);
+    const at = Spicetify.Player.getProgress();
+    return canJump() ? at - (dspStatus().latencyMs ?? 0) : at;
+}
+
+/** How much song has played unbroken behind what is heard: as far back as the helper may jump. */
+function unbrokenMs(heard: number): number {
+    if (runFrom === null) return 0;
+    return Math.max(0, heard - runFrom - HEARD_MARGIN_MS);
+}
+
+function sent(to: number, keepsRun: boolean): void {
+    sentTo = to;
+    sentAt = Date.now();
+    sentKeepsRun = keepsRun;
+    if (!keepsRun) {
+        runFrom = to;
+        forgetReckoning();
+    }
+}
+
+/**
+ * Puts the needle on `target`, a song position, from `from`, what is heard when it fires
+ * `inMs` from now. With the helper the sound jumps inside it there and then, and Spotify is
+ * sent a little past the target to catch up out of earshot. Without it, Spotify is seeked.
+ * True when the helper took it.
+ */
+async function cut(target: number, from: number, inMs = 0): Promise<boolean> {
+    if (canJump()) {
+        const ahead = seekAheadMs();
+        const asked = Date.now();
+        const jumped = await dspJump({
+            backMs: Math.round(from - target),
+            inMs: Math.round(inMs),
+            seekAheadMs: ahead,
+            availableMs: Math.round(unbrokenMs(from)),
+        });
+        if (jumped) {
+            // The helper counted `inMs` from when the order reached it, about halfway through the
+            // round trip; reckoning from the answer would make every loop pass that much long.
+            const fires = asked + (Date.now() - asked) / 2 + inMs;
+            const send = (): void => {
+                pendingSend = null;
+                // A timer that fired late sends Spotify on by as much, so it still comes back just ahead.
+                const to = target + ahead + Math.max(0, Date.now() - fires);
+                sent(to, true);
+                seek(to);
+            };
+            // This jump replaced any the helper was still holding: so does its seek.
+            if (pendingSend !== null) window.clearTimeout(pendingSend);
+            pendingSend = null;
+            helperCutUntil = fires + 3_000;
+            reckonWentLive = dspStatus().wentLive ?? 0;
+            nextReckon = { at: target, time: fires };
+            if (inMs > 0) pendingSend = window.setTimeout(send, inMs);
+            else send();
+            return true;
+        }
+    }
+    // A helper jump still to fire would land under this seek: call it off with its own.
+    if (pendingSend !== null) dropHelperCut();
+    const plain = (): void => {
+        sent(target, false);
+        seek(target);
+    };
+    if (inMs > 0) window.setTimeout(plain, inMs);
+    else plain();
+    return false;
+}
+
 /**
  * Jump back exactly `bars` bars, to the same place in the bar, so every beat
  * still lands where it should. Resolves false, and does nothing, when there
@@ -75,14 +251,14 @@ export async function chopBars(bars: number, auto = false): Promise<boolean> {
         const grid = await ensureGrid();
         if (!grid) return false;
 
-        const now = Spicetify.Player.getProgress();
+        const now = needlePosition();
         const index = barIndexAt(grid, now);
         const span = Math.max(1, Math.round(bars));
         if (index < span) return false;
 
         const back = index - span;
         const phase = (now - barStartMs(grid, index)) / barLengthMs(grid, index);
-        seek(barStartMs(grid, back) + phase * barLengthMs(grid, back));
+        await cut(barStartMs(grid, back) + phase * barLengthMs(grid, back), now);
         if (auto) return true;
         padJumpAt = Date.now();
         manualBar = index;
@@ -111,6 +287,8 @@ export function loopRemaining(): number {
 
 /** How early the jump fires, so the seek lands on the bar line rather than after it. */
 const LOOP_LEAD_MS = 15;
+/** With the helper, how early the jump is sent: it waits there and lands on the line to the sample. */
+const LOOP_SEND_MS = 200;
 
 /**
  * Repeat the current bar `times` more times, then let the record run.
@@ -126,7 +304,7 @@ export async function loopBars(times = 4): Promise<boolean> {
     if (!grid) return false;
 
     // Before the first downbeat there is no bar to repeat yet.
-    const index = barIndexAt(grid, Spicetify.Player.getProgress());
+    const index = barIndexAt(grid, needlePosition());
     if (index < 0) return false;
     cancelLoop();
 
@@ -142,12 +320,12 @@ export async function loopBars(times = 4): Promise<boolean> {
     let armed = true;
     loopLeft = total;
 
-    loopUnsub = subscribe(() => {
+    const tick = (): void => {
         if (!Spicetify.Player.isPlaying()) {
             cancelLoop();
             return;
         }
-        const at = Spicetify.Player.getProgress();
+        const at = needlePosition();
         if (at < start - 250 || at > end + length) {
             cancelLoop();
             return;
@@ -156,22 +334,35 @@ export async function loopBars(times = 4): Promise<boolean> {
             if (at < end - length / 2) armed = true;
             return;
         }
-        if (at < end - LOOP_LEAD_MS) return;
+        const helper = canJump();
+        if (at < end - (helper ? LOOP_SEND_MS : LOOP_LEAD_MS)) return;
         // The last pass has played out to the bar line: the record runs on.
         if (loopLeft <= 0) {
             cancelLoop();
             emit("loop", "Loop done");
             return;
         }
+        armed = false;
+        loopLeft -= 1;
+        manualBar = index;
 
         // A late tick has already run past the line; carry the overshoot so the loop stays in time.
         // A stalled clock can be late by most of a bar: carry at most a beat's worth, so the jump
         // lands early enough in the bar for the loop to arm again rather than quietly die.
-        seek(start + Math.min(Math.max(0, at - end), length / 4));
-        armed = false;
-        loopLeft -= 1;
-        manualBar = index;
-    });
+        const late = Math.max(0, at - end);
+        const to = start + Math.min(late, length / 4);
+        if (helper) {
+            // Ahead of the line, the helper is told when: the jump lands on it to the sample.
+            void cut(to, late > 0 ? at : end, late > 0 ? 0 : end - at);
+            return;
+        }
+        sent(to, false);
+        seek(to);
+    };
+    loopUnsub = subscribe(tick);
+    // Pressed just before the line: the clock's first tick can take a moment to come (the
+    // first time, its thread has to start), so the line is looked at right away too.
+    tick();
 
     emit("loop", `Looping this bar ${total} times`);
     return true;
@@ -293,7 +484,7 @@ function startAuto(): void {
         const grid = gridFor();
         if (!grid) return;
 
-        const index = barIndexAt(grid, Spicetify.Player.getProgress());
+        const index = barIndexAt(grid, needlePosition());
         if (index < 0) return;
         const last = autoLastIndex;
         autoLastIndex = index;
@@ -350,9 +541,13 @@ function stopAuto(): void {
 
 export function resetForTrack(): void {
     cancelLoop();
-    // A cut on the last track says nothing about this one's bars.
+    // A cut on the last track says nothing about this one's bars, and none of the last
+    // track is behind this one's needle.
     manualBar = -2;
     padJumpAt = 0;
+    forgetReckoning();
+    dropHelperCut();
+    lastUri = null;
     autoBaseline = true;
     autoLastIndex = null;
     autoMaxBar = -1;

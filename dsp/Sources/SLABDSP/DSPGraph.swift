@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import SLABCore
 
 struct DSPParams: Codable, Equatable {
     /// Pitch shift in cents. 0 = untouched. -1200 = one octave down.
@@ -29,7 +30,13 @@ final class DSPGraph {
     private let reverb = AVAudioUnitReverb()
     private let delay = AVAudioUnitDelay()
     private let eq = AVAudioUnitEQ(numberOfBands: 1)
-    private let ring: StereoRing
+    private let ring: Deck
+    /// Lines the output back up with Spotify after a chop, and closes any lag that left.
+    private let steering = DispatchQueue(label: "com.slab.dsp.deck", qos: .userInitiated)
+    private var steerTimer: DispatchSourceTimer?
+    private var catchUpRate = false
+    /// A tape stop owns the time-stretcher's rate until this moment.
+    private var tapeUntil = Date.distantPast
     private let sampleRate: Double
     private(set) var isRunning = false
     private let paramsLock = NSLock()
@@ -39,7 +46,7 @@ final class DSPGraph {
     /// Peak of the last render block, for the panel's level readout.
     nonisolated(unsafe) static var renderPeak: Float = 0
 
-    init(ring: StereoRing, sampleRate: Double) {
+    init(ring: Deck, sampleRate: Double) {
         self.ring = ring
         self.sampleRate = sampleRate
 
@@ -106,12 +113,43 @@ final class DSPGraph {
         // Capture runs while the engine is being prepared. Drop that backlog so
         // the first thing heard is current, not a second stale.
         ring.trim(keep: 1_024)
+        startSteering()
     }
 
     func stop() {
         guard isRunning else { return }
+        steerTimer?.cancel()
+        steerTimer = nil
         engine.stop()
         isRunning = false
+    }
+
+    /// The deck: chops jump back in it, and the panel reads its state.
+    var deck: Deck { ring }
+
+    /// Every 25 ms: while the deck plays from memory, look for Spotify's re-seeked audio; once
+    /// it is back but further behind live than usual, run the time-stretcher 4% fast until the
+    /// gap is closed (pitch unchanged), unless a tape stop has the rate.
+    private func startSteering() {
+        let timer = DispatchSource.makeTimerSource(queue: steering)
+        timer.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25), leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            if self.ring.isDetached {
+                if case .aligned(let lag) = self.ring.realign() {
+                    slabLog("chop realigned, \(Int(Double(lag) / self.sampleRate * 1000)) ms behind live")
+                }
+            }
+            let want = self.ring.catchingUp
+            guard want != self.catchUpRate else { return }
+            self.catchUpRate = want
+            DispatchQueue.main.async { [weak self] in
+                guard let self, Date() >= self.tapeUntil else { return }
+                self.timePitch.rate = want ? 1.04 : 1.0
+            }
+        }
+        timer.resume()
+        steerTimer = timer
     }
 
     var current: DSPParams {
@@ -182,6 +220,8 @@ final class DSPGraph {
         let steps = 36
         let stepMs = down / steps
         let floor: Float = 0.03125
+        tapeUntil = Date().addingTimeInterval(Double(down + hold + up) / 1000 + 0.05)
+        catchUpRate = false
 
         DispatchQueue.main.async { [weak self] in
             guard let self, self.tapeToken == token else { return }
@@ -216,6 +256,6 @@ final class DSPGraph {
     var droppedFrames: Int { ring.droppedFrames }
 
     var latencyMs: Double {
-        Double(ring.framesAvailable) / sampleRate * 1000
+        Double(ring.lagFrames) / sampleRate * 1000
     }
 }

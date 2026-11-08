@@ -39,6 +39,12 @@ export interface DspStatus {
     sampleRate?: number;
     latencyMs?: number;
     params?: Partial<DspParams>;
+    /** The helper can jump inside its own memory of the record (0.4.0 on): chops land at once. */
+    jump?: boolean;
+    /** What Spotify's seeks have lately cost, as the helper measured them. */
+    seekGapMs?: number;
+    /** Jumps the helper gave up on (Spotify never came back) and went live from, since it started. */
+    wentLive?: number;
 }
 
 let status: DspStatus = { checked: false, linked: false };
@@ -71,7 +77,8 @@ function publish(next: DspStatus): void {
         next.linked !== status.linked ||
         next.version !== status.version ||
         next.tapping !== status.tapping ||
-        next.audio !== status.audio;
+        next.audio !== status.audio ||
+        next.jump !== status.jump;
     status = next;
     if (changed) for (const listener of listeners) listener(status);
 }
@@ -117,6 +124,9 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
               sampleRate?: number;
               latencyMs?: number;
               params?: Partial<DspParams>;
+              features?: unknown;
+              seekGapMs?: number;
+              chops?: { wentLive?: number };
           }
         | null;
 
@@ -135,6 +145,9 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
             latencyMs: payload.latencyMs,
             // Params the helper accepted after this probe went out are newer than what it reported.
             params: paramsSeq === paramsAtStart ? payload.params : status.params,
+            jump: Array.isArray(payload.features) && payload.features.includes("jump"),
+            seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : undefined,
+            wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : undefined,
         });
     } else {
         misses += 1;
@@ -206,4 +219,72 @@ export async function dspTapeStop(): Promise<boolean> {
     return Boolean(payload);
 }
 
+/** Before the helper has measured one: about what a seek costs Spotify on a Mac. */
+const DEFAULT_SEEK_GAP_MS = 250;
+/**
+ * Spotify is aimed this far past what its seek should cost. Back a little early, the helper
+ * plays memory up to it and crosses over unheard; back late, it has to repeat a moment.
+ */
+const SEEK_MARGIN_MS = 40;
+
+/** A helper that can jump in its own memory, with Spotify's audio coming through it now. */
+export function canJump(): boolean {
+    return status.linked && status.tapping === true && status.audio === true && status.jump === true;
+}
+
+/** How far past a jump to send Spotify, so its audio comes back just ahead of what the helper plays. */
+export function seekAheadMs(): number {
+    const gap = status.seekGapMs ?? DEFAULT_SEEK_GAP_MS;
+    return Math.round(Math.max(60, Math.min(800, gap + SEEK_MARGIN_MS)));
+}
+
+export interface JumpOrder {
+    /** How far back from what is heard when it fires, in ms; negative jumps forward. */
+    backMs: number;
+    /** When it fires, from now. */
+    inMs?: number;
+    /** How far past the jump target SLAB is about to send Spotify. */
+    seekAheadMs: number;
+    /** How much song has played unbroken behind what is heard: the helper never jumps further back. */
+    availableMs: number;
+}
+
+let measureTimer: number | null = null;
+
+/**
+ * Asks the helper to jump. True when it took the order; false (no helper, an older one, or not
+ * that much record in its memory) means SLAB seeks Spotify the plain way.
+ */
+export async function dspJump(order: JumpOrder): Promise<boolean> {
+    if (!canJump()) return false;
+    const payload = (await request(
+        "/jump",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(order),
+        },
+        250,
+    )) as { ok?: boolean } | null;
+    const ok = payload?.ok === true;
+    if (ok) {
+        // What this seek cost, or that the helper gave up waiting for it (after 2 s), shows up in
+        // its status: look once both are known, and aim the next seek by it.
+        if (measureTimer !== null) window.clearTimeout(measureTimer);
+        measureTimer = window.setTimeout(() => {
+            measureTimer = null;
+            void probeDsp(true);
+        }, 2_600 + (order.inMs ?? 0));
+    }
+    return ok;
+}
+
+/**
+ * A new track or a pause: a jump still to come is called off, and one waiting on Spotify's
+ * audio, which is now never coming, goes back to live at once.
+ */
+export async function dspCancelJump(): Promise<void> {
+    if (!status.linked || !status.jump) return;
+    await request("/jump/cancel", { method: "POST" }, 250);
+}
 
