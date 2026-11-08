@@ -15,6 +15,24 @@ if [ ! -d "$APP" ]; then
     exit 1
 fi
 
+# Stop any running helper first. `open` on an app that is already running only
+# brings the old process forward, so it keeps serving the old version on the
+# control port.
+PATTERN="SLAB DSP.app/Contents/MacOS/SLABDSP"
+if pgrep -f "$PATTERN" >/dev/null; then
+    echo "SLAB DSP: stopping running helper ($(pgrep -f "$PATTERN" | tr '\n' ' '))"
+    pkill -TERM -f "$PATTERN" || true
+    for _ in $(seq 1 20); do
+        pgrep -f "$PATTERN" >/dev/null || break
+        sleep 0.25
+    done
+    if pgrep -f "$PATTERN" >/dev/null; then
+        echo "SLAB DSP: helper did not exit, forcing it"
+        pkill -KILL -f "$PATTERN" || true
+        sleep 0.5
+    fi
+fi
+
 mkdir -p "$HOME/Applications"
 rm -rf "$DEST"
 cp -R "$APP" "$DEST"
