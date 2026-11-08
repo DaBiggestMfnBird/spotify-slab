@@ -111,6 +111,20 @@ export function beatIndexAt(grid: Grid, ms: number): number {
     return indexAt(grid.beats, ms);
 }
 
+export function beatStartMs(grid: Grid, index: number): number {
+    const clamped = Math.max(0, Math.min(grid.beats.length - 1, index));
+    return grid.beats[clamped];
+}
+
+/** The last beat runs as long as the one before it. */
+export function beatLengthMs(grid: Grid, index: number): number {
+    const start = beatStartMs(grid, index);
+    const next = grid.beats[index + 1];
+    if (next !== undefined) return next - start;
+    const previous = grid.beats[index - 1];
+    return previous !== undefined ? start - previous : 500;
+}
+
 
 /** The last bar has no next one to measure to: it runs as long as the one before it, or to the end of the track. */
 export function barLengthMs(grid: Grid, index: number): number {

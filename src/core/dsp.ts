@@ -41,6 +41,10 @@ export interface DspStatus {
     params?: Partial<DspParams>;
     /** The helper can jump inside its own memory of the record (0.4.0 on): chops land at once. */
     jump?: boolean;
+    /** It can spin the record back into a chop (0.5.0 on). */
+    spin?: boolean;
+    /** It can hold a pad on top of the mood and ramp it (0.5.0 on). */
+    hold?: boolean;
     /** What Spotify's seeks have lately cost, as the helper measured them. */
     seekGapMs?: number;
     /** Jumps the helper gave up on (Spotify never came back) and went live from, since it started. */
@@ -78,7 +82,9 @@ function publish(next: DspStatus): void {
         next.version !== status.version ||
         next.tapping !== status.tapping ||
         next.audio !== status.audio ||
-        next.jump !== status.jump;
+        next.jump !== status.jump ||
+        next.spin !== status.spin ||
+        next.hold !== status.hold;
     status = next;
     if (changed) for (const listener of listeners) listener(status);
 }
@@ -146,6 +152,8 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
             // Params the helper accepted after this probe went out are newer than what it reported.
             params: paramsSeq === paramsAtStart ? payload.params : status.params,
             jump: Array.isArray(payload.features) && payload.features.includes("jump"),
+            spin: Array.isArray(payload.features) && payload.features.includes("spin"),
+            hold: Array.isArray(payload.features) && payload.features.includes("hold"),
             seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : undefined,
             wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : undefined,
         });
@@ -286,5 +294,72 @@ export async function dspJump(order: JumpOrder): Promise<boolean> {
 export async function dspCancelJump(): Promise<void> {
     if (!status.linked || !status.jump) return;
     await request("/jump/cancel", { method: "POST" }, 250);
+}
+
+/** A helper that can spin the record back into a chop. */
+export function canSpin(): boolean {
+    return canJump() && status.spin === true;
+}
+
+export interface SpinOrder {
+    /** How far back from where the spin begins it lands, in ms. */
+    backMs: number;
+    /** How long it spins: it lands this long from now. */
+    spinMs: number;
+    seekAheadMs: number;
+    availableMs: number;
+}
+
+/** Asks the helper for a backspin into a chop. True when it took it. */
+export async function dspSpin(order: SpinOrder): Promise<boolean> {
+    if (!canSpin()) return false;
+    const payload = (await request(
+        "/spin",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) },
+        250,
+    )) as { ok?: boolean } | null;
+    const ok = payload?.ok === true;
+    if (ok) {
+        if (measureTimer !== null) window.clearTimeout(measureTimer);
+        measureTimer = window.setTimeout(() => {
+            measureTimer = null;
+            void probeDsp(true);
+        }, 2_600 + order.spinMs);
+    }
+    return ok;
+}
+
+/** A helper that can hold a pad on top of the mood, with Spotify's audio coming through it now. */
+export function canHold(): boolean {
+    return status.linked && status.tapping === true && status.audio === true && status.hold === true;
+}
+
+/** What is held on top of the mood; what is left out is let go. */
+export interface HoldOverlay {
+    /** Added to the mood's pitch, in cents. */
+    pitchOffset?: number;
+    /** The low-pass can't open past this, in Hz. */
+    lowpassCap?: number;
+    /** Added to the output trim, in dB. */
+    gainBoost?: number;
+    echoMix?: number;
+    echoFeedback?: number;
+    /** Seconds. */
+    echoTime?: number;
+}
+
+let holdChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Sets what is held, ramped over `ms`. Sent in order, one after another, so a quick press and
+ * release can't land back to front and leave a pad held.
+ */
+export function dspHold(overlay: HoldOverlay, ms: number): Promise<boolean> {
+    const body = JSON.stringify({ ...overlay, ms: Math.round(ms) });
+    const sent = holdChain.then(() =>
+        request("/hold", { method: "POST", headers: { "Content-Type": "application/json" }, body }, 400),
+    );
+    holdChain = sent.catch(() => null);
+    return sent.then((payload) => (payload as { ok?: boolean } | null)?.ok === true);
 }
 

@@ -227,8 +227,8 @@ final class ControlServer {
         case .failed(let reason): payload["error"] = reason
         case .waitingForProcess: break
         }
-        // What this helper can do beyond 0.3.0: SLAB only sends /jump to a helper that says so.
-        payload["features"] = ["jump"]
+        // What this helper can do beyond 0.3.0: SLAB only sends a route to a helper that names it.
+        payload["features"] = ["jump", "spin", "hold"]
         if let graph {
             payload["latencyMs"] = (graph.latencyMs * 10).rounded() / 10
             payload["droppedFrames"] = graph.droppedFrames
@@ -318,6 +318,46 @@ final class ControlServer {
             // Spotify's audio stops waiting and goes back to live.
             guard let graph = supervisor.graph else { return (503, ["ok": false, "error": "not tapping"]) }
             graph.deck.cancelJump()
+            return (200, ["ok": true])
+
+        case ("POST", "/spin"):
+            // A backspin into a chop: the record spins back for spinMs, then lands backMs before
+            // where the spin began, and SLAB seeks Spotify behind it as for a jump.
+            guard let graph = supervisor.graph, let rate = supervisor.sampleRate else {
+                return (503, ["ok": false, "error": "not tapping"])
+            }
+            guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+                  let back = (object["backMs"] as? NSNumber)?.doubleValue,
+                  let turn = (object["spinMs"] as? NSNumber)?.doubleValue else {
+                return (400, ["ok": false, "error": "bad json"])
+            }
+            let frames = { (ms: Double) in Int((ms * rate / 1000).rounded()) }
+            let ahead = (object["seekAheadMs"] as? NSNumber)?.doubleValue ?? 0
+            let available = (object["availableMs"] as? NSNumber)?.doubleValue ?? back
+            do {
+                try graph.deck.scheduleSpin(
+                    backFrames: frames(back), spinFrames: frames(max(100, min(2_000, turn))),
+                    seekAheadFrames: frames(ahead), availableFrames: frames(available)
+                )
+                return (200, ["ok": true])
+            } catch {
+                return (409, ["ok": false, "error": "\(error)"])
+            }
+
+        case ("POST", "/hold"):
+            // A pad held on top of the mood, ramped over ms: what it doesn't name is let go.
+            // {} lets everything go. Refresh it within 10 s or it lets go by itself.
+            guard let graph = supervisor.graph else { return (503, ["ok": false, "error": "not tapping"]) }
+            let object = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
+            var hold = Hold.none
+            if let v = object["pitchOffset"] as? NSNumber { hold.pitchOffset = max(-2400, min(2400, v.floatValue)) }
+            if let v = object["lowpassCap"] as? NSNumber { hold.lowpassCap = max(200, min(20_000, v.floatValue)) }
+            if let v = object["gainBoost"] as? NSNumber { hold.gainBoost = max(-12, min(12, v.floatValue)) }
+            if let v = object["echoMix"] as? NSNumber { hold.echoMix = max(0, min(100, v.floatValue)) }
+            if let v = object["echoFeedback"] as? NSNumber { hold.echoFeedback = max(0, min(95, v.floatValue)) }
+            if let v = object["echoTime"] as? NSNumber { hold.echoTime = max(0.02, min(2, v.doubleValue)) }
+            let ms = (object["ms"] as? NSNumber)?.intValue ?? 120
+            graph.hold(hold, ms: max(0, min(5_000, ms)))
             return (200, ["ok": true])
 
         case ("POST", "/quit"):
