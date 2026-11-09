@@ -7,13 +7,19 @@ cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
 APP="build/SLAB DSP.app"
+# ARCHS="arm64 x86_64" builds one binary for both kinds of Mac, as the release download is.
+# Left unset it builds for this Mac only, which is all `bun run dsp:install` needs.
+ARCHS="${ARCHS:-}"
 
-swift build -c "$CONFIG" --package-path dsp
+set -- -c "$CONFIG" --package-path dsp
+for arch in $ARCHS; do set -- "$@" --arch "$arch"; done
+swift build "$@"
+BIN="$(swift build "$@" --show-bin-path)/SLABDSP"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp "dsp/.build/$CONFIG/SLABDSP" "$APP/Contents/MacOS/SLABDSP"
+cp "$BIN" "$APP/Contents/MacOS/SLABDSP"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

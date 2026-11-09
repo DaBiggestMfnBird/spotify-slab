@@ -152,6 +152,16 @@ Older helpers (before 0.4.0) don't have this, and the pads seek Spotify the old 
 
 ### Install
 
+**Download it.** Get `SLAB-DSP-x.y.z.zip` from the [latest release](https://github.com/DaBiggestMfnBird/spotify-slab/releases/latest), open it, drag **SLAB DSP** into Applications and open it. It's one app for Apple silicon and Intel, built and tested by the repo's release workflow.
+
+Until the releases are signed with an Apple Developer ID, macOS stops the first launch. Press **Done**, then in **System Settings → Privacy & Security** find *"SLAB DSP" was blocked* and press **Open Anyway**. Or, in Terminal, before opening it:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/SLAB DSP.app"
+```
+
+**Or build it yourself** (Xcode's command line tools and bun):
+
 ```bash
 bun run dsp:install
 ```
@@ -160,7 +170,7 @@ That builds `SLAB DSP.app`, copies it to `~/Applications`, and launches it. It l
 
 If the permission prompt was dismissed, re-enable it in **System Settings → Privacy & Security → Screen & System Audio Recording** (macOS 15) or **Audio Recording** (macOS 14), then relaunch the app.
 
-Quit Spotify, reopen it, and the helper picks it up on its own with the same settings. It can be started before Spotify and will wait. A rebuilt copy is a new binary as far as macOS is concerned, so a build from source asks for the permission again.
+Quit Spotify, reopen it, and the helper picks it up on its own with the same settings. It can be started before Spotify and will wait. A rebuilt copy is a new binary as far as macOS is concerned, so a build from source asks for the permission again, and so does each new unsigned download.
 
 The helper must be launched as an app (LaunchServices), not from a shell. TCC attributes the audio-capture grant to the responsible process, so a binary started from Terminal inherits Terminal's identity and taps silence.
 
@@ -225,7 +235,7 @@ So SLAB shifts pitch, which is the audible half of a screw record, and leaves te
 
 Search for **SLAB** in the Spicetify Marketplace and install it there.
 
-The extension itself is cross-platform. **SLAB DSP**, the helper that makes the sound real (true pitch, reverb and delay, instant chops, the Screw, Trunk and Echo holds, the backspin and the tape), is macOS 14.2+ only, because it depends on Core Audio process taps. The Marketplace installs the extension; build the helper from this repo with `bun run dsp:install` (see [SLAB DSP](#slab-dsp-macos)). Without it, on any platform, the moods are EQ curves, the pads and DJ mode cut by seeking Spotify, and the panel says what needs the helper.
+The extension itself is cross-platform. **SLAB DSP**, the helper that makes the sound real (true pitch, reverb and delay, instant chops, the Screw, Trunk and Echo holds, the backspin and the tape), is macOS 14.2+ only, because it depends on Core Audio process taps. The Marketplace installs the extension; download the helper from the [latest release](https://github.com/DaBiggestMfnBird/spotify-slab/releases/latest), or build it from this repo (see [SLAB DSP](#slab-dsp-macos)). Without it, on any platform, the moods are EQ curves, the pads and DJ mode cut by seeking Spotify, and the panel says what needs the helper.
 
 ### Manual
 
@@ -317,6 +327,20 @@ dsp/
 - **The worker clock** exists because Chrome clamps main-thread timers to roughly one second when the Spotify window is occluded. A 40 ms worker tick keeps auto chop and loop on time even when the app is behind another window. If a locked-down client won't start the worker, or it never ticks, the clock drops to a main-thread timer, and a tape stop always finishes on its own timer, so nothing is left half-faded.
 - **The EQ bridge** matches filters by frequency, so a client with a different six-band layout still gets a sane mapping. One dead filter doesn't stop the curve.
 - **The tap** uses a private aggregate device with a tap list of dictionaries (`kAudioSubTapUIDKey`). A list of plain UID strings is accepted by the API and silently attaches nothing — that cost an afternoon.
+
+### Releases
+
+Pushing a version tag publishes a release: `git tag v0.10.1 && git push origin v0.10.1`. The tag has to match `package.json`; a suffix like `-rc.1` makes it a pre-release. The release workflow (`.github/workflows/release.yml`) runs the helper's tests, builds SLAB DSP for Apple silicon and Intel, checks the bundle's version against `main.swift`, and attaches the zip, `slab.js` and their checksums. It can also be run by hand from the Actions tab.
+
+To ship it signed and notarized, so macOS opens it without a warning, add these repository secrets from an Apple Developer account:
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERT_P12` | The **Developer ID Application** certificate and key, exported as .p12, base64-encoded |
+| `MACOS_CERT_PASSWORD` | The .p12's password |
+| `APPLE_ID` | The Apple ID the account signs in with |
+| `APPLE_TEAM_ID` | The account's team ID |
+| `APPLE_APP_PASSWORD` | An app-specific password for that Apple ID, for the notary service |
 
 ### Dev
 

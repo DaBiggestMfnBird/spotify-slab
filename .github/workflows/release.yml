@@ -1,0 +1,163 @@
+name: Release
+
+# The download: SLAB DSP built for Apple silicon and Intel, with the extension, published as a
+# GitHub release when a version tag like v0.10.1 is pushed, or when this is run by hand. On a pull
+# request that changes how it's built, it builds and checks the same way and publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish, like v0.10.1 (made on the chosen branch if it's new)"
+        required: true
+      prerelease:
+        description: "Publish as a pre-release"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/build-dsp.sh"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build SLAB DSP for release
+    runs-on: macos-15
+    env:
+      # Developer ID signing and notarization run only once these secrets are set.
+      SIGN: ${{ secrets.MACOS_CERT_P12 != '' }}
+      TAG_ASKED: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Versions
+        id: version
+        run: |
+          helper=$(sed -n 's/^let slabVersion = "\(.*\)"$/\1/p' dsp/Sources/SLABDSP/main.swift)
+          bundle=$(grep -A1 CFBundleShortVersionString scripts/build-dsp.sh | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+          extension=$(node -p "require('./package.json').version")
+          echo "helper $helper, app bundle $bundle, extension $extension"
+          if [ -z "$helper" ] || [ "$helper" != "$bundle" ]; then
+            echo "::error::main.swift says '$helper' but the app bundle would say '$bundle'"
+            exit 1
+          fi
+          echo "helper=$helper" >> "$GITHUB_OUTPUT"
+          echo "extension=$extension" >> "$GITHUB_OUTPUT"
+
+      - name: The tag matches the version
+        if: github.event_name != 'pull_request'
+        env:
+          WANT: v${{ steps.version.outputs.extension }}
+        run: |
+          case "$TAG_ASKED" in
+            "$WANT"|"$WANT"-*) ;;
+            *) echo "::error::tag $TAG_ASKED, but package.json is at $WANT"; exit 1 ;;
+          esac
+
+      - name: Test the helper
+        run: swift test --package-path dsp
+
+      - name: Build the extension
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          git diff --exit-code -- dist/slab.js
+
+      - name: Build SLAB DSP for Apple silicon and Intel
+        run: ARCHS="arm64 x86_64" ./scripts/build-dsp.sh release
+
+      - name: Check the app
+        env:
+          HELPER: ${{ steps.version.outputs.helper }}
+        run: |
+          app="build/SLAB DSP.app"
+          lipo -info "$app/Contents/MacOS/SLABDSP"
+          lipo "$app/Contents/MacOS/SLABDSP" -verify_arch arm64 x86_64
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$HELPER"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+      - name: Sign with Developer ID and notarize
+        if: env.SIGN == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          app="build/SLAB DSP.app"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements build/slab.entitlements \
+            --sign "Developer ID Application" --keychain "$keychain" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$app"
+          spctl --assess --type execute --verbose "$app"
+
+      - name: Package
+        env:
+          HELPER: ${{ steps.version.outputs.helper }}
+        run: |
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "build/SLAB DSP.app" "release/SLAB-DSP-$HELPER.zip"
+          cp dist/slab.js release/slab.js
+          (cd release && shasum -a 256 -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Keep the build
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLAB-DSP-${{ steps.version.outputs.helper }}
+          path: release/
+
+      - name: Publish the release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELPER: ${{ steps.version.outputs.helper }}
+          EXTENSION: ${{ steps.version.outputs.extension }}
+          PRERELEASE: ${{ inputs.prerelease && '--prerelease' || '' }}
+        run: |
+          # A tag with a suffix, like v0.10.1-rc.1, is a pre-release whichever way it was made.
+          case "$TAG_ASKED" in *-*) PRERELEASE=--prerelease ;; esac
+          if [ "$SIGN" = true ]; then
+            first_open="Open it."
+          else
+            first_open="Open it. This build isn't signed with an Apple Developer ID, so the first time macOS stops it: press **Done**, then in **System Settings → Privacy & Security** find *\"SLAB DSP\" was blocked* and press **Open Anyway**. (Or, in Terminal, before opening it: \`xattr -dr com.apple.quarantine \"/Applications/SLAB DSP.app\"\`.)"
+          fi
+          cat > notes.md <<EOF
+          **SLAB $EXTENSION** (the Spicetify extension) and **SLAB DSP $HELPER** (the macOS helper that makes the sound real).
+
+          ### Install the helper (macOS 14.2 or newer, Apple silicon or Intel)
+          1. Download **SLAB-DSP-$HELPER.zip** below, open it, and drag **SLAB DSP** into Applications.
+          2. $first_open
+          3. When macOS asks to let SLAB DSP record system audio, allow it. That's how it hears Spotify. Nothing is recorded or sent anywhere.
+          4. A waveform appears in the menu bar. Its menu has **Start at Login**.
+
+          ### Install the extension
+          Search **SLAB** in the Spicetify Marketplace. Or put **slab.js** from below in Spicetify's Extensions folder, add it with \`spicetify config extensions slab.js\`, and run \`spicetify apply\`.
+
+          Updating the helper: quit the old one from its menu first. \`SHA256SUMS.txt\` has each file's checksum.
+
+          EOF
+          gh release create "$TAG_ASKED" release/* \
+            --target "$GITHUB_SHA" \
+            --title "SLAB $EXTENSION · SLAB DSP $HELPER" \
+            --notes-file notes.md --generate-notes $PRERELEASE
