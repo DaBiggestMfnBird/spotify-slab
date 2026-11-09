@@ -76,11 +76,22 @@ public final class Deck: @unchecked Sendable {
     private var fallbackCount = 0
     /// What Spotify's restart cost on recent seeks, in milliseconds.
     private var gaps: [Double] = []
+    /// The last few chops and how each went, oldest first.
+    private var chopLog: [ChopRecord] = []
+    private static let chopLogSize = 8
+    /// The last tightening, so every pass of a loop jumps the same distance, even the passes asked
+    /// for while the deck plays from memory.
+    private var lastTight: (asked: Int, made: Int, alike: Bool, at: Int)?
 
     struct Jump {
         let at: Int
         let back: Int
+        /// What SLAB asked for, before the deck tightened it to the record's own beat.
+        let asked: Int
         let seekAhead: Int
+        /// Both sides of the cut are the same sound (a loop, a beat jumped by its own length): they
+        /// are crossed straight, since equal power would swell identical audio 3 dB at the join.
+        let alike: Bool
     }
 
     struct Detached {
@@ -100,6 +111,8 @@ public final class Deck: @unchecked Sendable {
     struct Rejoin {
         let delta: Int
         let from: Int
+        /// What Spotify's restart cost on this seek, in ms.
+        let gapMs: Double
     }
 
     /// The record turning backwards under a hand: `position` is where the stylus is, between frames.
@@ -124,6 +137,38 @@ public final class Deck: @unchecked Sendable {
         let position: Int
         let delta: Int
         let end: Int?
+    }
+
+    /// What became of a chop.
+    public enum Outcome: String, Sendable {
+        /// Crossed onto Spotify's copy where the two met: nothing to hear.
+        case realigned
+        /// Spotify came back behind what memory was playing: rejoined live, a moment heard twice.
+        case behind
+        /// Spotify's audio wasn't found in time: back to live, with a skip.
+        case wentLive
+        /// A pause or a new track called it off.
+        case cancelled
+        /// Another chop came before Spotify was found.
+        case chopped
+    }
+
+    /// One chop, as it went.
+    public struct ChopRecord: Sendable {
+        public let number: Int
+        /// The jump SLAB asked for, and the one made after tightening it to the record's own beat.
+        public let askedFrames: Int
+        public let madeFrames: Int
+        public var outcome: Outcome?
+        /// What Spotify's restart cost, once its audio was found.
+        public var gapMs: Double?
+        /// The best match to memory seen while waiting for Spotify (1 is the same sound).
+        public var bestScore: Float
+        /// From the jump to its outcome.
+        public var tookMs: Double?
+        /// For `behind`: how much was heard twice.
+        public var repeatMs: Double?
+        let startedAt: Int
     }
 
     public enum Realign: Equatable {
@@ -159,6 +204,7 @@ public final class Deck: @unchecked Sendable {
         segments.reserveCapacity(Self.maxSegments + 4)
         segments.append(Segment(start: 0, end: nil, delta: 0))
         gaps.reserveCapacity(8)
+        chopLog.reserveCapacity(Self.chopLogSize + 1)
     }
 
     deinit {
@@ -344,6 +390,23 @@ public final class Deck: @unchecked Sendable {
         }
     }
 
+    /// The slow end of what Spotify's restart cost on recent seeks, in ms: the second slowest of the
+    /// last seven, so one stall doesn't set it. Aimed by, Spotify's audio comes back ahead of the
+    /// deck nearly every time, and the deck never has to rejoin it repeating a moment.
+    public var seekGapHighMs: Double? {
+        locked {
+            guard !gaps.isEmpty else { return nil }
+            let sorted = gaps.sorted()
+            return sorted.count >= 4 ? sorted[sorted.count - 2] : sorted[sorted.count - 1]
+        }
+    }
+
+    /// The last few chops, oldest first, and how each went.
+    public var recentChops: [ChopRecord] {
+        // A copy of its own, so the audio thread's next entry never has to copy the log.
+        locked { chopLog.map { $0 } }
+    }
+
     // MARK: Jumps
 
     /// Schedules a jump `backFrames` back on the content clock (forward, when negative) from what
@@ -352,20 +415,23 @@ public final class Deck: @unchecked Sendable {
     /// `availableFrames` is how much song SLAB knows runs unbroken behind what is heard (since the
     /// track started, the user moved the record, or play resumed); the deck never goes further back.
     public func scheduleJump(backFrames: Int, inFrames: Int = 0, seekAheadFrames: Int, availableFrames: Int) throws {
+        let tight = backFrames > 0 ? tightened(backFrames) : (frames: backFrames, alike: false)
         lock.lock()
         defer { lock.unlock() }
+        let back = tight.frames <= availableFrames ? tight.frames : backFrames
+        let alike = back == tight.frames && tight.alike
         guard written > 0 else { throw JumpRefusal.nothingPlaying }
-        guard backFrames != 0, backFrames <= availableFrames, abs(backFrames) < capacity - Int(sampleRate * 2) else {
+        guard back != 0, back <= availableFrames, abs(back) < capacity - Int(sampleRate * 2) else {
             throw JumpRefusal.tooFarBack
         }
         let delay = max(0, inFrames)
         // Where it lands, seen from here. A sound that will only have played by the time the jump
         // fires can't be checked yet; the jump checks again when it fires.
-        let behind = backFrames - delay
-        if !(backFrames > 0 && behind <= 0), target(back: behind) == nil {
+        let behind = back - delay
+        if !(back > 0 && behind <= 0), target(back: behind) == nil {
             throw JumpRefusal.notInMemory
         }
-        pending = Jump(at: played + delay, back: backFrames, seekAhead: max(0, seekAheadFrames))
+        pending = Jump(at: played + delay, back: back, asked: backFrames, seekAhead: max(0, seekAheadFrames), alike: alike)
     }
 
     /// A backspin into a chop: the record spins back for `spinFrames` from now, then lands
@@ -388,7 +454,7 @@ public final class Deck: @unchecked Sendable {
         let frames = max(fadeFrames * 4, spinFrames)
         spinLag = detached?.lag ?? max(0, written - head)
         spin = Spin(position: Double(head), elapsed: 0, frames: frames, speed: max(1, speed), floor: floor)
-        pending = Jump(at: played + frames, back: backFrames, seekAhead: max(0, seekAheadFrames))
+        pending = Jump(at: played + frames, back: backFrames, asked: backFrames, seekAhead: max(0, seekAheadFrames), alike: false)
     }
 
     /// Where a backspin's stylus is, while one turns.
@@ -402,7 +468,10 @@ public final class Deck: @unchecked Sendable {
         defer { lock.unlock() }
         pending = nil
         spin = nil
-        if detached != nil { goLive() }
+        if detached != nil {
+            settle(.cancelled)
+            goLive()
+        }
     }
 
     /// Where the sound `back` frames before what plays now is (after it, for a negative `back`).
@@ -432,10 +501,16 @@ public final class Deck: @unchecked Sendable {
         if let open = segments.indices.last, segments[open].end == nil {
             segments[open].end = written
         }
-        crossfade(to: to.position)
+        crossfade(to: to.position, sameSound: jump.alike)
         headDelta = to.delta
         headEnd = to.end ?? written
+        settle(.chopped)
         jumpCount += 1
+        if chopLog.count >= Self.chopLogSize { chopLog.removeFirst() }
+        chopLog.append(ChopRecord(
+            number: jumpCount, askedFrames: jump.asked, madeFrames: jump.back, outcome: nil,
+            gapMs: nil, bestScore: 0, tookMs: nil, repeatMs: nil, startedAt: played
+        ))
         catching = false
         rejoin = nil
         detached = Detached(
@@ -471,7 +546,17 @@ public final class Deck: @unchecked Sendable {
 
     private func giveUp() {
         fallbackCount += 1
+        settle(.wentLive)
         goLive()
+    }
+
+    /// The chop still waiting on Spotify, if there is one, as it ends.
+    private func settle(_ outcome: Outcome, repeatFrames: Int? = nil, gapMs: Double? = nil) {
+        guard let i = chopLog.indices.last, chopLog[i].outcome == nil else { return }
+        chopLog[i].outcome = outcome
+        chopLog[i].tookMs = Double(played - chopLog[i].startedAt) / sampleRate * 1000
+        if let repeatFrames { chopLog[i].repeatMs = Double(repeatFrames) / sampleRate * 1000 }
+        if let gapMs { chopLog[i].gapMs = gapMs }
     }
 
     /// Back to whatever Spotify is playing now. Memory no longer lines up with it, so the content
@@ -495,9 +580,12 @@ public final class Deck: @unchecked Sendable {
         guard live >= found.from else { return false }
         if live <= written - fadeFrames {
             crossfade(to: live, sameSound: true)
+            settle(.realigned, gapMs: found.gapMs)
         } else {
             // Spotify came back behind what memory is playing: rejoin live, repeating a moment.
-            crossfade(to: max(found.from, written - targetLag))
+            let to = max(found.from, written - targetLag)
+            crossfade(to: to)
+            settle(.behind, repeatFrames: live - to, gapMs: found.gapMs)
         }
         if segments.count >= Self.maxSegments {
             segments.removeFirst(segments.count - Self.maxSegments + 1)
@@ -555,20 +643,26 @@ public final class Deck: @unchecked Sendable {
         let oldest = w - capacity + Int(sampleRate)
 
         var best: (clock: Int, distance: Int)?
+        var seen: Float = 0
         for segment in known {
             guard let end = segment.end else { continue }
             let lo = max(segment.start, lowClock + segment.delta, oldest)
             let hi = min(end - probeLength, highClock + segment.delta)
             guard hi > lo else { continue }
             let region = mono(lo, hi - lo + probeLength)
-            guard let match = Match.best(probe: probe, region: region, expected: deckAtProbe + segment.delta - lo),
-                  match.score >= 0.97
-            else { continue }
+            guard let match = Match.best(probe: probe, region: region, expected: deckAtProbe + segment.delta - lo) else { continue }
+            seen = max(seen, match.score)
+            guard match.score >= 0.97 else { continue }
             let clock = lo + match.offset - segment.delta
             let distance = abs(clock - deckAtProbe)
             if let current = best, current.distance <= distance { continue }
             best = (clock, distance)
         }
+        lock.lock()
+        if detached?.episode == state.episode, let i = chopLog.indices.last, chopLog[i].outcome == nil {
+            chopLog[i].bestScore = max(chopLog[i].bestScore, seen)
+        }
+        lock.unlock()
         guard let match = best else { return .waiting }
 
         // Spotify's copy at a steady level: a fade-in after its seek, or its silence still in the
@@ -621,7 +715,7 @@ public final class Deck: @unchecked Sendable {
         guard let current = detached, current.episode == state.episode, rejoin == nil else { return .waiting }
         if gaps.count >= 7 { gaps.removeFirst(gaps.count - 6) }
         gaps.append(Double(gapFrames) / sampleRate * 1000)
-        rejoin = Rejoin(delta: delta, from: from)
+        rejoin = Rejoin(delta: delta, from: from, gapMs: Double(gapFrames) / sampleRate * 1000)
         if tryRejoin() { return .aligned(lagFrames: max(0, written - head)) }
         return .locked
     }
@@ -685,6 +779,119 @@ public final class Deck: @unchecked Sendable {
         let sum = kernel.reduce(0, +)
         kernel = kernel.map { $0 / sum }
         return kernel.map { Float($0) }
+    }
+
+    // MARK: Tightening a chop
+
+    /// `back` frames, tightened to where the record itself repeats. Spotify's beat grid can sit a few
+    /// milliseconds off a record's real beat, and a chop that far off flams: the kick lands twice.
+    /// Within 25 ms of `back`, the lag at which the record's attacks line up best, if they clearly do
+    /// (a loop, a drum pattern), found to the sample; with nothing that repeats, `back` as asked.
+    /// `alike` when the two sides of the cut are near enough the same sound to be crossed straight.
+    func tightened(_ back: Int) -> (frames: Int, alike: Bool) {
+        let reach = Int(sampleRate * 0.025)
+        lock.lock()
+        let w = written
+        let riding = detached == nil && spin == nil
+        let liveStart: Int? = segments.last.flatMap { $0.end == nil ? $0.start : nil }
+        let reuse = lastTight
+        lock.unlock()
+        // Every pass of a loop jumps the same distance: the first pass's tightening is kept a while.
+        if let reuse, abs(reuse.asked - back) <= 1, w - reuse.at < Int(sampleRate * 20) { return (reuse.made, reuse.alike) }
+        guard back > 4 * reach, riding, let liveStart else { return (back, false) }
+
+        // Coarse, in half-millisecond steps: the newest 0.75 s of attacks against the same stretch
+        // `back` earlier, give or take the reach.
+        let step = max(1, Int((sampleRate / 2_000).rounded()))
+        let reachBlocks = (reach + step - 1) / step
+        let n = Int(sampleRate * 0.75) / step
+        let probeStart = w - n * step
+        let pastStart = probeStart - back - reachBlocks * step
+        guard pastStart > liveStart, pastStart > w - capacity + Int(sampleRate) else { return (back, false) }
+        let probe = attackEnvelope(from: probeStart, blocks: n, step: step)
+        let past = attackEnvelope(from: pastStart, blocks: n + 2 * reachBlocks, step: step)
+        var best: (offset: Int, r: Float)?
+        for offset in 0...(2 * reachBlocks) {
+            let r = Self.pearson(probe, past[offset..<(offset + n)])
+            if best == nil || r > best!.r { best = (offset, r) }
+        }
+        // A clear match, and a peak of its own: one at the edge of the reach is the slope of something
+        // further off (a hi-hat pattern the chop isn't in step with), not a beat to tighten to.
+        guard let coarse = best, coarse.r >= 0.65, coarse.offset > 0, coarse.offset < 2 * reachBlocks else { return (back, false) }
+        let center = back + (reachBlocks - coarse.offset) * step
+
+        // Fine, to the sample, by the waveform below 4 kHz around the coarse lag.
+        let kernel = Self.bandKernel(sampleRate: sampleRate)
+        let fine = Int(sampleRate * 0.25)
+        let end = w - kernel.count
+        let ours = monoCopy(from: end - fine, count: fine, upTo: w, kernel: kernel)
+        let theirs = monoCopy(from: end - fine - center - step, count: fine + 2 * step, upTo: w, kernel: kernel)
+        var made = center
+        var top: Float = -2
+        for k in 0...(2 * step) {
+            let score = Match.similarity(ours, Array(theirs[k..<(k + fine)]))
+            if score > top {
+                top = score
+                made = center + step - k
+            }
+        }
+        guard abs(made - back) <= reach else { return (back, false) }
+        let alike = top >= 0.9
+        lock.lock()
+        lastTight = (asked: back, made: made, alike: alike, at: w)
+        lock.unlock()
+        return (made, alike)
+    }
+
+    /// How hard the record attacks, `step` frames at a time: each frame's change from the one before,
+    /// rectified and averaged. Kicks, snares and hats stand up out of it; the 808's long notes, which
+    /// repeat every few milliseconds and would line up almost anywhere, don't.
+    private func attackEnvelope(from start: Int, blocks: Int, step: Int) -> [Float] {
+        var out = [Float](repeating: 0, count: max(0, blocks))
+        guard blocks > 0, start > 0 else { return out }
+        var at = (start - 1) % capacity
+        var previous = (left[at] + right[at]) * 0.5
+        for b in 0..<blocks {
+            var sum: Float = 0
+            for k in 0..<step {
+                at = (start + b * step + k) % capacity
+                let x = (left[at] + right[at]) * 0.5
+                sum += abs(x - previous)
+                previous = x
+            }
+            out[b] = sum / Float(step)
+        }
+        return out
+    }
+
+    /// How alike two envelopes rise and fall, -1 to 1, whatever their levels; 0 when either is flat.
+    static func pearson(_ a: [Float], _ b: ArraySlice<Float>) -> Float {
+        let n = min(a.count, b.count)
+        guard n > 1 else { return 0 }
+        var meanA: Float = 0
+        var meanB: Float = 0
+        var i = b.startIndex
+        for k in 0..<n {
+            meanA += a[k]
+            meanB += b[i]
+            i += 1
+        }
+        meanA /= Float(n)
+        meanB /= Float(n)
+        var ab: Float = 0
+        var aa: Float = 0
+        var bb: Float = 0
+        i = b.startIndex
+        for k in 0..<n {
+            let x = a[k] - meanA
+            let y = b[i] - meanB
+            ab += x * y
+            aa += x * x
+            bb += y * y
+            i += 1
+        }
+        guard aa > 1e-12, bb > 1e-12 else { return 0 }
+        return ab / (aa * bb).squareRoot()
     }
 
     /// How much louder `a` is than `b` (1 for the same level); nil when either is silent.

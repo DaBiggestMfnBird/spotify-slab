@@ -64,6 +64,8 @@ final class DSPGraph {
     private let steering = DispatchQueue(label: "com.slab.dsp.deck", qos: .userInitiated)
     private var steerTimer: DispatchSourceTimer?
     private var catchUpRate = false
+    /// The last chop written to the log.
+    private var loggedChop = 0
     /// A tape stop owns the time-stretcher's rate until this moment.
     private var tapeUntil = Date.distantPast
     private let sampleRate: Double
@@ -250,10 +252,9 @@ final class DSPGraph {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             if self.ring.isDetached {
-                if case .aligned(let lag) = self.ring.realign() {
-                    slabLog("chop realigned, \(Int(Double(lag) / self.sampleRate * 1000)) ms behind live")
-                }
+                self.ring.realign()
             }
+            if self.ring.jumps > self.loggedChop { self.logChops() }
             let want = self.ring.catchingUp
             guard want != self.catchUpRate else { return }
             self.catchUpRate = want
@@ -264,6 +265,40 @@ final class DSPGraph {
         }
         timer.resume()
         steerTimer = timer
+    }
+
+    /// Each chop, once it has gone one way or another, as a line in the log: what makes chops sound
+    /// off on a real record is in these.
+    private func logChops() {
+        for chop in ring.recentChops where chop.number > loggedChop {
+            guard let outcome = chop.outcome else { break }
+            loggedChop = chop.number
+            slabLog(Self.describe(chop, outcome: outcome, sampleRate: sampleRate, behindMs: latencyMs))
+        }
+    }
+
+    static func describe(_ chop: Deck.ChopRecord, outcome: Deck.Outcome, sampleRate: Double, behindMs: Double) -> String {
+        let ms = { (frames: Int) in Int((Double(frames) / sampleRate * 1000).rounded()) }
+        var line = "chop \(chop.number): \(ms(chop.madeFrames)) ms back"
+        if chop.madeFrames != chop.askedFrames {
+            line += " (tightened from \(ms(chop.askedFrames)) to the record's own beat)"
+        }
+        let took = Int((chop.tookMs ?? 0).rounded())
+        let seek = chop.gapMs.map { "; Spotify's seek took \(Int($0.rounded())) ms" } ?? ""
+        let score = String(format: "%.3f", chop.bestScore)
+        switch outcome {
+        case .realigned:
+            line += ", back on Spotify after \(took) ms\(seek), now \(Int(behindMs.rounded())) ms behind live"
+        case .behind:
+            line += ", Spotify came back behind memory: \(Int((chop.repeatMs ?? 0).rounded())) ms heard twice\(seek)"
+        case .wentLive:
+            line += ", Spotify's audio not found in \(took) ms, went live with a skip (best match \(score))"
+        case .cancelled:
+            line += ", called off by a pause or a new track"
+        case .chopped:
+            line += ", another chop came \(took) ms later"
+        }
+        return line
     }
 
     var current: DSPParams {

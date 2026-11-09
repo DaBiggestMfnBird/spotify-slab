@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import SLABCore
 
 /// Tiny HTTP control surface on 127.0.0.1 so the Spicetify extension can drive the DSP.
 final class ControlServer {
@@ -234,16 +235,35 @@ final class ControlServer {
             payload["droppedFrames"] = graph.droppedFrames
             payload["detached"] = graph.deck.isDetached
             if let gap = graph.deck.seekGapMs { payload["seekGapMs"] = (gap * 10).rounded() / 10 }
-            // How chops have gone: jumped, found Spotify again, or gave up waiting and went live.
+            if let gap = graph.deck.seekGapHighMs { payload["seekGapHighMs"] = (gap * 10).rounded() / 10 }
+            // How chops have gone: jumped, found Spotify again, or gave up waiting and went live; and
+            // the last few, one by one.
+            let rate = supervisor.sampleRate ?? 48_000
             payload["chops"] = [
                 "jumps": graph.deck.jumps,
                 "realigned": graph.deck.realignments,
                 "wentLive": graph.deck.fallbacks,
-            ]
+                "recent": graph.deck.recentChops.map { Self.dictionary($0, sampleRate: rate) },
+            ] as [String: Any]
         }
         if let sampleRate = supervisor.sampleRate { payload["sampleRate"] = sampleRate }
         if let capture = supervisor.capture { payload["callbacks"] = capture.ioCallbacks }
         return payload
+    }
+
+    private static func dictionary(_ chop: Deck.ChopRecord, sampleRate: Double) -> [String: Any] {
+        let ms = { (frames: Int) in (Double(frames) / sampleRate * 10_000).rounded() / 10 }
+        var out: [String: Any] = [
+            "n": chop.number,
+            "askedMs": ms(chop.askedFrames),
+            "madeMs": ms(chop.madeFrames),
+            "outcome": chop.outcome?.rawValue ?? "waiting",
+            "bestMatch": (Double(chop.bestScore) * 1000).rounded() / 1000,
+        ]
+        if let gap = chop.gapMs { out["seekMs"] = (gap * 10).rounded() / 10 }
+        if let took = chop.tookMs { out["tookMs"] = took.rounded() }
+        if let twice = chop.repeatMs { out["heardTwiceMs"] = twice.rounded() }
+        return out
     }
 
     private static func dictionary(_ p: DSPParams) -> [String: Any] {
@@ -315,6 +335,8 @@ final class ControlServer {
                 )
                 return (200, ["ok": true])
             } catch {
+                // SLAB falls back to seeking Spotify, which is the slow way: worth knowing why.
+                slabLog("chop refused (\(error)): \(Int(back)) ms back, \(Int(available)) ms of song behind it")
                 return (409, ["ok": false, "error": "\(error)"])
             }
 
@@ -346,6 +368,7 @@ final class ControlServer {
                 )
                 return (200, ["ok": true])
             } catch {
+                slabLog("spin refused (\(error)): \(Int(back)) ms back, \(Int(available)) ms of song behind it")
                 return (409, ["ok": false, "error": "\(error)"])
             }
 

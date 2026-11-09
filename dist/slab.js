@@ -177,6 +177,7 @@ self.onmessage = (event) => {
         tape: Array.isArray(payload.features) && payload.features.includes("tape"),
         throw: Array.isArray(payload.features) && payload.features.includes("throw"),
         seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : void 0,
+        seekGapHighMs: typeof payload.seekGapHighMs === "number" ? payload.seekGapHighMs : void 0,
         wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : void 0
       });
     } else {
@@ -235,13 +236,13 @@ self.onmessage = (event) => {
     return Boolean(payload);
   }
   var DEFAULT_SEEK_GAP_MS = 250;
-  var SEEK_MARGIN_MS = 40;
+  var SEEK_MARGIN_MS = 60;
   function canJump() {
     return status.linked && status.tapping === true && status.audio === true && status.jump === true;
   }
   function seekAheadMs() {
-    const gap = status.seekGapMs ?? DEFAULT_SEEK_GAP_MS;
-    return Math.round(Math.max(60, Math.min(800, gap + SEEK_MARGIN_MS)));
+    const gap = status.seekGapHighMs ?? status.seekGapMs ?? DEFAULT_SEEK_GAP_MS;
+    return Math.round(Math.max(60, Math.min(900, gap + SEEK_MARGIN_MS)));
   }
   var measureTimer = null;
   async function dspJump(order) {
@@ -3423,6 +3424,7 @@ ${NEON_CSS}
   var TAGLINE = "Slow, loud and bangin\u2019";
   var DJ_MOOD = "screwed";
   var DJ_PITCH = -700;
+  var ANSWER_HOLD_MS = 1500;
   var PLAYED_AS = {
     houston: "Houston",
     trap: "trap",
@@ -3636,6 +3638,8 @@ ${NEON_CSS}
       this.roomSub = null;
       /** When a hand last played a pad: what happens just after is the hand's, not the DJ's. */
       this.lastManualAt = 0;
+      /** When the readout last answered something you did. */
+      this.answeredAt = 0;
       this.cleanButton = null;
       this.mineButton = null;
       /** The artist the Keep door last showed, so it is drawn again only when that changes. */
@@ -3890,7 +3894,7 @@ ${NEON_CSS}
       this.panel = this.buildPanel();
       onChop((event) => {
         const automatic = event.kind === "auto" || djRunning() && Date.now() - this.lastManualAt > 1500;
-        this.flashActivity(event.label, !automatic);
+        this.flashActivity(event.label, !automatic, automatic);
         if (automatic) this.hitPad(this.pads[0]);
       });
     }
@@ -3924,7 +3928,7 @@ ${NEON_CSS}
       this.renderDepth();
       this.renderTape();
       this.renderKeep();
-      onDj((label) => this.flashActivity(label, false));
+      onDj((label) => this.flashActivity(label, false, true));
       setDjHand(this.state.djHand);
       if (this.state.dj) startDj();
       this.renderDj();
@@ -5527,9 +5531,13 @@ ${NEON_CSS}
     }
     /**
      * What a press just did, said right above the pads in the ruler's place for
-     * a moment, so the answer lands where the hand is. Nothing else moves.
+     * a moment, so the answer lands where the hand is. Nothing else moves. What
+     * plays on its own (the DJ, auto chop) waits behind the answer to a press for
+     * a moment, so the answer is read.
      */
-    flashActivity(text, speak = true) {
+    flashActivity(text, speak = true, onItsOwn = false) {
+      if (onItsOwn && Date.now() - this.answeredAt < ANSWER_HOLD_MS) return;
+      if (!onItsOwn) this.answeredAt = Date.now();
       this.flashEl.textContent = text;
       setData(this.panel, "flash", "true");
       if (speak) this.announce(text);
@@ -5839,7 +5847,7 @@ ${NEON_CSS}
   };
 
   // src/main.ts
-  var VERSION = "0.10.0";
+  var VERSION = "0.10.1";
   var LOG = "[SLAB]";
   var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function waitFor(predicate, timeout = 2e4) {

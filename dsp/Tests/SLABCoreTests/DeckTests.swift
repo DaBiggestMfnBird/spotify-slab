@@ -587,6 +587,101 @@ final class DeckTests: XCTestCase {
         XCTAssertNil(off)
     }
 
+    // MARK: Chops tightened to the record's beat
+
+    func testAChopTightensToWhereTheRecordRepeats() throws {
+        // A loop two seconds long, and a beat grid 18 ms off it: the chop the grid asks for would flam.
+        let period = 96_000
+        let rig = Rig(song: { songSample($0 % period) })
+        rig.run(rig.ms(5_000))
+        let asked = period + rig.ms(18)
+        let headBefore = rig.deck.head
+        let index = rig.heard.count
+        try rig.deck.scheduleJump(backFrames: asked, seekAheadFrames: 0, availableFrames: rig.ms(5_000))
+        rig.run(512)
+        let chop = try XCTUnwrap(rig.deck.recentChops.last)
+        XCTAssertEqual(chop.askedFrames, asked)
+        XCTAssertEqual(chop.madeFrames, period, "tightened to the loop's own length")
+        // So the record carries straight on past the cut, through it too: a loop jumped by its own
+        // length is itself, crossed straight, with no swell at the join.
+        XCTAssertNil(rig.seam(from: index, playing: headBefore))
+    }
+
+    func testARecordThatDoesntRepeatKeepsTheChopAsAsked() throws {
+        let rig = Rig()
+        rig.run(rig.ms(4_000))
+        let asked = rig.ms(1_500) + 37
+        let target = rig.deck.head - asked
+        let index = rig.heard.count
+        try rig.deck.scheduleJump(backFrames: asked, seekAheadFrames: 0, availableFrames: rig.ms(4_000))
+        rig.run(512)
+        XCTAssertEqual(rig.deck.recentChops.last?.madeFrames, asked)
+        let fade = rig.deck.fadeFrames
+        XCTAssertNil(rig.seam(from: index + fade, playing: target + fade))
+    }
+
+    // MARK: The chop log
+
+    /// A chop two seconds back, then what Spotify does.
+    private func chop(_ rig: Rig, ahead: Double, then spotify: (Rig, Int) -> Void) throws -> Deck.ChopRecord {
+        rig.run(rig.ms(4_000))
+        let back = rig.ms(2_000)
+        let target = rig.deck.head - back
+        try rig.deck.scheduleJump(backFrames: back, seekAheadFrames: rig.ms(ahead), availableFrames: rig.ms(4_000))
+        rig.run(512)
+        spotify(rig, target + 512 + rig.ms(ahead))
+        return try XCTUnwrap(rig.deck.recentChops.last)
+    }
+
+    func testTheChopLogSaysHowEachChopWent() throws {
+        // Found again, ahead of memory as aimed: realigned, with what the seek cost.
+        let found = try chop(Rig(), ahead: 260) { rig, to in
+            rig.seek(to: to, lateMs: 20, gapMs: 200)
+            rig.run(rig.ms(1_500), realigning: true)
+        }
+        XCTAssertEqual(found.outcome, .realigned)
+        XCTAssertEqual(try XCTUnwrap(found.gapMs), 220, accuracy: 15)
+        XCTAssertGreaterThanOrEqual(found.bestScore, 0.97)
+
+        // Slower than aimed: back behind memory, and a moment heard twice.
+        let late = try chop(Rig(), ahead: 100) { rig, to in
+            rig.seek(to: to, lateMs: 20, gapMs: 280)
+            rig.run(rig.ms(1_500), realigning: true)
+        }
+        XCTAssertEqual(late.outcome, .behind)
+        XCTAssertGreaterThan(try XCTUnwrap(late.repeatMs), 150)
+
+        // Never back: went live once the patience ran out.
+        let lost = try chop(Rig(), ahead: 250) { rig, _ in
+            rig.silence()
+            rig.run(rig.ms(3_000), realigning: true)
+        }
+        XCTAssertEqual(lost.outcome, .wentLive)
+        XCTAssertEqual(try XCTUnwrap(lost.tookMs), 2_000, accuracy: 50)
+
+        // A pause called it off.
+        let paused = try chop(Rig(), ahead: 250) { rig, _ in
+            rig.run(rig.ms(100))
+            rig.deck.cancelJump()
+        }
+        XCTAssertEqual(paused.outcome, .cancelled)
+    }
+
+    func testAChopBeforeSpotifyIsBackIsLoggedAsChoppedAgain() throws {
+        let rig = Rig()
+        rig.run(rig.ms(6_000))
+        try rig.deck.scheduleJump(backFrames: rig.ms(1_000), seekAheadFrames: rig.ms(250), availableFrames: rig.ms(6_000))
+        rig.run(512)
+        rig.silence()
+        rig.run(rig.ms(150))
+        try rig.deck.scheduleJump(backFrames: rig.ms(1_000), seekAheadFrames: rig.ms(250), availableFrames: rig.ms(6_000))
+        rig.run(512)
+        let log = rig.deck.recentChops
+        XCTAssertEqual(log.count, 2)
+        XCTAssertEqual(log.first?.outcome, .chopped)
+        XCTAssertNil(log.last?.outcome, "the second still waits on Spotify")
+    }
+
     func testMatchPicksTheCopyNearestWhereItShouldBe() {
         let probe = (0..<4_096).map { songSample($0 + 1_000) }
         var region = (0..<20_000).map { songSample($0 + 50_000) }
