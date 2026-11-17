@@ -23,7 +23,12 @@ var targets: [Target] = [
             "vendor/LICENSE-signalsmith-stretch.txt",
             "vendor/signalsmith-linear/LICENSE.txt",
         ],
-        cxxSettings: [.headerSearchPath("vendor")]
+        cxxSettings: [
+            .headerSearchPath("vendor"),
+            // Visual Studio's C++ library refuses a clang older than the one it was released with,
+            // and Swift's bundled clang can trail a fresh Visual Studio by a version.
+            .define("_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH", .when(platforms: [.windows])),
+        ]
     ),
     // The deck, the tape's color and SLABSound as one engine: what the Windows helper plays through.
     .target(

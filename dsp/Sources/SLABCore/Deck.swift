@@ -172,7 +172,6 @@ public final class Deck: @unchecked Sendable {
     ) {
         self.sampleRate = sampleRate
         self.reportsCuts = reportsCuts
-        cutLog.reserveCapacity(Self.maxCuts)
         capacity = max(Int(sampleRate * seconds), 8_192)
         self.targetLag = targetLag
         self.maxLag = max(maxLag, targetLag + 256)
@@ -188,6 +187,7 @@ public final class Deck: @unchecked Sendable {
         segments.reserveCapacity(Self.maxSegments + 4)
         segments.append(Segment(start: 0, end: nil, delta: 0))
         gaps.reserveCapacity(8)
+        cutLog.reserveCapacity(Self.maxCuts)
     }
 
     deinit {
