@@ -20,6 +20,7 @@
 #include <mmreg.h>
 #include <tlhelp32.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cwchar>
@@ -290,10 +291,28 @@ struct SlabTap {
     Stream stream;
     DWORD pid = 0;
     int rate = 48000;
-    std::atomic<float> gain{1};
+    std::atomic<float> level{1};
+    float duck = 1;
+    std::atomic<long long> asItCame{0};
     SlabTapSink sink = nullptr;
     void *context = nullptr;
     std::atomic<long long> packets{0};
+
+    /// What this packet is multiplied by: Spotify's level, made up for its sessions being turned
+    /// down. A packet that, made up, would pass +6 dBFS can't have been turned down (a session Spotify
+    /// has just opened, a slider just moved, or a Windows that captures before the volume): it plays
+    /// as it came, at Spotify's level. Decided before any of the packet goes on.
+    float gain(const float *in, UINT32 frames) {
+        const float wanted = level.load(std::memory_order_relaxed);
+        if (duck >= 1) return wanted;
+        float peak = 0;
+        for (UINT32 i = 0; i < 2 * frames; ++i) peak = std::max(peak, std::fabs(in[i]));
+        if (peak * wanted / duck > 2) {
+            asItCame.fetch_add(1, std::memory_order_relaxed);
+            return wanted;
+        }
+        return wanted / duck;
+    }
 };
 
 /// An audio client on everything process `pid` and its children play. Activation is asynchronous
@@ -366,12 +385,12 @@ static DWORD WINAPI tapThread(void *p) {
                     left.resize(frames);
                     right.resize(frames);
                 }
-                const float gain = tap->gain.load(std::memory_order_relaxed);
                 const float *in = reinterpret_cast<const float *>(data);
                 const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !in;
+                const float gain = silent ? 0 : tap->gain(in, frames);
                 for (UINT32 i = 0; i < frames; ++i) {
-                    left[i] = silent ? 0 : in[2 * i] * gain;
-                    right[i] = silent ? 0 : in[2 * i + 1] * gain;
+                    left[i] = silent ? 0 : std::max(-1.0f, std::min(1.0f, in[2 * i] * gain));
+                    right[i] = silent ? 0 : std::max(-1.0f, std::min(1.0f, in[2 * i + 1] * gain));
                 }
                 capture->ReleaseBuffer(frames);
                 if (frames > 0) tap->sink(tap->context, left.data(), right.data(), int(frames));
@@ -385,11 +404,12 @@ static DWORD WINAPI tapThread(void *p) {
     return 0;
 }
 
-SlabTap *slab_tap_start(unsigned long pid, int sampleRate, float gain, SlabTapSink sink, void *context, long *error) {
+SlabTap *slab_tap_start(unsigned long pid, int sampleRate, float level, float duck, SlabTapSink sink, void *context, long *error) {
     SlabTap *tap = new SlabTap();
     tap->pid = DWORD(pid);
     tap->rate = sampleRate;
-    tap->gain = gain;
+    tap->level = std::max(0.0f, std::min(1.0f, level));
+    tap->duck = duck > 0 && duck < 1 ? duck : 1;
     tap->sink = sink;
     tap->context = context;
     const HRESULT hr = tap->stream.launch(tap, tapThread);
@@ -407,9 +427,11 @@ void slab_tap_stop(SlabTap *tap) {
 
 long long slab_tap_packets(SlabTap *tap) { return tap ? tap->packets.load(std::memory_order_relaxed) : 0; }
 
-void slab_tap_set_gain(SlabTap *tap, float gain) {
-    if (tap) tap->gain.store(gain, std::memory_order_relaxed);
+void slab_tap_set_level(SlabTap *tap, float level) {
+    if (tap) tap->level.store(std::max(0.0f, std::min(1.0f, level)), std::memory_order_relaxed);
 }
+
+long long slab_tap_as_it_came(SlabTap *tap) { return tap ? tap->asItCame.load(std::memory_order_relaxed) : 0; }
 
 // MARK: Playing
 
