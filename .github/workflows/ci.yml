@@ -1,8 +1,9 @@
 name: CI
 
-# The helper only builds on macOS (Core Audio process taps, AVFoundation), so it
-# gets a Mac runner; the extension is checked on Linux. The committed bundle in
-# dist/ must be exactly what the sources build.
+# The macOS helper builds on a Mac runner (Core Audio process taps, AVFoundation). Its core, the
+# deck, is plain Swift and is also built and tested on Windows, which the Windows helper shares.
+# The extension is checked on Linux. The committed bundle in dist/ must be exactly what the
+# sources build.
 on:
   push:
     branches: [main]
@@ -21,6 +22,22 @@ jobs:
         run: swift build -c release --package-path dsp
       - name: Test
         run: swift test --package-path dsp
+
+  core-windows:
+    name: Helper core (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.1"
+      - name: Toolchain
+        run: swift --version
+      - name: Build
+        run: swift build -c release --package-path dsp
+      # Release, so the deck's matching runs at speed without Accelerate; testable, for @testable import.
+      - name: Test
+        run: swift test -c release -Xswiftc -enable-testing --package-path dsp
 
   extension:
     name: Extension
