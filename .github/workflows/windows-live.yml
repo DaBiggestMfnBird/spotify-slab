@@ -4,8 +4,18 @@ name: Windows live audio
 # playing a tone, SLAB DSP tapping it as it taps Spotify, and what reaches the output recorded and
 # measured. See scripts/windows-live-check.py.
 on:
-  push:
-    branches: [slab-windows-live]
+  pull_request:
+    paths:
+      - ".github/workflows/windows-live.yml"
+      - "scripts/windows-live-check.py"
+      - "scripts/package-windows.ps1"
+      - "dsp/Package.swift"
+      - "dsp/Sources/SLABCore/**"
+      - "dsp/Sources/SLABSound/**"
+      - "dsp/Sources/SLABEngine/**"
+      - "dsp/Sources/SLABControl/**"
+      - "dsp/Sources/SLABWindows/**"
+      - "dsp/Sources/SLABDSPWin/**"
   workflow_dispatch:
 
 jobs:
