@@ -296,17 +296,13 @@ struct SlabTap {
     std::atomic<long long> packets{0};
 };
 
-static DWORD WINAPI tapThread(void *p) {
-    SlabTap *tap = static_cast<SlabTap *>(p);
-    Com com;
-    IAudioClient *client = nullptr;
-    IAudioCaptureClient *capture = nullptr;
-
-    // Activation is asynchronous even for this: ask, then wait for the handler.
+/// An audio client on everything process `pid` and its children play. Activation is asynchronous
+/// even for this: ask, then wait for the handler.
+static HRESULT activateLoopback(DWORD pid, IAudioClient **client) {
     Activation *activation = new Activation();
     AUDIOCLIENT_ACTIVATION_PARAMS params = {};
     params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
-    params.ProcessLoopbackParams.TargetProcessId = tap->pid;
+    params.ProcessLoopbackParams.TargetProcessId = pid;
     params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
     PROPVARIANT prop = {};
     prop.vt = VT_BLOB;
@@ -318,20 +314,37 @@ static DWORD WINAPI tapThread(void *p) {
         hr = WaitForSingleObject(activation->done, 5000) == WAIT_OBJECT_0 ? activation->result : HRESULT_FROM_WIN32(ERROR_TIMEOUT);
     }
     if (SUCCEEDED(hr)) {
-        client = activation->client;
+        *client = activation->client;
         activation->client = nullptr;
     }
     release(operation);
     activation->Release();
+    return hr;
+}
 
-    // Float, so the gain that makes up for Spotify being turned down loses nothing.
-    WAVEFORMATEXTENSIBLE format = floatStereo(tap->rate);
-    if (SUCCEEDED(hr)) {
+static DWORD WINAPI tapThread(void *p) {
+    SlabTap *tap = static_cast<SlabTap *>(p);
+    Com com;
+    IAudioClient *client = nullptr;
+    IAudioCaptureClient *capture = nullptr;
+
+    // Float, so the gain that makes up for Spotify being turned down loses nothing: the extensible
+    // form first, then the plain one, each on a fresh client, since one that refused a format is spent.
+    HRESULT hr = E_FAIL;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        release(client);
+        hr = activateLoopback(tap->pid, &client);
+        if (FAILED(hr)) break;
+        WAVEFORMATEXTENSIBLE extensible = floatStereo(tap->rate);
+        WAVEFORMATEX plain = extensible.Format;
+        plain.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+        plain.cbSize = 0;
         hr = client->Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
                 AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-            2000000, 0, &format.Format, nullptr);
+            2000000, 0, attempt == 0 ? &extensible.Format : &plain, nullptr);
+        if (SUCCEEDED(hr)) break;
     }
     if (SUCCEEDED(hr)) hr = client->GetService(kIAudioCaptureClient, reinterpret_cast<void **>(&capture));
     if (SUCCEEDED(hr)) hr = client->SetEventHandle(tap->stream.wake);
