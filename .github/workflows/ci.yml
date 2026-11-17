@@ -1,9 +1,9 @@
 name: CI
 
 # The macOS helper builds on a Mac runner (Core Audio process taps, AVFoundation). Its core, the
-# deck, is plain Swift and is also built and tested on Windows, which the Windows helper shares.
-# The extension is checked on Linux. The committed bundle in dist/ must be exactly what the
-# sources build.
+# deck, and the portable sound engine the Windows helper plays through are built and tested on
+# both Windows and macOS. The extension is checked on Linux. The committed bundle in dist/ must be
+# exactly what the sources build.
 on:
   push:
     branches: [main]

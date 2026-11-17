@@ -13,6 +13,30 @@ var targets: [Target] = [
         dependencies: ["SLABCore"],
         path: "Tests/SLABCoreTests"
     ),
+    // The sound after the deck in portable C++: pitch and tape speed (Signalsmith Stretch, vendored),
+    // low-pass, room, echo, trim, and the joins at chops.
+    .target(
+        name: "SLABSound",
+        path: "Sources/SLABSound",
+        exclude: [
+            "vendor/README.md",
+            "vendor/LICENSE-signalsmith-stretch.txt",
+            "vendor/signalsmith-linear/LICENSE.txt",
+        ],
+        cxxSettings: [.headerSearchPath("vendor")]
+    ),
+    // The deck, the tape's color and SLABSound as one engine: what the Windows helper plays through.
+    .target(
+        name: "SLABEngine",
+        dependencies: ["SLABCore", "SLABSound"],
+        path: "Sources/SLABEngine"
+    ),
+    // The engine rendered and measured, the same checks the macOS graph is held to.
+    .testTarget(
+        name: "SLABEngineTests",
+        dependencies: ["SLABEngine", "SLABCore", "SLABSound"],
+        path: "Tests/SLABEngineTests"
+    ),
 ]
 
 #if os(macOS)
@@ -42,5 +66,6 @@ targets += [
 let package = Package(
     name: "SLABDSP",
     platforms: [.macOS("14.2")],
-    targets: targets
+    targets: targets,
+    cxxLanguageStandard: .cxx17
 )
