@@ -164,18 +164,22 @@ def main():
     time.sleep(2.5)
     through = record(2.0, "2-screwed")
     heard = dominant(through)
-    screwed = level(through, SCREWED)
+    # Its level where it is: a 2 s window resolves 0.5 Hz, so a tone a cent or two off its nominal
+    # frequency would read several dB low there.
+    screwed = level(through, heard)
     own = level(through, TONE)
-    check("the tone comes out 700 cents down", abs(heard - SCREWED) < 5, f"loudest at {heard:.1f} Hz, {SCREWED:.1f} wanted")
+    cents = 1200 * math.log2(heard / SCREWED)
+    check("the tone comes out 700 cents down", abs(cents) < 10, f"loudest at {heard:.1f} Hz, {SCREWED:.1f} wanted ({cents:+.1f} cents)")
     check("at the stand-in's level", abs(db(screwed) - db(base)) < 3, f"{db(screwed):.1f} dBFS against {db(base):.1f}")
     check("the stand-in's own output is out of the way", db(own) - db(screwed) < -40, f"its 1 kHz {db(own) - db(screwed):.1f} dB under SLAB's")
 
     code, _ = post("/params", {"pitch": 0})
     time.sleep(2.0)
     neutral = record(1.5, "3-neutral")
-    check("at 0 cents the tone is as it was", abs(dominant(neutral) - TONE) < 3, f"loudest at {dominant(neutral):.1f} Hz")
-    check("SLAB plays it at the stand-in's own level", abs(db(level(neutral, TONE)) - db(base)) < 2,
-          f"{db(level(neutral, TONE)):.1f} dBFS against {db(base):.1f}")
+    plain = dominant(neutral)
+    check("at 0 cents the tone is as it was", abs(plain - TONE) < 3, f"loudest at {plain:.1f} Hz")
+    check("SLAB plays it at the stand-in's own level", abs(db(level(neutral, plain)) - db(base)) < 2,
+          f"{db(level(neutral, plain)):.1f} dBFS against {db(base):.1f}")
 
     code, answer = post("/jump", {"backMs": 500, "availableMs": 4000, "seekAheadMs": 300})
     time.sleep(1.0)
