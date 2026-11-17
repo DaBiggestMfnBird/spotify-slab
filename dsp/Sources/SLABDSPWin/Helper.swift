@@ -109,6 +109,7 @@ final class Helper: ControlHelper {
     private var mood: DSPParams
     private var flowing = false
     private var lastPackets: Int64 = 0
+    private var lastAsItCame: Int64 = 0
     private var nextAttempt = Date.distantPast
     private var timer: DispatchSourceTimer?
     private var peak: Float = 0
@@ -172,7 +173,8 @@ final class Helper: ControlHelper {
         if let current = lockedSession() {
             if pid == current.pid, slab_speaker_lost(current.speaker) == 0 {
                 updateFlow(current)
-                keepSpotifyDown(current)
+                turnSpotifyDown(current.pid)
+                slab_tap_set_level(current.tap, spotifyLevel ?? 1)
                 return
             }
             slabLog(pid == current.pid ? "the output device went away; starting again" : "\(processName) (pid \(current.pid)) exited; letting go")
@@ -193,8 +195,10 @@ final class Helper: ControlHelper {
         guard rate > 0 else { return fail(pid, "no output device") }
         let session = Session(pid: pid, sampleRate: Double(rate), params: params)
         let context = Unmanaged.passUnretained(session).toOpaque()
+        // Spotify down first, so what the tap hears from the start is what it makes up for.
+        turnSpotifyDown(pid)
         var error: CLong = 0
-        guard let tap = slab_tap_start(pid, Int32(rate), gain(for: spotifyLevel ?? 1), tapSink, context, &error) else {
+        guard let tap = slab_tap_start(pid, Int32(rate), spotifyLevel ?? 1, Self.duck, tapSink, context, &error) else {
             return fail(pid, "could not hear \(processName) (\(hex(error))); this needs Windows 10 version 2004 or newer")
         }
         session.tap = tap
@@ -208,6 +212,7 @@ final class Helper: ControlHelper {
             // The default device changed in between: the next poll starts again at its rate.
             slab_speaker_stop(speaker)
             slab_tap_stop(tap)
+            giveSpotifyBack(pid)
             slabLog("the output device's rate changed to \(played) Hz while starting; starting again")
             return
         }
@@ -219,14 +224,14 @@ final class Helper: ControlHelper {
         self.session = session
         lock.unlock()
         lastPackets = 0
-        keepSpotifyDown(session)
+        lastAsItCame = 0
         slabLog("tapping \(processName) (pid \(pid)) @ \(rate) Hz")
         publish(.tapping(pid))
     }
 
     private func fail(_ pid: CUnsignedLong, _ reason: String) {
         nextAttempt = Date().addingTimeInterval(Self.retryDelay)
-        // Turned down by an earlier run, and nothing to play it now: give it back.
+        // Turned down, here or by an earlier run, and nothing to play it now: give it back.
         if spotifyLevel != nil { giveSpotifyBack(pid) }
         publish(.failed(reason))
     }
@@ -257,17 +262,14 @@ final class Helper: ControlHelper {
 
     // MARK: Spotify's own output
 
-    private func gain(for level: Float) -> Float { level / Self.duck }
-
     /// Keeps Spotify's own output down while SLAB plays it; a session Spotify opens later goes down too.
     /// Spotify's slider moved in the volume mixer is its new level, and SLAB plays at it.
-    private func keepSpotifyDown(_ current: Session) {
+    private func turnSpotifyDown(_ pid: CUnsignedLong) {
         var previous: Float = -1
-        let sessions = slab_app_volume(current.pid, Self.duck, &previous)
+        let sessions = slab_app_volume(pid, Self.duck, &previous)
         guard sessions > 0 else { return }
         if previous >= 0, abs(previous - Self.duck) > 1e-4 {
             remember(previous)
-            slab_tap_set_gain(current.tap, gain(for: previous))
         } else if spotifyLevel == nil {
             // Already down, with no record of what it was: as Windows starts an app.
             remember(1)
@@ -294,6 +296,12 @@ final class Helper: ControlHelper {
         let packets = slab_tap_packets(current.tap)
         let moved = packets != lastPackets
         lastPackets = packets
+        // A few as Spotify opens a session; a steady stream means this Windows hears Spotify before its volume.
+        let asItCame = slab_tap_as_it_came(current.tap)
+        if asItCame > lastAsItCame {
+            slabLog("\(asItCame - lastAsItCame) packets from \(processName) came in not turned down, and played as they came")
+            lastAsItCame = asItCame
+        }
         peak = current.engine.level
         current.engine.resetLevel()
         setFlowing(moved)
@@ -371,6 +379,7 @@ final class Helper: ControlHelper {
             }
             payload["sampleRate"] = current.sampleRate
             payload["callbacks"] = Int(slab_tap_packets(current.tap))
+            payload["asItCame"] = Int(slab_tap_as_it_came(current.tap))
         }
         return payload
     }

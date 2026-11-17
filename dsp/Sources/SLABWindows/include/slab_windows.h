@@ -26,13 +26,21 @@ typedef struct SlabTap SlabTap;
 typedef void (*SlabTapSink)(void *context, const float *left, const float *right, int frames);
 
 /// Starts capturing everything process `pid` and its children play, as stereo float at
-/// `sampleRate`, each sample multiplied by `gain`. Null on failure, with the HRESULT in `*error`.
-SlabTap *slab_tap_start(unsigned long pid, int sampleRate, float gain, SlabTapSink sink, void *context, long *error);
+/// `sampleRate`. Null on failure, with the HRESULT in `*error`.
+///
+/// Spotify's own sessions are turned down to `duck` while it plays through SLAB, and the capture,
+/// which hears them after their volume, is made up by `level / duck`: Spotify at `level`, its own
+/// mixer volume. A packet that made up would pass +6 dBFS wasn't turned down, and plays as it came,
+/// at `level`. Nothing leaves the tap past full scale.
+SlabTap *slab_tap_start(unsigned long pid, int sampleRate, float level, float duck, SlabTapSink sink, void *context, long *error);
 void slab_tap_stop(SlabTap *tap);
 /// Packets delivered so far: it moves while Spotify sends audio.
 long long slab_tap_packets(SlabTap *tap);
-/// Changes the gain, from any thread.
-void slab_tap_set_gain(SlabTap *tap, float gain);
+/// Changes the level Spotify plays at, from any thread.
+void slab_tap_set_level(SlabTap *tap, float level);
+/// Packets that came in not turned down, and played as they came: a few as Spotify opens a session
+/// or a slider moves; steadily, if this Windows captures before the volume.
+long long slab_tap_as_it_came(SlabTap *tap);
 
 // MARK: Playing
 
