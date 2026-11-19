@@ -1,0 +1,63 @@
+name: Windows live audio
+
+# SLAB DSP for Windows on a real Windows audio stack: a virtual sound card, a stand-in for Spotify
+# playing a tone, SLAB DSP tapping it as it taps Spotify, and what reaches the output recorded and
+# measured. See scripts/windows-live-check.py.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-live.yml"
+      - "scripts/windows-live-check.py"
+      - "scripts/package-windows.ps1"
+      - "dsp/Package.swift"
+      - "dsp/Sources/SLABCore/**"
+      - "dsp/Sources/SLABSound/**"
+      - "dsp/Sources/SLABEngine/**"
+      - "dsp/Sources/SLABControl/**"
+      - "dsp/Sources/SLABWindows/**"
+      - "dsp/Sources/SLABDSPWin/**"
+  workflow_dispatch:
+
+jobs:
+  live:
+    name: SLAB DSP plays a stand-in for Spotify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.2"
+
+      - name: Build and package SLAB DSP
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Out release
+
+      - name: A sound card (VB-Cable)
+        uses: LABSN/sound-ci-helpers@v1
+
+      - name: Windows Audio, running
+        shell: pwsh
+        run: |
+          Set-Service -Name AudioEndpointBuilder -StartupType Automatic
+          Set-Service -Name Audiosrv -StartupType Automatic
+          Start-Service AudioEndpointBuilder, Audiosrv
+          Get-Service AudioEndpointBuilder, Audiosrv | Format-Table Name, Status
+          Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table Status, FriendlyName
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Measuring tools
+        run: python -m pip install --quiet soundcard numpy
+
+      - name: The stand-in through SLAB DSP, measured
+        shell: pwsh
+        run: python scripts/windows-live-check.py --zip (Get-ChildItem release/SLAB-DSP-Windows-*.zip).FullName
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-live
+          path: live/

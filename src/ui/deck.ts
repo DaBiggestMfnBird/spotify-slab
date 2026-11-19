@@ -373,8 +373,8 @@ interface PadDef {
 }
 
 /** Said when a pad that needs the helper is pressed without one. */
-const NEEDS_HELPER = "That pad needs SLAB DSP running on this Mac.";
-const NEEDS_NEWER = "That pad needs a newer SLAB DSP: run bun run dsp:install.";
+const NEEDS_HELPER = "That pad needs SLAB DSP running on this computer.";
+const NEEDS_NEWER = "That pad needs a newer SLAB DSP, from SLAB's releases on GitHub.";
 
 /** A helper with Spotify's audio coming through it, whatever it can do beyond. */
 function processing(): boolean {
