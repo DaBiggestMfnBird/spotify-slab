@@ -42,6 +42,17 @@ var targets: [Target] = [
         dependencies: ["SLABEngine", "SLABCore", "SLABSound"],
         path: "Tests/SLABEngineTests"
     ),
+    // The control port's requests, who may make them, and its routes: what SLAB sends a helper.
+    .target(
+        name: "SLABControl",
+        dependencies: ["SLABCore"],
+        path: "Sources/SLABControl"
+    ),
+    .testTarget(
+        name: "SLABControlTests",
+        dependencies: ["SLABControl", "SLABCore"],
+        path: "Tests/SLABControlTests"
+    ),
 ]
 
 #if os(macOS)
@@ -64,6 +75,35 @@ targets += [
         name: "SLABDSPTests",
         dependencies: ["SLABDSP", "SLABCore"],
         path: "Tests/SLABDSPTests"
+    ),
+]
+#endif
+
+#if os(Windows)
+// The Windows helper: Spotify heard through WASAPI process loopback, played through SLABEngine, with
+// the same control port and a tray icon.
+targets += [
+    .target(
+        name: "SLABWindows",
+        path: "Sources/SLABWindows",
+        cxxSettings: [.define("_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH")],
+        linkerSettings: [
+            .linkedLibrary("ole32"),
+            .linkedLibrary("mmdevapi"),
+            .linkedLibrary("avrt"),
+            .linkedLibrary("ws2_32"),
+            .linkedLibrary("user32"),
+            .linkedLibrary("shell32"),
+            .linkedLibrary("advapi32"),
+            .linkedLibrary("gdi32"),
+        ]
+    ),
+    .executableTarget(
+        name: "SLABDSP",
+        dependencies: ["SLABCore", "SLABEngine", "SLABControl", "SLABWindows"],
+        path: "Sources/SLABDSPWin",
+        // A tray app: no console window when it starts.
+        linkerSettings: [.unsafeFlags(["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"])]
     ),
 ]
 #endif
