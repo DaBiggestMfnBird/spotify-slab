@@ -54,8 +54,10 @@ export interface DspStatus {
     tape?: boolean;
     /** Its echo is a send, so a thrown echo rings out after the pad is let go (0.6.0 on). */
     throw?: boolean;
-    /** What Spotify's seeks have lately cost, as the helper measured them. */
+    /** What Spotify's seeks have lately cost, as the helper measured them: the typical one. */
     seekGapMs?: number;
+    /** And the slow end of them (0.6.2 on), which SLAB aims by. */
+    seekGapHighMs?: number;
     /** Jumps the helper gave up on (Spotify never came back) and went live from, since it started. */
     wentLive?: number;
 }
@@ -142,6 +144,7 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
               params?: Partial<DspParams>;
               features?: unknown;
               seekGapMs?: number;
+              seekGapHighMs?: number;
               chops?: { wentLive?: number };
           }
         | null;
@@ -167,6 +170,7 @@ export async function probeDsp(force = false, eager = false): Promise<DspStatus>
             tape: Array.isArray(payload.features) && payload.features.includes("tape"),
             throw: Array.isArray(payload.features) && payload.features.includes("throw"),
             seekGapMs: typeof payload.seekGapMs === "number" ? payload.seekGapMs : undefined,
+            seekGapHighMs: typeof payload.seekGapHighMs === "number" ? payload.seekGapHighMs : undefined,
             wentLive: typeof payload.chops?.wentLive === "number" ? payload.chops.wentLive : undefined,
         });
     } else {
@@ -242,20 +246,21 @@ export async function dspTapeStop(): Promise<boolean> {
 /** Before the helper has measured one: about what a seek costs Spotify on a Mac. */
 const DEFAULT_SEEK_GAP_MS = 250;
 /**
- * Spotify is aimed this far past what its seek should cost. Back a little early, the helper
- * plays memory up to it and crosses over unheard; back late, it has to repeat a moment.
+ * Spotify is aimed this far past what its slow seeks cost. Back early, the helper plays memory up
+ * to it and crosses over unheard, then catches up a touch fast, pitch held; back late, it has to
+ * repeat a moment, which is heard. So it aims for the slow ones.
  */
-const SEEK_MARGIN_MS = 40;
+const SEEK_MARGIN_MS = 60;
 
 /** A helper that can jump in its own memory, with Spotify's audio coming through it now. */
 export function canJump(): boolean {
     return status.linked && status.tapping === true && status.audio === true && status.jump === true;
 }
 
-/** How far past a jump to send Spotify, so its audio comes back just ahead of what the helper plays. */
+/** How far past a jump to send Spotify, so its audio comes back ahead of what the helper plays. */
 export function seekAheadMs(): number {
-    const gap = status.seekGapMs ?? DEFAULT_SEEK_GAP_MS;
-    return Math.round(Math.max(60, Math.min(800, gap + SEEK_MARGIN_MS)));
+    const gap = status.seekGapHighMs ?? status.seekGapMs ?? DEFAULT_SEEK_GAP_MS;
+    return Math.round(Math.max(60, Math.min(900, gap + SEEK_MARGIN_MS)));
 }
 
 export interface JumpOrder {

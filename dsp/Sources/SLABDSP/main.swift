@@ -3,7 +3,7 @@ import Foundation
 import SLABCore
 import ServiceManagement
 
-let slabVersion = "0.6.1"
+let slabVersion = "0.6.2"
 let defaultPort: UInt16 = 47_832
 
 struct Options {

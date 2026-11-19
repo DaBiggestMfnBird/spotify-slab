@@ -4,7 +4,7 @@ import { eqAvailable, initEq } from "./core/eq";
 import { loadState } from "./core/state";
 import { Deck } from "./ui/deck";
 
-const VERSION = "0.10.0";
+const VERSION = "0.10.1";
 const LOG = "[SLAB]";
 
 interface BootClaim {
