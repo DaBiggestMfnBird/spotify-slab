@@ -41,6 +41,29 @@ public final class Deck: @unchecked Sendable {
     private var fadeLinear = false
     private let lock = NSLock()
 
+    /// Whether a cut between two different sounds is left to the output to join: see `Cut`.
+    public let reportsCuts: Bool
+    /// The cuts the read in progress has made, and the frame it is on.
+    private var cutLog: [Cut] = []
+    private var readFrame = 0
+    private static let maxCuts = 8
+
+    /// A cut between two different sounds: a chop, a spin landing, a skip ahead, going back to live.
+    /// A deck that `reportsCuts` doesn't crossfade these: the read that makes one reports it, and the
+    /// output joins the two sounds itself. The Windows helper's does, from `recall`, so that its
+    /// time-stretcher, which hears 120 ms ahead, neither delays the cut nor smears it.
+    public struct Cut: Equatable, Sendable {
+        /// The first frame of the new sound among the frames the read filled.
+        public let frame: Int
+        /// The ring position where the old sound would have carried on, or nil when it had already
+        /// stopped: a spin winds down to nothing before it lands.
+        public let from: Int?
+        /// The ring position the new sound plays from.
+        public let to: Int
+        /// Where the copy of the song `to` is in begins: before it, the ring holds something else.
+        public let start: Int
+    }
+
     /// Frames ever written, and the next frame the output plays: ring positions, never wrapped.
     private(set) var written = 0
     private(set) var head = 0
@@ -136,6 +159,7 @@ public final class Deck: @unchecked Sendable {
     private struct Copy {
         let position: Int
         let delta: Int
+        let start: Int
         let end: Int?
     }
 
@@ -187,8 +211,12 @@ public final class Deck: @unchecked Sendable {
         case nothingPlaying
     }
 
-    public init(sampleRate: Double = 48_000, seconds: Double = 45, targetLag: Int = 1_024, maxLag: Int = 3_072, fadeMs: Double = 6) {
+    public init(
+        sampleRate: Double = 48_000, seconds: Double = 45, targetLag: Int = 1_024, maxLag: Int = 3_072,
+        fadeMs: Double = 6, reportsCuts: Bool = false
+    ) {
         self.sampleRate = sampleRate
+        self.reportsCuts = reportsCuts
         capacity = max(Int(sampleRate * seconds), 8_192)
         self.targetLag = targetLag
         self.maxLag = max(maxLag, targetLag + 256)
@@ -205,6 +233,7 @@ public final class Deck: @unchecked Sendable {
         segments.append(Segment(start: 0, end: nil, delta: 0))
         gaps.reserveCapacity(8)
         chopLog.reserveCapacity(Self.chopLogSize + 1)
+        cutLog.reserveCapacity(Self.maxCuts)
     }
 
     deinit {
@@ -244,16 +273,64 @@ public final class Deck: @unchecked Sendable {
     public func read(into dstL: UnsafeMutablePointer<Float>, _ dstR: UnsafeMutablePointer<Float>, frames: Int) -> Int {
         lock.lock()
         defer { lock.unlock() }
+        return fill(dstL, dstR, frames: frames)
+    }
+
+    /// Fills the output, and replaces `cuts` with the cuts made in it, in order: for a deck that
+    /// `reportsCuts`. Allocates nothing once `cuts` has room for eight.
+    @discardableResult
+    public func read(
+        into dstL: UnsafeMutablePointer<Float>, _ dstR: UnsafeMutablePointer<Float>, frames: Int, cuts: inout [Cut]
+    ) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let produced = fill(dstL, dstR, frames: frames)
+        cuts.removeAll(keepingCapacity: true)
+        cuts.append(contentsOf: cutLog)
+        return produced
+    }
+
+    /// What the tap wrote at ring positions `position ..< position + count`, into `dstL` and `dstR`,
+    /// with silence wherever the ring has nothing to give: before `notBefore`, not written yet, or
+    /// already written over. What an output that joins cuts itself reads either side of one.
+    public func recall(
+        from position: Int, count: Int, notBefore: Int = 0,
+        into dstL: UnsafeMutablePointer<Float>, _ dstR: UnsafeMutablePointer<Float>
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        let oldest = max(notBefore, written - capacity, 0)
+        for i in 0..<max(0, count) {
+            let p = position + i
+            if p >= oldest, p < written {
+                dstL[i] = left[p % capacity]
+                dstR[i] = right[p % capacity]
+            } else {
+                dstL[i] = 0
+                dstR[i] = 0
+            }
+        }
+    }
+
+    private func fill(_ dstL: UnsafeMutablePointer<Float>, _ dstR: UnsafeMutablePointer<Float>, frames: Int) -> Int {
+        cutLog.removeAll(keepingCapacity: true)
+        readFrame = 0
         if detached == nil, spin == nil { ride() }
         var produced = 0
         for k in 0..<frames {
+            readFrame = k
             if let jump = pending, played >= jump.at {
                 pending = nil
                 let landing = spin != nil
                 spin = nil
                 perform(jump, lag: landing ? spinLag : nil)
                 // The spin has wound down to nothing: the chop comes up out of silence, not out of it.
-                if landing { fadeFrom = Int.max / 2 }
+                if landing {
+                    fadeFrom = Int.max / 2
+                    if let last = cutLog.last, last.frame == k {
+                        cutLog[cutLog.count - 1] = Cut(frame: k, from: nil, to: last.to, start: last.start)
+                    }
+                }
             }
             if var turning = spin {
                 let (l, r) = spinSample(&turning)
@@ -315,7 +392,8 @@ public final class Deck: @unchecked Sendable {
         }
         guard lag > maxLag, fadeLeft == 0 else { return }
         dropped += lag - targetLag
-        crossfade(to: written - targetLag)
+        let to = written - targetLag
+        crossfade(to: to, start: startOfCopy(holding: to))
     }
 
     /// One frame of a backspin. The hand catches the record and drags it back, fast, then it slows
@@ -343,11 +421,30 @@ public final class Deck: @unchecked Sendable {
         return (l, r)
     }
 
-    private func crossfade(to target: Int, sameSound: Bool = false) {
+    /// Moves the head to `target`. Two copies of the same sound are crossfaded here; a cut between
+    /// two different ones is too, unless the deck `reportsCuts`. `start` is where the copy holding
+    /// `target` begins.
+    private func crossfade(to target: Int, sameSound: Bool = false, start: Int = 0) {
+        if reportsCuts, !sameSound {
+            if cutLog.count < Self.maxCuts {
+                cutLog.append(Cut(frame: readFrame, from: head, to: target, start: start))
+            }
+            fadeLeft = 0
+            head = target
+            return
+        }
         fadeFrom = head
         fadeLeft = fadeFrames
         fadeLinear = sameSound
         head = target
+    }
+
+    /// Where the stretch of ring holding `position` begins.
+    private func startOfCopy(holding position: Int) -> Int {
+        for segment in segments.reversed() where position >= segment.start && position < (segment.end ?? .max) {
+            return segment.start
+        }
+        return max(0, written - capacity)
     }
 
     /// Drops everything but the newest `keep` frames, so capture from engine setup isn't heard late.
@@ -488,7 +585,7 @@ public final class Deck: @unchecked Sendable {
             if let outside, outside >= segment.start, outside < end { continue }
             let position = clock + segment.delta
             if position >= segment.start, position + room < end, position > oldest {
-                return Copy(position: position, delta: segment.delta, end: segment.end)
+                return Copy(position: position, delta: segment.delta, start: segment.start, end: segment.end)
             }
         }
         return nil
@@ -501,7 +598,9 @@ public final class Deck: @unchecked Sendable {
         if let open = segments.indices.last, segments[open].end == nil {
             segments[open].end = written
         }
-        crossfade(to: to.position, sameSound: jump.alike)
+        // A landing on audio alike the cut is joined straight. A deck that reports its cuts reports
+        // this one too: it's still somewhere else on the record, and the output must cut there on time.
+        crossfade(to: to.position, sameSound: jump.alike && !reportsCuts, start: to.start)
         headDelta = to.delta
         headEnd = to.end ?? written
         settle(.chopped)
@@ -563,7 +662,8 @@ public final class Deck: @unchecked Sendable {
     /// clock starts over and nothing before this point can be jumped to.
     private func goLive() {
         let to = max(0, written - targetLag)
-        if to != head { crossfade(to: to) }
+        // Since the jump the tap has been writing Spotify being re-seeked: that is all `to` follows on from.
+        if to != head { crossfade(to: to, start: detached?.since ?? startOfCopy(holding: to)) }
         segments.removeAll(keepingCapacity: true)
         segments.append(Segment(start: to, end: nil, delta: 0))
         headDelta = 0
@@ -584,7 +684,7 @@ public final class Deck: @unchecked Sendable {
         } else {
             // Spotify came back behind what memory is playing: rejoin live, repeating a moment.
             let to = max(found.from, written - targetLag)
-            crossfade(to: to)
+            crossfade(to: to, start: found.from)
             settle(.behind, repeatFrames: live - to, gapMs: found.gapMs)
         }
         if segments.count >= Self.maxSegments {

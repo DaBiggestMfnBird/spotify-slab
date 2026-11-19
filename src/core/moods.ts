@@ -2,7 +2,7 @@
  * Moods are two things at once: an EQ curve the native player can actually
  * apply, and a set of real DSP parameters for the optional companion helper.
  *
- * The EQ half always works. The DSP half needs SLAB DSP (macOS) because
+ * The EQ half always works. The DSP half needs SLAB DSP (macOS or Windows) because
  * Spotify refuses playback-speed changes for music and never exposes the
  * decoded samples to extensions.
  *

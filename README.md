@@ -18,7 +18,7 @@ SLAB does the things the client can actually do, and pairs with a small companio
 
 - **Six EQ moods** written against the client's native six-band equalizer.
 - **A real pitch slider** — ±1200 cents, live, with the mood cards acting as presets that move it.
-- **Real pitch shift, reverb, delay and low-pass** through [SLAB DSP](#slab-dsp-macos) — a menu-bar helper that taps Spotify's output at the OS level on macOS 14.2+. No page sandbox involved.
+- **Real pitch shift, reverb, delay and low-pass** through SLAB DSP, a helper that taps Spotify's output at the OS level: a menu-bar app on [macOS 14.2+](#slab-dsp-macos), a tray app on [Windows 10 2004+ and Windows 11](#slab-dsp-windows). No page sandbox involved.
 - **Beat-true chop pads** that jump back exactly 1, 2 or 4 bars to the same place in the bar, so the groove carries straight through, using Spotify's own audio analysis for the grid. They fire on the way down, like hardware, and with SLAB DSP running they land the instant you hit them: no waiting on Spotify to seek.
 - **The Screw bank** — the other half of the name, on keys 6 to 0: hold Screw and the pitch rides down like a hand on the pitch fader, Line runs the lyric line you just heard back on the beat, Trunk shuts the lid on the sound, Echo throws it back in time with the song, and Spin backspins the record into a chop. The holds last as long as the pad is down.
 - **DJ mode** — the `DJ` switch in the header: SLAB puts the record on full screw and works it itself, cutting on the phrase lines, running vocal lines back, looping and spinning out of sections, throwing echoes, riding Screw over the hook. It reads what kind of record it is (or you tell it, and it's kept for the artist), plays as hard as you set it, leans toward how you play, and hands the record back for eight bars whenever you hit a pad.
@@ -152,6 +152,16 @@ Older helpers (before 0.4.0) don't have this, and the pads seek Spotify the old 
 
 ### Install
 
+**Download it.** Get `SLAB-DSP-x.y.z.zip` from the [latest release](https://github.com/DaBiggestMfnBird/spotify-slab/releases/latest), open it, drag **SLAB DSP** into Applications and open it. It's one app for Apple silicon and Intel, built and tested by the repo's release workflow.
+
+Until the releases are signed with an Apple Developer ID, macOS stops the first launch. Press **Done**, then in **System Settings → Privacy & Security** find *"SLAB DSP" was blocked* and press **Open Anyway**. Or, in Terminal, before opening it:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/SLAB DSP.app"
+```
+
+**Or build it yourself** (Xcode's command line tools and bun):
+
 ```bash
 bun run dsp:install
 ```
@@ -160,7 +170,7 @@ That builds `SLAB DSP.app`, copies it to `~/Applications`, and launches it. It l
 
 If the permission prompt was dismissed, re-enable it in **System Settings → Privacy & Security → Screen & System Audio Recording** (macOS 15) or **Audio Recording** (macOS 14), then relaunch the app.
 
-Quit Spotify, reopen it, and the helper picks it up on its own with the same settings. It can be started before Spotify and will wait. A rebuilt copy is a new binary as far as macOS is concerned, so a build from source asks for the permission again.
+Quit Spotify, reopen it, and the helper picks it up on its own with the same settings. It can be started before Spotify and will wait. A rebuilt copy is a new binary as far as macOS is concerned, so a build from source asks for the permission again, and so does each new unsigned download.
 
 The helper must be launched as an app (LaunchServices), not from a shell. TCC attributes the audio-capture grant to the responsible process, so a binary started from Terminal inherits Terminal's identity and taps silence.
 
@@ -197,6 +207,45 @@ The extension degrades cleanly: no helper, no errors, no dead buttons. And it sa
 
 `--record` writes the processed chain to a WAV and exits — that is how the pitch shift was verified (spectral centroid 2992 Hz → 1400 Hz at −1200 cents on the same passage).
 
+## SLAB DSP (Windows)
+
+The same helper for Windows, built from Windows' own parts. It hears Spotify with WASAPI process loopback: everything Spotify and the processes it starts play, and nothing else. It plays that through SLAB's sound engine to the default output device, and answers the extension on the same port with the same routes.
+
+The sound engine is portable C++, the same chain as the Mac's AVAudioEngine graph:
+- pitch and the tape's speed from [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch);
+- a Butterworth low-pass;
+- a Freeverb room for each of the Mac's room characters;
+- the echo send, and the trim.
+
+CI holds it to the same measurements as the Mac graph, on Windows and macOS.
+
+**Requirements:** Windows 10 version 2004 or newer, or Windows 11, 64-bit. Spotify desktop.
+
+### Install
+
+Get `SLAB-DSP-Windows-x.y.z.zip` from the [latest release](https://github.com/DaBiggestMfnBird/spotify-slab/releases/latest), unzip it anywhere, and run **SLAB DSP.exe**. It isn't signed yet, so the first time Windows may say it protected your PC: choose **More info**, then **Run anyway**.
+
+Its waveform sits in the notification area by the clock. The menu shows what it's doing and has **Start at Login**, **Reconnect to Spotify** and **Quit**. Its log is `%LOCALAPPDATA%\SLAB\dsp.log`.
+
+### Spotify's own output
+
+Windows can't hear one app without that app also playing to your speakers. So while SLAB DSP plays Spotify, it turns Spotify's own output down to −60 dB in the volume mixer and makes up exactly that much on what it hears, in float, so only SLAB's version reaches you. Move Spotify's slider in the volume mixer and SLAB plays at that level.
+
+Windows remembers each app's volume. SLAB keeps Spotify's own level in `%LOCALAPPDATA%\SLAB\spotify-volume.txt` until it has given it back: when it lets go of Spotify, when you quit it, when Windows logs off, and otherwise at its next start. If Spotify ever sounds silent without SLAB DSP running, open SLAB DSP once with Spotify playing and quit it, or raise Spotify in the volume mixer.
+
+### Chops
+
+The stretcher that shifts the pitch reads 120 ms ahead of what it plays, so a chop isn't fed through it. The old sound plays out over 6 ms while the stretcher starts again on the new one. A chop is heard the moment the helper makes it, and lands where it was sent.
+
+### Build it yourself
+
+With [Swift for Windows](https://www.swift.org/install/windows/) and Visual Studio's C++ tools:
+
+```powershell
+swift build -c release --package-path dsp --product SLABDSP
+pwsh scripts/package-windows.ps1   # the release zip, with the runtimes it needs beside it
+```
+
 ---
 
 ## Tempo is locked on purpose
@@ -225,7 +274,7 @@ So SLAB shifts pitch, which is the audible half of a screw record, and leaves te
 
 Search for **SLAB** in the Spicetify Marketplace and install it there.
 
-The extension itself is cross-platform. **SLAB DSP**, the helper that makes the sound real (true pitch, reverb and delay, instant chops, the Screw, Trunk and Echo holds, the backspin and the tape), is macOS 14.2+ only, because it depends on Core Audio process taps. The Marketplace installs the extension; build the helper from this repo with `bun run dsp:install` (see [SLAB DSP](#slab-dsp-macos)). Without it, on any platform, the moods are EQ curves, the pads and DJ mode cut by seeking Spotify, and the panel says what needs the helper.
+The extension itself is cross-platform. **SLAB DSP**, the helper that makes the sound real (true pitch, reverb and delay, instant chops, the Screw, Trunk and Echo holds, the backspin and the tape), runs on macOS 14.2+ and on Windows 10 version 2004+ or Windows 11, because it depends on each system's way of hearing one app: Core Audio process taps, and WASAPI process loopback. The Marketplace installs the extension; download the helper from the [latest release](https://github.com/DaBiggestMfnBird/spotify-slab/releases/latest), or build it from this repo (see [macOS](#slab-dsp-macos) and [Windows](#slab-dsp-windows)). Without it, on any platform, the moods are EQ curves, the pads and DJ mode cut by seeking Spotify, and the panel says what needs the helper.
 
 ### Manual
 
@@ -317,6 +366,20 @@ dsp/
 - **The worker clock** exists because Chrome clamps main-thread timers to roughly one second when the Spotify window is occluded. A 40 ms worker tick keeps auto chop and loop on time even when the app is behind another window. If a locked-down client won't start the worker, or it never ticks, the clock drops to a main-thread timer, and a tape stop always finishes on its own timer, so nothing is left half-faded.
 - **The EQ bridge** matches filters by frequency, so a client with a different six-band layout still gets a sane mapping. One dead filter doesn't stop the curve.
 - **The tap** uses a private aggregate device with a tap list of dictionaries (`kAudioSubTapUIDKey`). A list of plain UID strings is accepted by the API and silently attaches nothing — that cost an afternoon.
+
+### Releases
+
+Pushing a version tag publishes a release: `git tag v0.10.1 && git push origin v0.10.1`. The tag has to match `package.json`; a suffix like `-rc.1` makes it a pre-release. The release workflow (`.github/workflows/release.yml`) runs the helper's tests, builds SLAB DSP for Apple silicon and Intel, checks the bundle's version against `main.swift`, and attaches the zip, `slab.js` and their checksums. It can also be run by hand from the Actions tab.
+
+To ship it signed and notarized, so macOS opens it without a warning, add these repository secrets from an Apple Developer account:
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERT_P12` | The **Developer ID Application** certificate and key, exported as .p12, base64-encoded |
+| `MACOS_CERT_PASSWORD` | The .p12's password |
+| `APPLE_ID` | The Apple ID the account signs in with |
+| `APPLE_TEAM_ID` | The account's team ID |
+| `APPLE_APP_PASSWORD` | An app-specific password for that Apple ID, for the notary service |
 
 ### Dev
 

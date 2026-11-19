@@ -3604,8 +3604,8 @@ ${NEON_CSS}
   var MOODS_BY_PITCH = [...MOODS].sort(
     (a, b) => a.dsp.pitch - b.dsp.pitch || Number(a.id === "flat") - Number(b.id === "flat")
   );
-  var NEEDS_HELPER = "That pad needs SLAB DSP running on this Mac.";
-  var NEEDS_NEWER = "That pad needs a newer SLAB DSP: run bun run dsp:install.";
+  var NEEDS_HELPER = "That pad needs SLAB DSP running on this computer.";
+  var NEEDS_NEWER = "That pad needs a newer SLAB DSP, from SLAB's releases on GitHub.";
   function processing() {
     const status2 = dspStatus();
     return status2.linked && status2.tapping === true && status2.audio === true;

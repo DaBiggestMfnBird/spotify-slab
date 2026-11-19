@@ -1,5 +1,5 @@
 /**
- * Bridge to the optional SLAB DSP helper (macOS).
+ * Bridge to the optional SLAB DSP helper (macOS and Windows).
  *
  * Spotify's player refuses playback-speed changes for music
  * (`not_supported_by_content_type`), and the music stream is DRM-protected, so

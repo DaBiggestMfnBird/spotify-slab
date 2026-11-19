@@ -2,49 +2,6 @@ import Foundation
 import AVFoundation
 import SLABCore
 
-struct DSPParams: Codable, Equatable {
-    /// Pitch shift in cents. 0 = untouched. -1200 = one octave down.
-    var pitch: Float = 0
-    /// Reverb wet/dry, 0...100.
-    var reverb: Float = 0
-    /// Reverb character.
-    var reverbPreset: String = "largeHall2"
-    /// Delay time in seconds.
-    var delayTime: Double = 0.36
-    /// Delay feedback, 0...95.
-    var delayFeedback: Float = 0
-    /// Delay wet/dry, 0...100.
-    var delayMix: Float = 0
-    /// Low-pass cutoff in Hz. 20000 = bypass.
-    var lowpass: Float = 20_000
-    /// Output trim in dB.
-    var gain: Float = 0
-    /// Tape: a worn cassette's wow (the speed wandering), its hiss, a record's crackle, and a
-    /// cheap sampler's crunch. Each 0...1, 0 = off.
-    var wow: Float = 0
-    var hiss: Float = 0
-    var crackle: Float = 0
-    var crush: Float = 0
-
-    static let neutral = DSPParams()
-}
-
-/// A pad held on top of the mood: let it go and the mood is back. Each part ramps.
-struct Hold: Equatable {
-    /// Added to the mood's pitch, in cents.
-    var pitchOffset: Float = 0
-    /// The low-pass can't open past this, in Hz. 20000 = no cap.
-    var lowpassCap: Float = 20_000
-    /// Added to the output trim, in dB.
-    var gainBoost: Float = 0
-    /// An echo over the mood's own delay: wet 0...100, feedback 0...95, time in seconds.
-    var echoMix: Float = 0
-    var echoFeedback: Float = 0
-    var echoTime: Double = 0.36
-
-    static let none = Hold()
-}
-
 final class DSPGraph {
     private let engine: AVAudioEngine
     private let source: AVAudioSourceNode

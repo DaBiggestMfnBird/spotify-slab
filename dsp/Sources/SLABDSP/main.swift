@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SLABCore
 import ServiceManagement
 
 let slabVersion = "0.6.2"
