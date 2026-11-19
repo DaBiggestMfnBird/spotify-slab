@@ -13,7 +13,7 @@ ARCHS="${ARCHS:-}"
 
 set -- -c "$CONFIG" --package-path dsp
 for arch in $ARCHS; do set -- "$@" --arch "$arch"; done
-swift build "$@"
+swift build "$@" --product SLABDSP
 BIN="$(swift build "$@" --show-bin-path)/SLABDSP"
 
 rm -rf "$APP"

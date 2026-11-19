@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import SLABCore
 
 /// Tiny HTTP control surface on 127.0.0.1 so the Spicetify extension can drive the DSP.
 final class ControlServer {
